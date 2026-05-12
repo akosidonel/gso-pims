@@ -1,0 +1,17 @@
+ALTER TABLE bundle_gen_fund
+    ADD COLUMN IF NOT EXISTS category VARCHAR(20) NULL AFTER bundle_with,
+    ADD COLUMN IF NOT EXISTS item VARCHAR(255) NULL AFTER category,
+    ADD COLUMN IF NOT EXISTS model VARCHAR(255) NULL AFTER item,
+    ADD COLUMN IF NOT EXISTS description TEXT NULL AFTER model,
+    ADD COLUMN IF NOT EXISTS serial_number VARCHAR(255) NULL AFTER description,
+    ADD COLUMN IF NOT EXISTS serial_number_2 VARCHAR(255) NULL AFTER serial_number,
+    ADD COLUMN IF NOT EXISTS par_ics_number VARCHAR(50) NULL AFTER serial_number_2;
+
+ALTER TABLE bundle_sef
+    ADD COLUMN IF NOT EXISTS category VARCHAR(20) NULL AFTER bundle_with,
+    ADD COLUMN IF NOT EXISTS item VARCHAR(255) NULL AFTER category,
+    ADD COLUMN IF NOT EXISTS model VARCHAR(255) NULL AFTER item,
+    ADD COLUMN IF NOT EXISTS description TEXT NULL AFTER model,
+    ADD COLUMN IF NOT EXISTS serial_number VARCHAR(255) NULL AFTER description,
+    ADD COLUMN IF NOT EXISTS serial_number_2 VARCHAR(255) NULL AFTER serial_number,
+    ADD COLUMN IF NOT EXISTS par_ics_number VARCHAR(50) NULL AFTER serial_number_2;

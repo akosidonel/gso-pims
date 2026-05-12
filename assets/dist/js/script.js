@@ -1,0 +1,9605 @@
+
+// Global helper: update fund badge text and classes
+window.updateFundBadge = function(fundVal, badgeSelector){
+  var $badge = (badgeSelector instanceof jQuery) ? badgeSelector : $(badgeSelector || '#fundIndicator');
+  var text = (String(fundVal || '').trim()).toUpperCase();
+  if (!text) { $badge.hide(); return; }
+  $badge.removeClass('badge-info badge-primary badge-secondary');
+  if (text === 'SEF' || text === 'SPECIAL EDUCATION FUND') {
+    $badge.addClass('badge badge-secondary').text('SPECIAL EDUCATION FUND').show();
+  } else {
+    $badge.addClass('badge badge-primary').text('GENERAL FUND').show();
+  }
+};
+
+// Realtime notifications (reusable)
+// - Renders a bell dropdown in the shared navbar
+// - Uses polling + localStorage to detect "new" items
+window.GSO = window.GSO || {};
+window.GSO.Notifications = window.GSO.Notifications || (function(){
+  var timers = {};
+
+  function role(){ return String(window.currentUserRole || '').trim().toUpperCase(); }
+  function hasBell(){ return $('#rtNotifNavItem').length > 0; }
+
+  function setBadge(n){
+    var $b = $('#rtNotifBadge');
+    var $link = $('#rtNotifBellLink');
+    var count = Math.max(0, Number(n || 0) || 0);
+    if (!$b.length) { return; }
+    if (count <= 0) {
+      $b.hide().text('0');
+      if ($link.length) { $link.removeClass('gso-has-unread'); }
+    } else {
+      $b.text(String(count)).show();
+      if ($link.length) { $link.addClass('gso-has-unread'); }
+    }
+  }
+
+  function setVisible(isVisible){
+    if (!hasBell()) { return; }
+    $('#rtNotifNavItem').toggle(!!isVisible);
+  }
+
+  function renderList(items){
+    var $list = $('#rtNotifList');
+    if (!$list.length) { return; }
+    $list.empty();
+
+    if (!items || !items.length) {
+      $list.append('<span class="dropdown-item text-muted">No notifications</span>');
+      return;
+    }
+
+    items.slice(0, 10).forEach(function(it){
+      var ctrlRaw = String(it.control_number || '').trim();
+      var ctrlUrl = encodeURIComponent(ctrlRaw);
+      var emp = $('<div>').text(it.emp_name || '').html();
+      var ctrl = $('<div>').text(ctrlRaw).html();
+      var type = $('<div>').text(it.clearance_name || '').html();
+      var when = $('<div>').text(it.created_at_display || '').html();
+      $list.append(
+        '<a class="dropdown-item rt-notif-open" href="../services/clearance.php?pc=' + ctrlUrl + '" data-control="' + ctrl + '">' +
+          '<div class="d-flex justify-content-between" style="gap:12px;">' +
+            '<div class="text-truncate">' +
+              '<div class="font-weight-bold text-truncate">' + emp + '</div>' +
+              '<div class="small font-weight-bold">Clearance ready to print</div>' +
+              '<div class="small text-muted text-truncate">' + type + ' • CTRL ' + ctrl + '</div>' +
+            '</div>' +
+            '<div class="small text-muted" style="white-space:nowrap;">' + when + '</div>' +
+          '</div>' +
+        '</a>'
+      );
+    });
+  }
+
+  // Source: Property Clearance READY notifications
+  function startPcReadyPolling(){
+    if (!hasBell()) { return; }
+    var r = role();
+    if (r !== 'CLEARANCE-ADMIN') { setVisible(false); return; }
+
+    setVisible(true);
+    $('#rtNotifHeader').text('Clearance Notifications');
+
+    // Task-style notifications: do not mark as read.
+    // The badge/animation should persist until the clearance is printed/released
+    // (i.e., removed from the READY feed by the backend).
+
+    function poll(){
+      if (document.hidden) { return; }
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'GET',
+        cache: false,
+        dataType: 'json',
+        data: { fetch_pc_ready_notifications: 1, _ts: Date.now() },
+        success: function(resp){
+          if (!resp || resp.status !== 200 || !resp.data) { return; }
+          var items = Array.isArray(resp.data.items) ? resp.data.items : [];
+
+          // Badge equals pending READY-to-print items.
+          setBadge(items.length);
+          renderList(items);
+        }
+      });
+    }
+
+    var timerName = 'pcReadyTimer';
+    if (timers[timerName]) {
+      try { clearInterval(timers[timerName]); } catch (e) {}
+      timers[timerName] = null;
+    }
+    poll();
+    timers[timerName] = setInterval(poll, 7000);
+    document.addEventListener('visibilitychange', function(){
+      if (!document.hidden) { poll(); }
+    });
+  }
+
+  return {
+    startPcReadyPolling: startPcReadyPolling
+  };
+})();
+
+// Presence (online/offline) + session guard (reusable)
+// - Sends a throttled heartbeat to the backend so the admin panel can show accurate status
+// - Keeps the existing inactivity logout behavior by polling session_destroy.php
+window.GSO = window.GSO || {};
+
+window.GSO.Presence = window.GSO.Presence || (function(){
+  var pingBusy = false;
+  var lastPingMs = 0;
+  var PING_COOLDOWN_MS = 2500;
+  var HEARTBEAT_INTERVAL_MS = 25000;
+  var heartbeatTimer = null;
+
+  function canPing(){
+    var now = Date.now();
+    return !pingBusy && (now - lastPingMs) >= PING_COOLDOWN_MS;
+  }
+
+  function ping(){
+    if (!canPing()) { return; }
+    pingBusy = true;
+    lastPingMs = Date.now();
+    $.ajax({
+      url: '../auth/auth.php',
+      type: 'GET',
+      cache: false,
+      dataType: 'json',
+      data: { presence_heartbeat: 1, _ts: Date.now() },
+      complete: function(){ pingBusy = false; }
+    });
+  }
+
+  function start(){
+    if (heartbeatTimer) { return; }
+    ping();
+    heartbeatTimer = setInterval(function(){
+      ping();
+    }, HEARTBEAT_INTERVAL_MS);
+
+    document.addEventListener('visibilitychange', function(){
+      if (!document.hidden) { ping(); }
+    });
+  }
+
+  return { start: start, ping: ping };
+})();
+
+window.GSO.SessionGuard = window.GSO.SessionGuard || (function(){
+  var inited = false;
+
+  function init(){
+    if (inited) { return; }
+    inited = true;
+
+    // Heartbeat on common user interactions.
+    ['click','keydown','mousemove','scroll','input','focus'].forEach(function(evt){
+      window.addEventListener(evt, function(){
+        if (window.GSO && window.GSO.Presence) { window.GSO.Presence.ping(); }
+      }, { passive: true });
+    });
+
+    if (window.GSO && window.GSO.Presence) { window.GSO.Presence.start(); }
+
+    // Ask server if session should be destroyed (server enforces timeout)
+    setInterval(function(){
+      $.ajax({
+        url: '../config/session_destroy.php',
+        type: 'GET',
+        cache: false,
+        data: { _ts: Date.now() },
+        success: function(html){
+          var $target = $('#destroy');
+          if ($target.length) { $target.html(html); }
+        }
+      });
+    }, 5000);
+  }
+
+  return { init: init };
+})();
+
+// Admin panel: poll presence status and update ONLINE/OFFLINE badges.
+window.GSO.AdminPresencePanel = window.GSO.AdminPresencePanel || (function(){
+  var timer = null;
+
+  function renderBadge(isOnline){
+    return isOnline
+      ? '<span class="badge badge-success">ONLINE</span>'
+      : '<span class="badge badge-dark">OFFLINE</span>';
+  }
+
+  function apply(items){
+    if (!items || !items.length) { return; }
+    var byId = {};
+    items.forEach(function(it){ byId[String(it.admin_id)] = Number(it.is_online) === 1; });
+    $('.presenceStatus[data-admin-id]').each(function(){
+      var id = String($(this).data('adminId'));
+      if (Object.prototype.hasOwnProperty.call(byId, id)) {
+        $(this).html(renderBadge(byId[id]));
+      }
+    });
+  }
+
+  function poll(){
+    $.ajax({
+      url: '../auth/auth.php',
+      type: 'GET',
+      cache: false,
+      dataType: 'json',
+      data: { fetch_presence_status: 1, _ts: Date.now() },
+      success: function(resp){
+        if (!resp || resp.status !== 200 || !resp.data) { return; }
+        apply(Array.isArray(resp.data.items) ? resp.data.items : []);
+      }
+    });
+  }
+
+  function start(){
+    if (timer) { return; }
+    if (!$('.presenceStatus[data-admin-id]').length) { return; }
+    poll();
+    timer = setInterval(function(){
+      if (!document.hidden) { poll(); }
+    }, 10000);
+  }
+
+  return { start: start };
+})();
+
+// Select2 + datalist helpers (reusable)
+window.GSO.UI = window.GSO.UI || {};
+
+window.GSO.UI.initDeptDatalistAutocomplete = function(opts){
+  opts = opts || {};
+  var $select = $(opts.select || '#dept');
+  var $input = $(opts.input || '#deptSearch');
+  var $list = $(opts.list || '#deptDatalist');
+  var $modal = opts.modal ? $(opts.modal) : $();
+
+  if(!$select.length || !$input.length || !$list.length){ return; }
+  if($input.data('gsoDeptAutocompleteInit')){ return; }
+  $input.data('gsoDeptAutocompleteInit', true);
+
+  function exactDeptCodeByName(name){
+    var target = (name || '').trim().toLowerCase();
+    if(!target){ return null; }
+    var code = null;
+    $select.find('option').each(function(){
+      var v = $(this).attr('value');
+      if(!v){ return; }
+      var n = $(this).text().trim().toLowerCase();
+      if(n === target){ code = v; return false; }
+    });
+    return code;
+  }
+
+  function populate(){
+    $list.empty();
+    $select.find('option').each(function(){
+      var v = $(this).attr('value');
+      var n = $(this).text().trim();
+      if(!v){ return; }
+      $('<option>').attr('value', n).appendTo($list);
+    });
+  }
+
+  populate();
+
+  var wasSetFromSelect = false;
+  var clearedForRetype = false;
+
+  $select.on('change.gsoDeptAutocomplete', function(){
+    var code = $select.val();
+    var name = $select.find('option:selected').text().trim();
+    $input.val(code ? name : '');
+    wasSetFromSelect = !!code;
+    clearedForRetype = false;
+  });
+
+  $input.on('input.gsoDeptAutocomplete', function(){
+    if(!clearedForRetype && wasSetFromSelect && $input.val()){
+      $input.val('');
+      clearedForRetype = true;
+      wasSetFromSelect = false;
+    }
+    if(!$input.val().trim() && $select.val()){
+      $select.val('').trigger('change');
+    }
+  });
+
+  $input.on('keydown.gsoDeptAutocomplete', function(e){
+    if(clearedForRetype || !wasSetFromSelect){ return; }
+    var k = e.key;
+    if(['Shift','Control','Alt','Meta','Tab'].includes(k)){ return; }
+    $input.val('');
+    clearedForRetype = true;
+    wasSetFromSelect = false;
+    if($select.val()){
+      $select.val('').trigger('change');
+    }
+  });
+
+  $input.on('change.gsoDeptAutocomplete', function(){
+    var code = exactDeptCodeByName($input.val());
+    if(code && $select.val() !== code){
+      $select.val(code).trigger('change');
+    }
+  });
+
+  function syncOnOpen(){
+    var code = $select.val();
+    var name = $select.find('option:selected').text().trim();
+    $input.val(code ? name : '');
+    clearedForRetype = false;
+    wasSetFromSelect = !!code;
+  }
+
+  if($modal.length){
+    $modal.on('shown.bs.modal.gsoDeptAutocomplete', function(){
+      syncOnOpen();
+      setTimeout(function(){ try { $input.trigger('focus'); } catch(e) {} }, 0);
+    });
+    $modal.on('hidden.bs.modal.gsoDeptAutocomplete', function(){
+      $input.val('');
+      clearedForRetype = false;
+      wasSetFromSelect = false;
+    });
+  } else {
+    syncOnOpen();
+  }
+};
+
+window.GSO.UI.initPcEmployeeSelect2 = function(){
+  if(!$.fn.select2){ return; }
+  if(!$('#pc_form').length){ return; }
+  var $sel = $('#employee');
+  if(!$sel.length){ return; }
+  if($sel.hasClass('select2-hidden-accessible')){ return; }
+
+  var $parent = $('#addClearanceModal');
+  $sel.select2({
+    theme: 'bootstrap4',
+    width: '100%',
+    dropdownParent: $parent.length ? $parent : $(document.body),
+    placeholder: '-SELECT-',
+    allowClear: true
+  });
+};
+
+// Global deep-link + click support for Property Clearance notifications.
+// Works even if the clearance DataTable was already initialized.
+(function setupPcNotifDeepLinkSupport(){
+  function getPcParam(){
+    try {
+      var params = new URLSearchParams(window.location.search || '');
+      return (params.get('pc') || '').trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function clearPcParam(){
+    try {
+      var params2 = new URLSearchParams(window.location.search || '');
+      if (!params2.has('pc')) { return; }
+      params2.delete('pc');
+      var newUrl = window.location.pathname + (params2.toString() ? ('?' + params2.toString()) : '') + (window.location.hash || '');
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, document.title, newUrl);
+      }
+    } catch (e) {}
+  }
+
+  // If user is already on clearance.php, open the modal without navigating.
+  $(document).on('click', 'a.rt-notif-open', function(e){
+    var control = String($(this).attr('data-control') || '').trim();
+    if (!control) { return; }
+    if (typeof window.openPcEditModal === 'function') {
+      e.preventDefault();
+      window.openPcEditModal(control);
+      // Close the dropdown reliably (Bootstrap 4)
+      try {
+        var $dd = $(this).closest('.dropdown');
+        $dd.removeClass('show');
+        $dd.find('.dropdown-menu').removeClass('show');
+        $dd.find('[data-toggle="dropdown"]').attr('aria-expanded', 'false');
+      } catch (err) {}
+    }
+  });
+
+  // On page load with ?pc=, wait for openPcEditModal to exist then open once.
+  $(function(){
+    var ctrl = getPcParam();
+    if (!ctrl) { return; }
+
+    var attempts = 0;
+    var maxAttempts = 20; // ~5 seconds
+    var timer = setInterval(function(){
+      attempts++;
+      if (typeof window.openPcEditModal === 'function') {
+        try { window.openPcEditModal(ctrl); } catch (e) {}
+        clearPcParam();
+        clearInterval(timer);
+        return;
+      }
+      if (attempts >= maxAttempts) {
+        clearInterval(timer);
+      }
+    }, 250);
+  });
+})();
+
+// Clearance statistics (services/clearance-statistic.php)
+// Renders:
+// - Stacked bar: released clearances per month, grouped by clearance type
+// - Doughnut: share by clearance type for the selected year
+window.GSO.ClearanceStats = window.GSO.ClearanceStats || (function(){
+  var charts = { monthly: null, byType: null };
+  var lastPayload = null;
+  var state = {
+    view: 'stacked',
+    year: null,
+    from: '',
+    to: ''
+  };
+  var detailsTable = null;
+
+  function hasPage(){ return $('#clearanceStatsPage').length > 0; }
+  function role(){ return String(window.currentUserRole || '').trim().toUpperCase(); }
+  function canView(){ return ['SYSTEM-ADMIN', 'CLEARANCE-ADMIN'].indexOf(role()) !== -1; }
+
+  function palette(i){
+    var colors = [
+      '#007bff','#28a745','#ffc107','#dc3545','#6f42c1','#17a2b8',
+      '#fd7e14','#20c997','#6610f2','#6c757d','#e83e8c','#343a40'
+    ];
+    return colors[i % colors.length];
+  }
+
+  function destroyChart(ch){
+    try { if (ch && typeof ch.destroy === 'function') { ch.destroy(); } } catch(e) {}
+  }
+
+  function setSummary(text){
+    var $s = $('#csSummary');
+    if ($s.length) { $s.text(String(text || '')); }
+  }
+
+  function setKpis(kpis){
+    kpis = kpis || {};
+    $('#csKpiTotal').text(String(Number(kpis.total || 0) || 0));
+    $('#csKpiThisMonth').text(String(Number(kpis.this_month || 0) || 0));
+    $('#csKpiLastMonth').text(String(Number(kpis.last_month || 0) || 0));
+    $('#csKpiPending').text(String(Number(kpis.pending || 0) || 0));
+  }
+
+  function getFilters(){
+    var $year = $('#csYear');
+    var year = Number($year.val() || '') || Number($('#clearanceStatsPage').attr('data-default-year')) || new Date().getFullYear();
+    var from = String($('#csFrom').val() || '').trim();
+    var to = String($('#csTo').val() || '').trim();
+    var okDate = function(s){ return /^\d{4}-\d{2}-\d{2}$/.test(s); };
+    if (!(okDate(from) && okDate(to))) {
+      from = '';
+      to = '';
+    }
+    state.year = year;
+    state.from = from;
+    state.to = to;
+    return { year: year, from: from, to: to };
+  }
+
+  function monthLabel(idx){
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return months[idx] || '';
+  }
+
+  function renderTotalsTable(types, totalsByType, totalReleased){
+    var $wrap = $('#csTypeTotals');
+    if (!$wrap.length) { return; }
+    $wrap.empty();
+
+    if (!types || !types.length) {
+      $wrap.append($('<div class="text-muted" style="font-size: 13px;"></div>').text('No category totals to display.'));
+      return;
+    }
+
+    // Sort by total desc for readability
+    var rows = types.map(function(t){
+      return { type: t, total: Number(totalsByType[t] || 0) || 0 };
+    }).sort(function(a,b){ return b.total - a.total; });
+
+    var $table = $('<table class="table table-sm table-bordered mb-0"></table>');
+    var $thead = $('<thead class="thead-light"></thead>');
+    $thead.append('<tr><th>Clearance Category</th><th class="text-right" style="width: 110px;">Total</th></tr>');
+    $table.append($thead);
+
+    var $tbody = $('<tbody></tbody>');
+    rows.forEach(function(r){
+      var $tr = $('<tr></tr>');
+      $tr.append($('<td></td>').text(r.type));
+      $tr.append($('<td class="text-right"></td>').text(String(r.total)));
+      $tbody.append($tr);
+    });
+    $table.append($tbody);
+
+    var $tfoot = $('<tfoot></tfoot>');
+    var $ttr = $('<tr></tr>');
+    $ttr.append('<th class="text-right">Grand Total</th>');
+    $ttr.append($('<th class="text-right"></th>').text(String(Number(totalReleased || 0) || 0)));
+    $tfoot.append($ttr);
+    $table.append($tfoot);
+
+    $wrap.append($table);
+  }
+
+  function render(payload){
+    if (!payload) { return; }
+    lastPayload = payload;
+    var months = payload.months || ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var types = Array.isArray(payload.types) ? payload.types : [];
+    var series = payload.series || {};
+    var totalsByType = payload.totals_by_type || {};
+    var totalReleased = Number(payload.total_released || 0) || 0;
+
+    setKpis(payload.kpis || {});
+
+    if (!types.length || totalReleased <= 0) {
+      setSummary('No released clearances found for ' + (payload.year || '') + '.');
+    }
+
+    // Monthly stacked bar
+    var $bar = $('#csMonthlyByTypeChart');
+    if ($bar.length && window.Chart) {
+      destroyChart(charts.monthly);
+      var barCanvas = $bar.get(0);
+      if (!barCanvas || !barCanvas.getContext) { return; }
+      var barCtx = barCanvas.getContext('2d');
+
+      var datasets;
+      if (state.view === 'total') {
+        var totals = new Array(12).fill(0);
+        types.forEach(function(t){
+          var arr = Array.isArray(series[t]) ? series[t] : new Array(12).fill(0);
+          for (var i=0;i<12;i++){ totals[i] += Number(arr[i] || 0) || 0; }
+        });
+        datasets = [{
+          label: 'Released',
+          data: totals,
+          backgroundColor: '#007bff',
+          borderColor: '#007bff',
+          borderWidth: 1
+        }];
+      } else {
+        datasets = types.map(function(t, idx){
+          var data = Array.isArray(series[t]) ? series[t] : new Array(12).fill(0);
+          return {
+            label: t,
+            data: data,
+            backgroundColor: palette(idx),
+            borderColor: palette(idx),
+            borderWidth: 1
+          };
+        });
+      }
+
+      charts.monthly = new Chart(barCtx, {
+        type: 'bar',
+        data: {
+          labels: months,
+          datasets: datasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            xAxes: [{ stacked: state.view !== 'total' }],
+            yAxes: [{ stacked: state.view !== 'total', ticks: { beginAtZero: true, precision: 0 } }]
+          },
+          legend: { display: true, position: 'bottom' },
+          tooltips: { mode: 'index', intersect: false }
+        }
+      });
+
+      // Drilldown click
+      try {
+        barCanvas.onclick = function(evt){
+          if (!charts.monthly) { return; }
+          var active = charts.monthly.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, true);
+          if (!active || !active.length) { return; }
+          var p = active[0];
+          var monthIdx = p._index;
+          var datasetIdx = p._datasetIndex;
+          var typeName = (state.view === 'total') ? '' : (charts.monthly.data.datasets[datasetIdx] ? charts.monthly.data.datasets[datasetIdx].label : '');
+          openDetails({
+            month: monthIdx + 1,
+            type: typeName,
+            title: 'Released - ' + monthLabel(monthIdx) + (typeName ? (' (' + typeName + ')') : '')
+          });
+        };
+      } catch(e) {}
+    }
+
+    // Released per clearance type (category)
+    var $byType = $('#csReleasedPerTypeChart');
+    if ($byType.length && window.Chart) {
+      destroyChart(charts.byType);
+      var byTypeCanvas = $byType.get(0);
+      if (!byTypeCanvas || !byTypeCanvas.getContext) { return; }
+      var byTypeCtx = byTypeCanvas.getContext('2d');
+
+      var labels = types.slice();
+      var data = labels.map(function(t){ return Number(totalsByType[t] || 0) || 0; });
+      var colors = labels.map(function(_, idx){ return palette(idx); });
+
+      charts.byType = new Chart(byTypeCtx, {
+        type: 'horizontalBar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Released',
+            data: data,
+            backgroundColor: colors,
+            borderColor: colors,
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          legend: { display: false },
+          scales: {
+            xAxes: [{ ticks: { beginAtZero: true, precision: 0 } }],
+            yAxes: [{ ticks: { autoSkip: false } }]
+          },
+          tooltips: { mode: 'nearest', intersect: true }
+        }
+      });
+
+      // Drilldown click: by category
+      try {
+        byTypeCanvas.onclick = function(evt){
+          if (!charts.byType) { return; }
+          var active = charts.byType.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, true);
+          if (!active || !active.length) { return; }
+          var p = active[0];
+          var idx = p._index;
+          var t = charts.byType.data.labels[idx] || '';
+          if (!t) { return; }
+          openDetails({
+            month: 0,
+            type: t,
+            title: 'Released - ' + t
+          });
+        };
+      } catch(e) {}
+    }
+
+    renderTotalsTable(types, totalsByType, totalReleased);
+
+    if (totalReleased > 0) {
+      setSummary('');
+    }
+  }
+
+  function fetchAndRender(year){
+    var f = getFilters();
+    var y = Number(f.year) || new Date().getFullYear();
+    setSummary('Loading…');
+    return $.ajax({
+      url: '../auth/auth.php',
+      type: 'GET',
+      cache: false,
+      data: {
+        fetch_clearance_statistics: 1,
+        year: y,
+        from: f.from || undefined,
+        to: f.to || undefined,
+        _ts: Date.now()
+      },
+      success: function(resp){
+        if (typeof resp === 'string') {
+          try { resp = JSON.parse(resp); } catch (e) { resp = null; }
+        }
+        if (!resp || resp.status !== 200 || !resp.data) {
+          setSummary('Unable to load statistics.');
+          return;
+        }
+        render(resp.data);
+      },
+      error: function(){
+        setSummary('Server error while loading statistics.');
+      }
+    });
+  }
+
+  function buildExportUrl(kind, opts){
+    opts = opts || {};
+    var f = getFilters();
+    var q = {
+      year: f.year,
+      from: f.from || '',
+      to: f.to || '',
+      month: opts.month || 0,
+      type: opts.type || ''
+    };
+    var params = [];
+    Object.keys(q).forEach(function(k){
+      if (q[k] === '' || q[k] === null || typeof q[k] === 'undefined') { return; }
+      params.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(q[k])));
+    });
+    if (kind === 'summary') {
+      params.unshift('export_clearance_statistics_csv=1');
+    } else {
+      params.unshift('export_clearance_released_details_csv=1');
+    }
+    return '../auth/auth.php?' + params.join('&');
+  }
+
+  function openDetails(opts){
+    opts = opts || {};
+    var month = Number(opts.month || 0) || 0;
+    var type = String(opts.type || '').trim();
+    var title = String(opts.title || 'Released Clearances');
+    $('#csDetailsTitle').text(title);
+
+    // Build ajax URL for the table
+    var f = getFilters();
+    var ajaxData = {
+      fetch_clearance_released_details: 1,
+      year: f.year,
+      _ts: Date.now()
+    };
+    if (f.from && f.to) { ajaxData.from = f.from; ajaxData.to = f.to; }
+    if (month >= 1 && month <= 12) { ajaxData.month = month; }
+    if (type) { ajaxData.type = type; }
+
+    $('#csDetailsModal').modal('show');
+
+    // Init once
+    if (!detailsTable) {
+      detailsTable = $('#csDetailsTable').DataTable({
+        responsive: true,
+        lengthChange: false,
+        autoWidth: false,
+        processing: true,
+        dom: "<'row'<'col-sm-12 col-md-6'B><'col-sm-12 col-md-6'f>>" +
+             "<'row'<'col-sm-12'tr>>" +
+             "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
+        buttons: [
+          { extend: 'excelHtml5', title: 'Released Clearances' },
+          { extend: 'csvHtml5', title: 'Released Clearances' },
+          { extend: 'print', title: 'Released Clearances' },
+          {
+            text: 'Download CSV',
+            className: 'btn btn-sm btn-primary',
+            action: function(){
+              window.location.href = buildExportUrl('details', { month: month, type: type });
+            }
+          }
+        ],
+        ajax: {
+          url: '../auth/auth.php',
+          type: 'GET',
+          cache: false,
+          data: function(d){
+            Object.keys(ajaxData).forEach(function(k){ d[k] = ajaxData[k]; });
+            return d;
+          },
+          dataSrc: function(resp){
+            if (typeof resp === 'string') {
+              try { resp = JSON.parse(resp); } catch (e) { resp = null; }
+            }
+            if (!resp || resp.status !== 200 || !resp.data || !Array.isArray(resp.data.items)) { return []; }
+            return resp.data.items;
+          }
+        },
+        columns: [
+          { data: 'control_number' },
+          { data: 'emp_name' },
+          { data: 'clearance_name' },
+          { data: 'release_date_display' }
+        ]
+      });
+    } else {
+      // Update ajax parameters and reload
+      detailsTable.ajax.params = function(){ return ajaxData; };
+      detailsTable.ajax.reload();
+    }
+  }
+
+  function init(){
+    if (!hasPage()) { return; }
+    if (!canView()) { return; }
+
+    // Date pickers
+    if ($.fn.datepicker) {
+      $('#csFrom, #csTo').datepicker({
+        autoclose: true,
+        format: 'yyyy-mm-dd',
+        todayHighlight: true
+      });
+    }
+
+    var $year = $('#csYear');
+    var defaultYear = Number($('#clearanceStatsPage').attr('data-default-year')) || new Date().getFullYear();
+    if ($year.length && !$year.val()) { $year.val(String(defaultYear)); }
+
+    state.view = String($('input[name="csView"]:checked').val() || 'stacked');
+    fetchAndRender($year.val() || defaultYear);
+
+    $year.off('change.cs').on('change.cs', function(){ fetchAndRender($(this).val()); });
+    $('#csFrom, #csTo').off('change.cs').on('change.cs', function(){ fetchAndRender($year.val() || defaultYear); });
+    $('#csClearRange').off('click.cs').on('click.cs', function(){
+      $('#csFrom').val('');
+      $('#csTo').val('');
+      fetchAndRender($year.val() || defaultYear);
+    });
+
+    $('#csViewToggle input[name="csView"]').off('change.cs').on('change.cs', function(){
+      state.view = String($(this).val() || 'stacked');
+      if (lastPayload) { render(lastPayload); }
+    });
+
+    $('#csExportSummary').off('click.cs').on('click.cs', function(){
+      window.location.href = buildExportUrl('summary');
+    });
+  }
+
+  // Don't auto-init here; the page will call init().
+  return { init: init };
+})();
+
+$(function(){ 
+  function initTooltips(scope) {
+    var $scope = scope ? $(scope) : $(document);
+    // Avoid duplicated tooltip instances on redraw
+    $scope.find('[data-toggle="tooltip"]').tooltip('dispose').tooltip({
+      container: 'body',
+      boundary: 'window'
+    });
+  }
+
+
+  if ($('#example1').length && $.fn.dataTable && !$.fn.dataTable.isDataTable('#example1')) {
+    var path = String((window.location && window.location.pathname) || '');
+    var isGeneralFundDepartmentPage = /general-fund-department\.php$/i.test(path);
+    var isSefInstitutionPage = /sef-institution\.php$/i.test(path);
+
+    var dtOpts = {
+      responsive: true,
+      lengthChange: false
+    };
+
+    if (isGeneralFundDepartmentPage || isSefInstitutionPage) {
+      dtOpts.autoWidth = false;
+      dtOpts.dom = "<'row'<'col-sm-12 col-md-6'B><'col-sm-12 col-md-6'f>>" +
+                  "<'row'<'col-sm-12'tr>>" +
+                  "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>";
+      dtOpts.buttons = [
+        {
+          text: 'Export Inventory',
+          className: 'btn btn-primary',
+          action: function(){
+            if (isGeneralFundDepartmentPage) {
+              var $m = $('#gfInventoryExportModal');
+              if ($m.length) {
+                $m.modal('show');
+                return;
+              }
+              window.location.href = '../auth/auth.php?export_gf_inventory=1&category=PAR';
+              return;
+            }
+
+            if (isSefInstitutionPage) {
+              var $m2 = $('#sefInventoryExportModal');
+              if ($m2.length) {
+                $m2.modal('show');
+                return;
+              }
+              window.location.href = '../auth/auth.php?export_sef_inventory=1&category=PAR';
+            }
+          }
+        }
+      ];
+    }
+
+    $("#example1").DataTable(dtOpts);
+  }
+
+  initTooltips();
+
+  // General Fund Department export modal handler
+  (function bindGfExportModal(){
+    var path = String((window.location && window.location.pathname) || '');
+    if (!/general-fund-department\.php$/i.test(path)) { return; }
+    var $btn = $('#gfExportConfirm');
+    if (!$btn.length) { return; }
+
+    var $printBtn = $('#gfPrintConfirm');
+
+    $btn.off('click.gsoGfExport').on('click.gsoGfExport', function(){
+      var category = String($('#gfExportCategory').val() || '').trim().toUpperCase();
+      if (category !== 'PAR' && category !== 'ICS' && category !== 'ALL') { category = 'PAR'; }
+
+      var dept = String($('#gfExportDept').val() || '').trim();
+      var url = '../auth/auth.php?export_gf_inventory=1&category=' + encodeURIComponent(category);
+      if (dept) {
+        url += '&dept=' + encodeURIComponent(dept);
+      }
+
+      try { $('#gfInventoryExportModal').modal('hide'); } catch (_) {}
+      window.location.href = url;
+    });
+
+    if ($printBtn.length) {
+      $printBtn.off('click.gsoGfPrint').on('click.gsoGfPrint', function(){
+        var category = String($('#gfExportCategory').val() || '').trim().toUpperCase();
+        if (category !== 'PAR' && category !== 'ICS' && category !== 'ALL') { category = 'PAR'; }
+
+        var dept = String($('#gfExportDept').val() || '').trim();
+        var url = '../auth/auth.php?print_gf_inventory=1&category=' + encodeURIComponent(category);
+        if (dept) {
+          url += '&dept=' + encodeURIComponent(dept);
+        }
+
+        try { $('#gfInventoryExportModal').modal('hide'); } catch (_) {}
+        try {
+          window.open(url, '_blank');
+        } catch (e) {
+          window.location.href = url;
+        }
+      });
+    }
+  })();
+
+  // SEF Institution export/print modal handler
+  (function bindSefExportModal(){
+    var path = String((window.location && window.location.pathname) || '');
+    if (!/sef-institution\.php$/i.test(path)) { return; }
+
+    var $btn = $('#sefExportConfirm');
+    if (!$btn.length) { return; }
+
+    var $printBtn = $('#sefPrintConfirm');
+
+    $btn.off('click.gsoSefExport').on('click.gsoSefExport', function(){
+      var category = String($('#sefExportCategory').val() || '').trim().toUpperCase();
+      if (category !== 'PAR' && category !== 'ICS' && category !== 'ALL') { category = 'PAR'; }
+
+      var dept = String($('#sefExportDept').val() || '').trim();
+      var url = '../auth/auth.php?export_sef_inventory=1&category=' + encodeURIComponent(category);
+      if (dept) {
+        url += '&dept=' + encodeURIComponent(dept);
+      }
+
+      try { $('#sefInventoryExportModal').modal('hide'); } catch (_) {}
+      window.location.href = url;
+    });
+
+    if ($printBtn.length) {
+      $printBtn.off('click.gsoSefPrint').on('click.gsoSefPrint', function(){
+        var category = String($('#sefExportCategory').val() || '').trim().toUpperCase();
+        if (category !== 'PAR' && category !== 'ICS' && category !== 'ALL') { category = 'PAR'; }
+
+        var dept = String($('#sefExportDept').val() || '').trim();
+        var url = '../auth/auth.php?print_sef_inventory=1&category=' + encodeURIComponent(category);
+        if (dept) {
+          url += '&dept=' + encodeURIComponent(dept);
+        }
+
+        try { $('#sefInventoryExportModal').modal('hide'); } catch (_) {}
+        try {
+          window.open(url, '_blank');
+        } catch (e) {
+          window.location.href = url;
+        }
+      });
+    }
+  })();
+
+  // Navbar bell notifications for CLEARANCE-ADMIN when items become READY
+  // Initialize globally so the bell shows on any page (e.g., Clearance Statistics).
+  if (window.GSO && window.GSO.Notifications && typeof window.GSO.Notifications.startPcReadyPolling === 'function') {
+    window.GSO.Notifications.startPcReadyPolling();
+  }
+
+  // Unserviceable (Disposal) - Summary by Account Code
+  if ($('#unserviceableAccountCodesTable').length && !$.fn.dataTable.isDataTable('#unserviceableAccountCodesTable')) {
+    function esc(text){ return $('<div>').text(text === null || text === undefined ? '' : String(text)).html(); }
+    function formatMoney(n){
+      var num = Number(n || 0) || 0;
+      try {
+        return '₱ ' + num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      } catch (e) {
+        return '₱ ' + num.toFixed(2);
+      }
+    }
+
+    $('#unserviceableAccountCodesTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      autoWidth: false,
+      processing: true,
+      serverSide: true,
+      searchDelay: 500,
+      ajax: {
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: function(d){
+          d.unserviceable_account_codes_dt = 1;
+          return d;
+        }
+      },
+      columns: [
+        {
+          data: 'account_code',
+          render: function(data){
+            var code = String(data || '').trim();
+            var href = 'unserviceable-items.php?code=' + encodeURIComponent(code);
+            return '<a href="' + href + '">' + esc(code) + '</a>';
+          }
+        },
+        { data: 'account_name', render: function(d){ return esc(d || ''); } },
+        { data: 'item_count', className: 'text-center', render: function(d){ return esc(d || 0); } },
+        { data: 'total_value', className: 'text-right', render: function(d){ return formatMoney(d); } }
+      ],
+      order: [[0, 'asc']]
+    });
+  }
+
+  // Unserviceable (Disposal) - Items filtered by Account Code
+  if ($('#unserviceableItemsTable').length && !$.fn.dataTable.isDataTable('#unserviceableItemsTable')) {
+    function esc2(text){ return $('<div>').text(text === null || text === undefined ? '' : String(text)).html(); }
+    function escAttr(text){
+      return String(text === null || text === undefined ? '' : text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    function checkboxCell(row){
+      var par = String((row && row.par_number) || '').trim();
+      if (!par) { return ''; }
+      var attrPar = escAttr(par);
+      return '<input type="checkbox" class="us-row-select" value="' + attrPar + '" aria-label="Select property ' + attrPar + '">';
+    }
+    function undoCell(row){
+      var par = String((row && row.par_number) || '').trim();
+      if (!par) { return ''; }
+      return '<button type="button" class="btn btn-sm btn-outline-secondary undoUnserviceableItem" data-par="' + escAttr(par) + '" title="Undo to inventory"><i class="fas fa-undo"></i></button>';
+    }
+
+    var code = '';
+    try {
+      code = String($('#unserviceableItemsPage').attr('data-account-code') || '').trim();
+    } catch (e) { code = ''; }
+
+    function selectedPars(){
+      var pars = [];
+      $('#unserviceableItemsTable tbody input.us-row-select:checked').each(function(){
+        var v = String(this.value || '').trim();
+        if (v) { pars.push(v); }
+      });
+      return pars;
+    }
+
+    function setForDisposalEnabled(){
+      var enabled = selectedPars().length > 0;
+      try {
+        $('.buttons-forDisposal').prop('disabled', !enabled);
+      } catch (e) {}
+    }
+
+    var usItemsTable = $('#unserviceableItemsTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      autoWidth: false,
+      processing: true,
+      serverSide: true,
+      searchDelay: 500,
+      dom: "<'row'<'col-sm-12 col-md-6'B><'col-sm-12 col-md-6'f>>" +
+           "<'row'<'col-sm-12'tr>>" +
+           "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
+      buttons: [
+        {
+          extend: 'excelHtml5',
+          text: 'Excel',
+          title: 'Unserviceable Items - ' + (code || ''),
+          exportOptions: { columns: [2, 3, 4, 5, 6, 7] }
+        },
+        {
+          extend: 'print',
+          text: 'Print',
+          title: 'Unserviceable Items - ' + (code || ''),
+          exportOptions: { columns: [2, 3, 4, 5, 6, 7] }
+        },
+        {
+          text: 'For Disposal',
+          className: 'btn btn-danger buttons-forDisposal',
+          action: function(){
+            var pars = selectedPars();
+            if (!pars.length) {
+              Swal.fire({ icon: 'info', title: 'No items selected' });
+              return;
+            }
+
+            Swal.fire({
+              title: 'Mark selected items?',
+              text: 'This will save the selected items to IIRUP and mark them as FOR DISPOSAL.',
+              icon: 'warning',
+              showCancelButton: true,
+              confirmButtonText: 'Yes, continue'
+            }).then(function(r){
+              if (!r.isConfirmed) { return; }
+              var fd = new FormData();
+              fd.append('unserviceable_mark_for_disposal', 1);
+              fd.append('par_numbers', JSON.stringify(pars));
+              $.ajax({
+                type: 'POST',
+                url: '../auth/auth.php',
+                data: fd,
+                processData: false,
+                contentType: false,
+                success: function(resp){
+                  var res = resp;
+                  if (typeof resp === 'string') {
+                    try { res = JSON.parse(resp); } catch (e) { res = null; }
+                  }
+                  if (res && res.status === 200) {
+                    Swal.fire({ position:'center', icon:'success', title: res.message || 'Marked for disposal', showConfirmButton:false, timer:1400 });
+                    usItemsTable.ajax.reload(null, false);
+                    $('#selectAllUnserviceableItems').prop('checked', false).prop('indeterminate', false);
+                  } else {
+                    Swal.fire({ icon:'error', title:'Failed', text: (res && res.message) ? res.message : 'Unable to update selected items.' });
+                  }
+                  setForDisposalEnabled();
+                },
+                error: function(xhr){
+                  var msg = 'Server error';
+                  try {
+                    if (xhr && xhr.responseText) {
+                      msg = String(xhr.responseText).trim() || msg;
+                    }
+                  } catch (e) {}
+                  Swal.fire({ icon:'error', title:'Server error', text: msg });
+                  setForDisposalEnabled();
+                }
+              });
+            });
+          }
+        }
+      ],
+      ajax: {
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: function(d){
+          d.unserviceable_items_by_account_code_dt = 1;
+          d.code = code;
+          return d;
+        }
+      },
+      columns: [
+        { data: 'par_number', orderable: false, searchable: false, className: 'text-center align-middle', render: function(d, type, row){ return checkboxCell(row); } },
+        { data: null, orderable: false, searchable: false, className: 'text-center align-middle', render: function(d, type, row){ return undoCell(row); } },
+        { data: 'particular', render: function(d){ return esc2(d || ''); } },
+        { data: 'serial_number', render: function(d){ return d ? esc2(d) : "<span class='text-dark'>NULL</span>"; } },
+        { data: 'serial_number_2', render: function(d){ return d ? esc2(d) : "<span class='text-dark'>NULL</span>"; } },
+        { data: 'par_number', render: function(d){ return esc2(d || ''); } },
+        { data: 'department_name', render: function(d){ return esc2(d || ''); } },
+        { data: 'last_update', render: function(d){ return esc2(d || ''); } }
+      ],
+      columnDefs: [
+        { targets: 0, responsivePriority: 1 },
+        { targets: 1, responsivePriority: 2 },
+        { targets: 2, responsivePriority: 3 }
+      ],
+      order: [[7, 'desc']]
+    });
+
+    function syncSelectAll(){
+      var $all = $('#unserviceableItemsTable tbody input.us-row-select');
+      var $checked = $all.filter(':checked');
+      var el = document.getElementById('selectAllUnserviceableItems');
+      if (!el) { return; }
+      if ($checked.length === 0) {
+        el.checked = false;
+        el.indeterminate = false;
+      } else if ($checked.length === $all.length) {
+        el.checked = true;
+        el.indeterminate = false;
+      } else {
+        el.checked = false;
+        el.indeterminate = true;
+      }
+    }
+
+    $(document).off('change.usSelectAll').on('change.usSelectAll', '#selectAllUnserviceableItems', function(){
+      var checked = this.checked;
+      $('#unserviceableItemsTable tbody input.us-row-select').prop('checked', checked);
+      syncSelectAll();
+      setForDisposalEnabled();
+    });
+
+    $(document).off('change.usRowSelect').on('change.usRowSelect', '#unserviceableItemsTable tbody input.us-row-select', function(){
+      syncSelectAll();
+      setForDisposalEnabled();
+    });
+
+    $(document).off('click.undoUnserviceableItem').on('click.undoUnserviceableItem', '.undoUnserviceableItem', function(){
+      var par = String($(this).data('par') || '').trim();
+      if (!par) { return; }
+
+      Swal.fire({
+        title: 'Undo this item?',
+        text: 'This will move the item back to its inventory table.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Yes, undo'
+      }).then(function(r){
+        if (!r.isConfirmed) { return; }
+        var fd = new FormData();
+        fd.append('unserviceable_undo_item', 1);
+        fd.append('par_number', par);
+        $.ajax({
+          type: 'POST',
+          url: '../auth/auth.php',
+          data: fd,
+          processData: false,
+          contentType: false,
+          success: function(resp){
+            var res = resp;
+            if (typeof resp === 'string') {
+              try { res = JSON.parse(resp); } catch (e) { res = null; }
+            }
+            if (res && res.status === 200) {
+              Swal.fire({ position:'center', icon:'success', title: res.message || 'Item restored', showConfirmButton:false, timer:1400 });
+              usItemsTable.ajax.reload(null, false);
+              $('#selectAllUnserviceableItems').prop('checked', false).prop('indeterminate', false);
+            } else {
+              Swal.fire({ icon:'error', title:'Failed', text:(res && res.message) || 'Unable to undo item.' });
+            }
+            setForDisposalEnabled();
+          },
+          error: function(){
+            Swal.fire({ icon:'error', title:'Server error', text:'Unable to undo item.' });
+            setForDisposalEnabled();
+          }
+        });
+      });
+    });
+
+    usItemsTable.on('draw', function(){
+      syncSelectAll();
+      setForDisposalEnabled();
+    });
+
+    // Initialize state
+    setForDisposalEnabled();
+  }
+
+  // Disposal - Summary by Account Code
+  if ($('#disposalAccountCodesTable').length && !$.fn.dataTable.isDataTable('#disposalAccountCodesTable')) {
+    function escD(text){ return $('<div>').text(text === null || text === undefined ? '' : String(text)).html(); }
+    function formatMoneyD(n){
+      var num = Number(n || 0) || 0;
+      try { return '₱ ' + num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+      catch (e) { return '₱ ' + num.toFixed(2); }
+    }
+
+    var dispRef = '';
+    try { dispRef = String($('#disposalAccountCodesPage').attr('data-disposal-ref') || '').trim(); } catch (e) { dispRef = ''; }
+
+    $('#disposalAccountCodesTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      autoWidth: false,
+      processing: true,
+      serverSide: true,
+      searchDelay: 500,
+      ajax: {
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: function(d){ d.disposal_account_codes_dt = 1; d.disposal_reference = dispRef; return d; }
+      },
+      columns: [
+        {
+          data: 'account_code',
+          render: function(data){
+            var code = String(data || '').trim();
+            var href = 'disposal-items.php?code=' + encodeURIComponent(code) + '&ref=' + encodeURIComponent(dispRef || '');
+            return '<a href="' + href + '">' + escD(code) + '</a>';
+          }
+        },
+        { data: 'account_name', render: function(d){ return escD(d || ''); } },
+        { data: 'item_count', className: 'text-center', render: function(d){ return escD(d || 0); } },
+        { data: 'total_appraise_value', className: 'text-right', render: function(d){ return formatMoneyD(d); } }
+      ],
+      order: [[0, 'asc']]
+    });
+  }
+
+  // Disposal - Activities list
+  if ($('#disposalActivitiesTable').length && !$.fn.dataTable.isDataTable('#disposalActivitiesTable')) {
+    function escDA(text){ return $('<div>').text(text === null || text === undefined ? '' : String(text)).html(); }
+
+    // ---- Disposal Info Modal (IIRUP details)
+    var DISP_INFO_MAX_OFFICERS = 5;
+
+    function formatMoneyDA(n){
+      var num = Number(n || 0) || 0;
+      try { return '₱ ' + num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+      catch (e) { return '₱ ' + num.toFixed(2); }
+    }
+
+    function setDispInfoSummaryLoading(ref){
+      $('#dispInfoSumRef').text(ref || '—');
+      $('#dispInfoSumStatus').text('...');
+      $('#dispInfoSumCreated').text('...');
+      $('#dispInfoSumItems').text('...');
+      $('#dispInfoSumQty').text('...');
+      $('#dispInfoSumTotal').text('...');
+    }
+
+    function fillDispInfoSummary(d){
+      var ref = d && d.disposal_reference ? String(d.disposal_reference) : '';
+      var st = (d && d.status != null) ? Number(d.status) : 0;
+      var statusLabel = (st === 0) ? 'ONGOING APPRAISAL' : 'DONE';
+      $('#dispInfoSumRef').text(ref || '—');
+      $('#dispInfoSumStatus').text(statusLabel);
+      $('#dispInfoSumCreated').text(d && d.created_at ? ('Created: ' + String(d.created_at)) : '—');
+      $('#dispInfoSumItems').text((d && d.items_count != null) ? String(d.items_count) : '0');
+      $('#dispInfoSumQty').text((d && d.qty_total != null) ? String(d.qty_total) : '0');
+      $('#dispInfoSumTotal').text(formatMoneyDA(d && d.total_appraise_value != null ? d.total_appraise_value : 0));
+    }
+
+    function loadDispInfoSummary(ref){
+      setDispInfoSummaryLoading(ref);
+      return $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: { disposal_get_info: 1, disposal_reference: ref },
+        cache: false
+      }).done(function(resp){
+        var res = resp;
+        if (typeof resp === 'string') { try { res = JSON.parse(resp); } catch (e) { res = null; } }
+        if (res && res.status === 200 && res.data) {
+          fillDispInfoSummary(res.data);
+        } else {
+          $('#dispInfoSumStatus').text('—');
+          $('#dispInfoSumCreated').text('—');
+          $('#dispInfoSumItems').text('—');
+          $('#dispInfoSumQty').text('—');
+          $('#dispInfoSumTotal').text('—');
+        }
+      }).fail(function(){
+        $('#dispInfoSumStatus').text('—');
+        $('#dispInfoSumCreated').text('—');
+        $('#dispInfoSumItems').text('—');
+        $('#dispInfoSumQty').text('—');
+        $('#dispInfoSumTotal').text('—');
+      });
+    }
+
+    function setDispInfoFieldReadonly(readonly){
+      var ro = !!readonly;
+      $('#disposalInfoForm input').not('#dispInfoRef,#dispInfoExists').prop('readonly', ro);
+      $('#dispInfoAddOfficer').prop('disabled', ro);
+      $('#dispInfoOfficers').find('input').prop('readonly', ro);
+      $('#dispInfoOfficers').find('.dispInfoRemoveOfficer').prop('disabled', ro);
+    }
+
+    function setDispInfoMode(mode){
+      // mode: 'new' | 'view' | 'edit'
+      var isView = (mode === 'view');
+      var isNew = (mode === 'new');
+      $('#dispInfoAlert').toggleClass('d-none', !isNew);
+      $('#dispInfoEditBtn').toggleClass('d-none', isNew || !isView);
+      $('#dispInfoSaveBtn').toggleClass('d-none', isView);
+      setDispInfoFieldReadonly(isView);
+    }
+
+    function validateIirupInfoPayload(p){
+      var missing = [];
+      function req(val, label){
+        if (val == null || String(val).trim() === '') { missing.push(label); }
+      }
+
+      req(p.accountable_officer, 'Name of Accountable Officer');
+      req(p.designation, 'Designation');
+      req(p.station, 'Station');
+      req(p.local_chief_executive, 'Approved by');
+      req(p.disposal_chairperson, 'Disposal Committee Chairperson');
+      req(p.witness_name, 'Witness');
+      req(p.witness_position, 'Witness Position');
+
+      if (!Array.isArray(p.inspectors) || p.inspectors.length < 1) {
+        missing.push('At least one Inspector (Name + Position)');
+      }
+      if (Array.isArray(p.inspectors) && p.inspectors.length > DISP_INFO_MAX_OFFICERS) {
+        missing.push('Inspectors (max of 5)');
+      }
+      if (Array.isArray(p.inspectors)) {
+        for (var i = 0; i < p.inspectors.length; i++) {
+          var o = p.inspectors[i] || {};
+          var n = (o.name != null) ? String(o.name).trim() : '';
+          var pos = (o.position != null) ? String(o.position).trim() : '';
+          if (!n) { missing.push('Inspector #' + (i + 1) + ' Name'); }
+          if (!pos) { missing.push('Inspector #' + (i + 1) + ' Position'); }
+        }
+      }
+      return missing;
+    }
+
+    function fillDispInfoFromIirupData(d){
+      d = d && typeof d === 'object' ? d : {};
+      $('#dispInfoAccountableOfficer').val(d.accountable_officer || '');
+      $('#dispInfoDesignation').val(d.designation || '');
+      $('#dispInfoStation').val(d.station || '');
+
+      // UI label says "Approved by" but DB requirement is local_chief_executive
+      $('#dispInfoApprovedBy').val(d.local_chief_executive || '');
+      $('#dispInfoCommitteeChair').val(d.disposal_chairperson || '');
+
+      $('#dispInfoWitness').val(d.witness_name || '');
+      $('#dispInfoWitnessPosition').val(d.witness_position || '');
+      setOfficers(d.inspectors || []);
+    }
+
+    function prefillDispInfoFromLegacyDisposalDetails(d){
+      d = d && typeof d === 'object' ? d : {};
+      $('#dispInfoAccountableOfficer').val(d.accountable_officer_name || '');
+      $('#dispInfoDesignation').val(d.designation || '');
+      $('#dispInfoStation').val(d.station || '');
+      $('#dispInfoApprovedBy').val(d.approved_by || '');
+      $('#dispInfoCommitteeChair').val(d.committee_chairperson || '');
+      $('#dispInfoWitness').val(d.witness || '');
+      $('#dispInfoWitnessPosition').val(d.witness_position || '');
+      setOfficers(d.inspection_officers || []);
+    }
+
+    function officerRowHtml(officer){
+      var o = officer && typeof officer === 'object' ? officer : {};
+      var name = (o.name != null) ? String(o.name) : '';
+      var position = (o.position != null) ? String(o.position) : '';
+      return (
+        '<div class="dispInfoOfficerRow mb-2">' +
+          '<div class="input-group">' +
+            '<div class="input-group-prepend">' +
+              '<span class="input-group-text" title="Officer"><i class="fas fa-user"></i></span>' +
+            '</div>' +
+            '<input type="text" class="form-control dispInfoOfficerName" placeholder="Officer name" value="' + escDA(name) + '">' +
+            '<div class="input-group-prepend">' +
+              '<span class="input-group-text" title="Position"><i class="fas fa-briefcase"></i></span>' +
+            '</div>' +
+            '<input type="text" class="form-control dispInfoOfficerPosition" placeholder="Position" value="' + escDA(position) + '">' +
+            '<div class="input-group-append">' +
+              '<button class="btn btn-outline-danger dispInfoRemoveOfficer" type="button" title="Remove">' +
+                '<i class="fas fa-times"></i>' +
+              '</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    function getOfficers(){
+      var arr = [];
+      $('#dispInfoOfficers .dispInfoOfficerRow').each(function(){
+        var name = String($(this).find('.dispInfoOfficerName').val() || '').trim();
+        var position = String($(this).find('.dispInfoOfficerPosition').val() || '').trim();
+
+        // Ignore completely empty rows.
+        if (!name && !position) { return; }
+
+        arr.push({ name: name, position: position });
+      });
+      return arr;
+    }
+
+    function setOfficers(officers){
+      var list = Array.isArray(officers) ? officers : [];
+      $('#dispInfoOfficers').empty();
+      if (!list.length) {
+        $('#dispInfoOfficers').append(officerRowHtml({ name: '', position: '' }));
+        return;
+      }
+      for (var i = 0; i < list.length && i < DISP_INFO_MAX_OFFICERS; i++) {
+        // Backward-compat: old payload can be array of strings
+        if (typeof list[i] === 'string') {
+          $('#dispInfoOfficers').append(officerRowHtml({ name: list[i], position: '' }));
+        } else {
+          $('#dispInfoOfficers').append(officerRowHtml(list[i]));
+        }
+      }
+    }
+
+    function resetDispInfoForm(){
+      $('#dispInfoExists').val('0');
+      $('#dispInfoRef').val('');
+      $('#dispInfoAccountableOfficer').val('');
+      $('#dispInfoDesignation').val('');
+      $('#dispInfoStation').val('');
+      $('#dispInfoApprovedBy').val('');
+      $('#dispInfoCommitteeChair').val('');
+      $('#dispInfoWitness').val('');
+      $('#dispInfoWitnessPosition').val('');
+      setOfficers([{ name: '', position: '' }]);
+      $('#disposalInfoForm .is-invalid').removeClass('is-invalid');
+    }
+
+    function openDisposalInfoModal(ref){
+      resetDispInfoForm();
+      $('#dispInfoRef').val(ref);
+      loadDispInfoSummary(ref);
+      setDispInfoMode('view');
+      $('#disposalInfoModal').modal('show');
+
+      // Load from iirup_* tables (new source of truth)
+      return $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: { iirup_info_get: 1, disposal_reference: ref },
+        cache: false
+      }).done(function(resp){
+        var res = resp;
+        if (typeof resp === 'string') { try { res = JSON.parse(resp); } catch (e) { res = null; } }
+        if (!res || res.status !== 200) {
+          Swal.fire({ icon:'error', title:'Failed', text:(res && res.message) ? res.message : 'Unable to load IIRUP info.' });
+          return;
+        }
+
+        var d = res.data || {};
+        var exists = !!d.exists;
+        $('#dispInfoExists').val(exists ? '1' : '0');
+
+        fillDispInfoFromIirupData(d);
+
+        if (!exists) {
+          // Backward-compat: prefill from legacy disposal_details if present
+          $.ajax({
+            url: '../auth/auth.php',
+            type: 'POST',
+            data: { disposal_details_get: 1, disposal_reference: ref },
+            cache: false
+          }).done(function(r2){
+            var rr = r2;
+            if (typeof r2 === 'string') { try { rr = JSON.parse(r2); } catch (e) { rr = null; } }
+            if (rr && rr.status === 200 && rr.data) {
+              prefillDispInfoFromLegacyDisposalDetails(rr.data);
+            }
+            setDispInfoMode('new');
+          }).fail(function(){
+            setDispInfoMode('new');
+          });
+        } else {
+          setDispInfoMode('view');
+        }
+      }).fail(function(){
+        Swal.fire({ icon:'error', title:'Server error', text:'Unable to load IIRUP info.' });
+      });
+    }
+    // Modal interactions
+    $(document).off('click.dispInfoEdit').on('click.dispInfoEdit', '#dispInfoEditBtn', function(){
+      setDispInfoMode('edit');
+    });
+
+
+    function setCreateDisposalDisabled(disabled, tooltipText){
+      var $btn = $('#createDisposalBtn');
+      var $wrap = $('#createDisposalBtnWrap');
+      if (!$btn.length) { return; }
+
+      $btn.prop('disabled', !!disabled);
+
+      // Tooltips don't fire on disabled buttons, so attach to wrapper.
+      if ($wrap.length) {
+        $wrap.attr('title', disabled ? (tooltipText || '') : '');
+        if (disabled) {
+          $wrap.attr('data-toggle', 'tooltip');
+          try {
+            $wrap.tooltip('dispose').tooltip({ container: 'body', boundary: 'window' });
+          } catch (e) {}
+        } else {
+          try { $wrap.tooltip('dispose'); } catch (e) {}
+        }
+      }
+    }
+
+    function refreshCreateDisposalState(){
+      var $btn = $('#createDisposalBtn');
+      if (!$btn.length) { return; }
+
+      return $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: { disposal_get_active: 1 },
+        cache: false
+      }).done(function(resp){
+        var res = resp;
+        if (typeof resp === 'string') {
+          try { res = JSON.parse(resp); } catch (e) { res = null; }
+        }
+        var hasActive = !!(res && res.status === 200 && res.data && Number(res.data.status) === 0);
+        setCreateDisposalDisabled(hasActive, 'finish the ongoing disposal first');
+      }).fail(function(){
+        // If backend fails, keep button enabled (avoid blocking user).
+        setCreateDisposalDisabled(false, '');
+      });
+    }
+
+    function statusBadge(st){
+      var v = parseInt(st, 10);
+      if (!isFinite(v)) { v = 0; }
+      if (v === 0) {
+        return '<span class="badge badge-warning">ONGOING APPRAISAL</span>';
+      }
+      return '<span class="badge badge-success">DONE</span>';
+    }
+
+    function actionDropdown(row){
+      var ref = row && row.disposal_reference ? String(row.disposal_reference) : '';
+      var st = row && row.status != null ? parseInt(row.status, 10) : 0;
+      if (!isFinite(st)) { st = 0; }
+      var closeDisabled = (st !== 0);
+      var closeCls = closeDisabled ? ' disabled' : '';
+      var closeAria = closeDisabled ? ' aria-disabled="true" tabindex="-1"' : '';
+      return (
+        '<div class="btn-group">' +
+          '<button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-toggle="dropdown" data-boundary="window" aria-haspopup="true" aria-expanded="false">' +
+            '<i class="fas fa-ellipsis-v"></i>' +
+          '</button>' +
+          '<div class="dropdown-menu dropdown-menu-right">' +
+            '<a href="#" class="dropdown-item btnUploadDisposalDocs" data-ref="' + escDA(ref) + '">' +
+              '<i class="fas fa-upload mr-2"></i>Upload Documents' +
+            '</a>' +
+            '<a href="#" class="dropdown-item btnDisposalInfo" data-ref="' + escDA(ref) + '">' +
+              '<i class="fas fa-info-circle mr-2"></i>Disposal Info' +
+            '</a>' +
+            '<a href="#" class="dropdown-item btnCloseDisposal text-success' + closeCls + '" data-ref="' + escDA(ref) + '"' + closeAria + '>' +
+              '<i class="fas fa-check mr-2"></i>Completed' +
+            '</a>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    var activitiesTable = $('#disposalActivitiesTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      autoWidth: false,
+      processing: true,
+      serverSide: true,
+      searchDelay: 500,
+      ajax: {
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: function(d){ d.disposal_activities_dt = 1; return d; }
+      },
+      columns: [
+        { data: 'created_at', render: function(d){ return escDA(d || ''); } },
+        {
+          data: 'disposal_reference',
+          render: function(d){
+            var ref = String(d || '').trim();
+            var href = 'disposal-account-code.php?ref=' + encodeURIComponent(ref);
+            return '<a href="' + href + '">' + escDA(ref) + '</a>';
+          }
+        },
+        { data: 'status', render: function(d){ return statusBadge(d); } },
+        { data: null, orderable: false, searchable: false, render: function(d, t, row){ return actionDropdown(row); } }
+      ],
+      order: [[0, 'desc']]
+    });
+
+    // Initial state: disable Create button if an activity is ongoing
+    refreshCreateDisposalState();
+
+    $(document).off('click.createDisposal').on('click.createDisposal', '#createDisposalBtn', function(){
+      Swal.fire({
+        title: 'Create a disposal Activities?',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Create'
+      }).then(function(r){
+        if (!r.isConfirmed) { return; }
+        var fd = new FormData();
+        fd.append('disposal_create', 1);
+        $.ajax({
+          type: 'POST',
+          url: '../auth/auth.php',
+          data: fd,
+          processData: false,
+          contentType: false,
+          success: function(resp){
+            var res = resp;
+            if (typeof resp === 'string') { try { res = JSON.parse(resp); } catch (e) { res = null; } }
+            if (res && res.status === 200) {
+              Swal.fire({ icon:'success', title: res.message || 'Created', timer: 1200, showConfirmButton: false });
+              activitiesTable.ajax.reload(null, false);
+              refreshCreateDisposalState();
+            } else {
+              Swal.fire({ icon:'error', title:'Failed', text: (res && res.message) ? res.message : 'Unable to create disposal activity.' });
+            }
+          },
+          error: function(){
+            Swal.fire({ icon:'error', title:'Server error', text:'Unable to create disposal activity.' });
+          }
+        });
+      });
+    });
+
+    $(document).off('click.closeDisposal').on('click.closeDisposal', '.btnCloseDisposal', function(e){
+      if (e && e.preventDefault) { e.preventDefault(); }
+      if ($(this).hasClass('disabled') || $(this).attr('aria-disabled') === 'true') { return; }
+      var ref = String($(this).attr('data-ref') || '').trim();
+      if (!ref) { return; }
+      Swal.fire({
+        title: 'Mark this disposal activity as completed?',
+        text: ref,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Completed'
+      }).then(function(r){
+        if (!r.isConfirmed) { return; }
+        var fd = new FormData();
+        fd.append('disposal_close', 1);
+        fd.append('disposal_reference', ref);
+        $.ajax({
+          type: 'POST',
+          url: '../auth/auth.php',
+          data: fd,
+          processData: false,
+          contentType: false,
+          success: function(resp){
+            var res = resp;
+            if (typeof resp === 'string') { try { res = JSON.parse(resp); } catch (e) { res = null; } }
+            if (res && res.status === 200) {
+              Swal.fire({ icon:'success', title: res.message || 'Closed', timer: 1200, showConfirmButton: false });
+              activitiesTable.ajax.reload(null, false);
+              refreshCreateDisposalState();
+            } else {
+              Swal.fire({ icon:'error', title:'Failed', text: (res && res.message) ? res.message : 'Unable to close disposal activity.' });
+            }
+          },
+          error: function(){
+            Swal.fire({ icon:'error', title:'Server error', text:'Unable to close disposal activity.' });
+          }
+        });
+      });
+    });
+
+    $(document).off('click.disposalInfo').on('click.disposalInfo', '.btnDisposalInfo', function(e){
+      if (e && e.preventDefault) { e.preventDefault(); }
+      var ref = String($(this).attr('data-ref') || '').trim();
+      if (!ref) { return; }
+      openDisposalInfoModal(ref);
+    });
+
+    $(document).off('click.dispInfoAddOfficer').on('click.dispInfoAddOfficer', '#dispInfoAddOfficer', function(){
+      var count = $('#dispInfoOfficers .dispInfoOfficerRow').length;
+      if (count >= DISP_INFO_MAX_OFFICERS) {
+        Swal.fire({ icon:'info', title:'Limit reached', text:'You can add up to 5 inspection officers only.' });
+        return;
+      }
+      $('#dispInfoOfficers').append(officerRowHtml({ name: '', position: '' }));
+    });
+
+    $(document).off('click.dispInfoRemoveOfficer').on('click.dispInfoRemoveOfficer', '.dispInfoRemoveOfficer', function(){
+      var $rows = $('#dispInfoOfficers .dispInfoOfficerRow');
+      if ($rows.length <= 1) {
+        $(this).closest('.dispInfoOfficerRow').find('input').val('');
+        return;
+      }
+      $(this).closest('.dispInfoOfficerRow').remove();
+    });
+
+    $(document).off('click.dispInfoSave').on('click.dispInfoSave', '#dispInfoSaveBtn', function(){
+      var ref = String($('#dispInfoRef').val() || '').trim();
+      if (!ref) { return; }
+
+      var payload = {
+        disposal_reference: ref,
+        accountable_officer: String($('#dispInfoAccountableOfficer').val() || '').trim(),
+        designation: String($('#dispInfoDesignation').val() || '').trim(),
+        station: String($('#dispInfoStation').val() || '').trim(),
+        disposal_chairperson: String($('#dispInfoCommitteeChair').val() || '').trim(),
+        local_chief_executive: String($('#dispInfoApprovedBy').val() || '').trim(),
+        witness_name: String($('#dispInfoWitness').val() || '').trim(),
+        witness_position: String($('#dispInfoWitnessPosition').val() || '').trim(),
+        inspectors: getOfficers()
+      };
+
+      var missing = validateIirupInfoPayload(payload);
+      if (missing.length) {
+        Swal.fire({ icon:'warning', title:'Please complete required fields', html: '<div class="text-left">' + missing.map(function(x){ return '• ' + escDA(x); }).join('<br>') + '</div>' });
+        return;
+      }
+
+      var fd = new FormData();
+      fd.append('iirup_info_save', 1);
+      fd.append('disposal_reference', payload.disposal_reference);
+      fd.append('accountable_officer', payload.accountable_officer);
+      fd.append('designation', payload.designation);
+      fd.append('station', payload.station);
+      fd.append('disposal_chairperson', payload.disposal_chairperson);
+      fd.append('local_chief_executive', payload.local_chief_executive);
+      fd.append('witness_name', payload.witness_name);
+      fd.append('witness_position', payload.witness_position);
+      fd.append('inspectors_json', JSON.stringify(payload.inspectors));
+
+      $.ajax({
+        type: 'POST',
+        url: '../auth/auth.php',
+        data: fd,
+        processData: false,
+        contentType: false,
+        success: function(resp){
+          var res = resp;
+          if (typeof resp === 'string') { try { res = JSON.parse(resp); } catch (e) { res = null; } }
+          if (res && res.status === 200) {
+            $('#dispInfoExists').val('1');
+            Swal.fire({ icon:'success', title: res.message || 'Saved', timer: 1200, showConfirmButton: false });
+            setDispInfoMode('view');
+          } else {
+            Swal.fire({ icon:'error', title:'Failed', text:(res && res.message) ? res.message : 'Unable to save IIRUP information.' });
+          }
+        },
+        error: function(){
+          Swal.fire({ icon:'error', title:'Server error', text:'Unable to save IIRUP information.' });
+        }
+      });
+    });
+
+    // Disposal Activities - Required documents (modal UI)
+    var dispDocsRequiredIds = [
+      '#dispDocsAppraisalReport',
+      '#dispDocsFormalRequest',
+      '#dispDocsTaasReport',
+      '#dispDocsInvitationToBid',
+      '#dispDocsResolution',
+      '#dispDocsNoticeOfAward',
+      '#dispDocsDeedOfSale',
+      '#dispDocsTransmittalAccounting',
+      '#dispDocsTransmittalCOA'
+    ];
+
+    // Optional additional uploads (do not block Submit)
+    var dispDocsOptionalIds = [
+      '#dispDocsResolutionOptional1',
+      '#dispDocsResolutionOptional2',
+      '#dispDocsInvitationOptional1',
+      '#dispDocsInvitationOptional2'
+    ];
+
+    var dispDocsAllIds = dispDocsRequiredIds.concat(dispDocsOptionalIds);
+    var dispDocsUploaded = {};
+    for (var di = 0; di < dispDocsAllIds.length; di++) {
+      dispDocsUploaded[dispDocsAllIds[di]] = false;
+    }
+
+    function dispDocsSetAlert(type, message){
+      var $a = $('#dispDocsAlert');
+      if (!$a.length) { return; }
+      var cls = 'alert-info';
+      if (type === 'success') { cls = 'alert-success'; }
+      else if (type === 'danger' || type === 'error') { cls = 'alert-danger'; }
+      else if (type === 'warning') { cls = 'alert-warning'; }
+      $a.removeClass('d-none alert-success alert-danger alert-warning alert-info').addClass(cls).text(String(message || ''));
+    }
+
+    function dispDocsClearAlert(){
+      var $a = $('#dispDocsAlert');
+      if (!$a.length) { return; }
+      $a.addClass('d-none').removeClass('alert-success alert-danger alert-warning alert-info').text('');
+    }
+
+    function dispDocsSetFileName($input){
+      if (!$input || !$input.length) { return; }
+      var targetSel = String($input.attr('data-name-target') || '').trim();
+      if (!targetSel) { return; }
+      var $t = $(targetSel);
+      if (!$t.length) { return; }
+      var el = $input.get(0);
+      var nm = (el && el.files && el.files.length) ? String(el.files[0].name || '') : '';
+      $t.text(nm || 'Choose file');
+    }
+
+    function dispDocsAllRequiredPresent(){
+      for (var i = 0; i < dispDocsRequiredIds.length; i++) {
+        var el = $(dispDocsRequiredIds[i]).get(0);
+        if (!el || !el.files || !el.files.length) { return false; }
+        var f = el.files[0];
+        var nm = String((f && f.name) ? f.name : '').toLowerCase();
+        var isPdfByName = nm.endsWith('.pdf');
+        var isPdfByType = (f && f.type) ? (String(f.type).toLowerCase() === 'application/pdf') : false;
+        if (!isPdfByName && !isPdfByType) { return false; }
+      }
+      return true;
+    }
+
+    // "All uploaded" refers to required documents only.
+    function dispDocsAllUploaded(){
+      for (var i = 0; i < dispDocsRequiredIds.length; i++) {
+        var idSel = dispDocsRequiredIds[i];
+        if (!dispDocsUploaded[idSel]) { return false; }
+      }
+      return true;
+    }
+
+    function dispDocsSetStatus(inputSel, uploaded){
+      var map = {
+        '#dispDocsFormalRequest': '#dispDocsStatusFormalRequest',
+        '#dispDocsAppraisalReport': '#dispDocsStatusAppraisalReport',
+        '#dispDocsTaasReport': '#dispDocsStatusTaasReport',
+        '#dispDocsResolution': '#dispDocsStatusResolution',
+        '#dispDocsResolutionOptional1': '#dispDocsStatusResolutionOptional1',
+        '#dispDocsResolutionOptional2': '#dispDocsStatusResolutionOptional2',
+        '#dispDocsInvitationToBid': '#dispDocsStatusInvitationToBid',
+        '#dispDocsInvitationOptional1': '#dispDocsStatusInvitationOptional1',
+        '#dispDocsInvitationOptional2': '#dispDocsStatusInvitationOptional2',
+        '#dispDocsDeedOfSale': '#dispDocsStatusDeedOfSale',
+        '#dispDocsNoticeOfAward': '#dispDocsStatusNoticeOfAward',
+        '#dispDocsTransmittalAccounting': '#dispDocsStatusTransmittalAccounting',
+        '#dispDocsTransmittalCOA': '#dispDocsStatusTransmittalCOA'
+      };
+      var tgt = map[inputSel];
+      if (!tgt) { return; }
+      var $b = $(tgt);
+      if (!$b.length) { return; }
+      if (uploaded) {
+        $b.removeClass('badge-secondary badge-warning').addClass('badge-success').text('Uploaded');
+      } else {
+        $b.removeClass('badge-success badge-warning').addClass('badge-secondary').text('Not uploaded');
+      }
+    }
+
+    function dispDocsSyncUploadButton(){
+      var ids = dispDocsRequiredIds;
+      var selected = 0;
+      for (var i = 0; i < ids.length; i++) {
+        var el = $(ids[i]).get(0);
+        if (el && el.files && el.files.length) { selected++; }
+      }
+      // Footer button is Submit: enabled only when all required docs are already uploaded.
+      var allUploaded = dispDocsAllUploaded();
+      $('#dispDocsUploadBtn').prop('disabled', !allUploaded);
+
+      var $badge = $('#dispDocsCountBadge');
+      if ($badge.length) {
+        var uploadedCount = 0;
+        for (var k = 0; k < dispDocsRequiredIds.length; k++) {
+          if (dispDocsUploaded[dispDocsRequiredIds[k]]) { uploadedCount++; }
+        }
+        $badge.text(String(uploadedCount) + '/' + String(ids.length) + ' uploaded');
+        $badge.removeClass('badge-secondary badge-success').addClass(allUploaded ? 'badge-success' : 'badge-secondary');
+      }
+    }
+
+    function dispDocsResetModal(newRef){
+      $('#dispDocsRef').val(newRef || '');
+      $('#dispDocsRefText').text(newRef || '—');
+
+      function dispDocsSetResolutionOptionalVisible(visible) {
+        var $wrap = $('#dispDocsResolutionOptionalWrap');
+        var $btn = $('#dispDocsShowMoreResolutionBtn');
+        if (!$wrap.length || !$btn.length) { return; }
+
+        var show = !!visible;
+        if ($.fn && $.fn.collapse) {
+          try { $wrap.collapse(show ? 'show' : 'hide'); } catch (e) {}
+        } else {
+          // Fallback (no animation)
+          $wrap.toggleClass('d-none', !show);
+        }
+
+        $btn.attr('aria-expanded', show ? 'true' : 'false');
+        $btn.attr('title', show ? 'Hide additional resolution files' : 'Add additional resolution files');
+
+        var $icon = $btn.find('i.fas');
+        if ($icon.length) {
+          $icon.toggleClass('fa-plus', !show);
+          $icon.toggleClass('fa-minus', show);
+        }
+      }
+
+      // Hide optional resolution inputs by default
+      dispDocsSetResolutionOptionalVisible(false);
+
+      function dispDocsSetInvitationOptionalVisible(visible) {
+        var $wrap = $('#dispDocsInvitationOptionalWrap');
+        var $btn = $('#dispDocsShowMoreInvitationBtn');
+        if (!$wrap.length || !$btn.length) { return; }
+
+        var show = !!visible;
+        if ($.fn && $.fn.collapse) {
+          try { $wrap.collapse(show ? 'show' : 'hide'); } catch (e2) {}
+        } else {
+          $wrap.toggleClass('d-none', !show);
+        }
+
+        $btn.attr('aria-expanded', show ? 'true' : 'false');
+        $btn.attr('title', show ? 'Hide additional invitation to bid files' : 'Add additional invitation to bid files');
+
+        var $icon = $btn.find('i.fas');
+        if ($icon.length) {
+          $icon.toggleClass('fa-plus', !show);
+          $icon.toggleClass('fa-minus', show);
+        }
+      }
+
+      // Hide optional invitation inputs by default
+      dispDocsSetInvitationOptionalVisible(false);
+
+      var $inputs = $('#disposalDocsForm .dispDocsInput');
+      $inputs.val('');
+      $inputs.each(function(){ dispDocsSetFileName($(this)); });
+
+      // Reset upload state + statuses
+      var keys = Object.keys(dispDocsUploaded);
+      for (var i = 0; i < keys.length; i++) {
+        dispDocsUploaded[keys[i]] = false;
+        dispDocsSetStatus(keys[i], false);
+      }
+      $('.dispDocsUploadOne').prop('disabled', true);
+
+      dispDocsClearAlert();
+      dispDocsSyncUploadButton();
+    }
+
+    // Keep button state in sync with collapse animation
+    $(document)
+      .off('shown.bs.collapse.dispDocsResolutionOptional hidden.bs.collapse.dispDocsResolutionOptional')
+      .on('shown.bs.collapse.dispDocsResolutionOptional', '#dispDocsResolutionOptionalWrap', function(){
+        var $btn = $('#dispDocsShowMoreResolutionBtn');
+        if (!$btn.length) { return; }
+        $btn.attr('aria-expanded', 'true');
+        $btn.attr('title', 'Hide additional resolution files');
+        var $icon = $btn.find('i.fas');
+        if ($icon.length) { $icon.removeClass('fa-plus').addClass('fa-minus'); }
+      })
+      .on('hidden.bs.collapse.dispDocsResolutionOptional', '#dispDocsResolutionOptionalWrap', function(){
+        var $btn = $('#dispDocsShowMoreResolutionBtn');
+        if (!$btn.length) { return; }
+        $btn.attr('aria-expanded', 'false');
+        $btn.attr('title', 'Add additional resolution files');
+        var $icon = $btn.find('i.fas');
+        if ($icon.length) { $icon.removeClass('fa-minus').addClass('fa-plus'); }
+      });
+
+    $(document)
+      .off('shown.bs.collapse.dispDocsInvitationOptional hidden.bs.collapse.dispDocsInvitationOptional')
+      .on('shown.bs.collapse.dispDocsInvitationOptional', '#dispDocsInvitationOptionalWrap', function(){
+        var $btn = $('#dispDocsShowMoreInvitationBtn');
+        if (!$btn.length) { return; }
+        $btn.attr('aria-expanded', 'true');
+        $btn.attr('title', 'Hide additional invitation to bid files');
+        var $icon = $btn.find('i.fas');
+        if ($icon.length) { $icon.removeClass('fa-plus').addClass('fa-minus'); }
+      })
+      .on('hidden.bs.collapse.dispDocsInvitationOptional', '#dispDocsInvitationOptionalWrap', function(){
+        var $btn = $('#dispDocsShowMoreInvitationBtn');
+        if (!$btn.length) { return; }
+        $btn.attr('aria-expanded', 'false');
+        $btn.attr('title', 'Add additional invitation to bid files');
+        var $icon = $btn.find('i.fas');
+        if ($icon.length) { $icon.removeClass('fa-minus').addClass('fa-plus'); }
+      });
+
+    // Toggle optional Resolution (Committee) inputs
+    $(document).off('click.dispDocsShowMoreResolution').on('click.dispDocsShowMoreResolution', '#dispDocsShowMoreResolutionBtn', function(e){
+      if (e && e.preventDefault) { e.preventDefault(); }
+      var $wrap = $('#dispDocsResolutionOptionalWrap');
+      var $btn = $(this);
+      if (!$wrap.length || !$btn.length) { return; }
+
+      var isShown = $wrap.hasClass('show');
+      var willShow = !isShown;
+
+      if ($.fn && $.fn.collapse) {
+        try { $wrap.collapse('toggle'); } catch (ex) {}
+      } else {
+        // Fallback (no animation)
+        $wrap.toggleClass('d-none', isShown);
+      }
+
+      // Optimistic UI update; final state is enforced by shown/hidden events
+      $btn.attr('aria-expanded', willShow ? 'true' : 'false');
+      $btn.attr('title', willShow ? 'Hide additional resolution files' : 'Add additional resolution files');
+      var $icon = $btn.find('i.fas');
+      if ($icon.length) {
+        $icon.toggleClass('fa-plus', !willShow);
+        $icon.toggleClass('fa-minus', willShow);
+      }
+    });
+
+    // Toggle optional Invitation to Bid inputs
+    $(document).off('click.dispDocsShowMoreInvitation').on('click.dispDocsShowMoreInvitation', '#dispDocsShowMoreInvitationBtn', function(e){
+      if (e && e.preventDefault) { e.preventDefault(); }
+      var $wrap = $('#dispDocsInvitationOptionalWrap');
+      var $btn = $(this);
+      if (!$wrap.length || !$btn.length) { return; }
+
+      var isShown = $wrap.hasClass('show');
+      var willShow = !isShown;
+
+      if ($.fn && $.fn.collapse) {
+        try { $wrap.collapse('toggle'); } catch (ex2) {}
+      } else {
+        $wrap.toggleClass('d-none', isShown);
+      }
+
+      $btn.attr('aria-expanded', willShow ? 'true' : 'false');
+      $btn.attr('title', willShow ? 'Hide additional invitation to bid files' : 'Add additional invitation to bid files');
+      var $icon = $btn.find('i.fas');
+      if ($icon.length) {
+        $icon.toggleClass('fa-plus', !willShow);
+        $icon.toggleClass('fa-minus', willShow);
+      }
+    });
+
+    $(document).off('click.uploadDisposalDocs').on('click.uploadDisposalDocs', '.btnUploadDisposalDocs', function(e){
+      if (e && e.preventDefault) { e.preventDefault(); }
+      var ref = String($(this).attr('data-ref') || '').trim();
+      if (!ref) { return; }
+      // Show modal
+      if (!$('#disposalDocsModal').length) {
+        // Fallback: do nothing if UI is not present on the page.
+        return;
+      }
+      dispDocsResetModal(ref);
+      $('#disposalDocsModal').modal('show');
+    });
+
+    // Disposal Activities - Required documents modal behaviors
+    $(document).off('change.dispDocsInput').on('change.dispDocsInput', '#disposalDocsForm .dispDocsInput', function(){
+      dispDocsClearAlert();
+      var $inp = $(this);
+      var el = $inp.get(0);
+      var f = (el && el.files && el.files.length) ? el.files[0] : null;
+      if (f) {
+        var nm = String(f.name || '').toLowerCase();
+        var isPdfByName = nm.endsWith('.pdf');
+        var isPdfByType = f.type ? (String(f.type).toLowerCase() === 'application/pdf') : false;
+        if (!isPdfByName && !isPdfByType) {
+          // Reset invalid selection
+          $inp.val('');
+          dispDocsSetFileName($inp);
+          dispDocsSetAlert('warning', 'PDF files only. Please select a .pdf document.');
+          dispDocsSyncUploadButton();
+          return;
+        }
+      }
+      dispDocsSetFileName($inp);
+      // Enable the per-tile upload button when a file is selected
+      var idSel = '#' + String($inp.attr('id') || '');
+      if (idSel && dispDocsUploaded.hasOwnProperty(idSel)) {
+        var $btn = $('.dispDocsUploadOne[data-input="' + idSel + '"]');
+        if ($btn.length) {
+          $btn.prop('disabled', !(f && f.name));
+        }
+        // Selecting a new file means it is not yet uploaded
+        dispDocsUploaded[idSel] = false;
+        dispDocsSetStatus(idSel, false);
+      }
+      dispDocsSyncUploadButton();
+    });
+
+    // Per-document upload button
+    $(document).off('click.dispDocsUploadOne').on('click.dispDocsUploadOne', '.dispDocsUploadOne', function(){
+      dispDocsClearAlert();
+      var ref = String($('#dispDocsRef').val() || '').trim();
+      if (!ref) {
+        dispDocsSetAlert('danger', 'Missing disposal reference.');
+        return;
+      }
+
+      var inputSel = String($(this).attr('data-input') || '').trim();
+      if (!inputSel) { return; }
+      var el = $(inputSel).get(0);
+      if (!el || !el.files || !el.files.length) {
+        dispDocsSetAlert('warning', 'Please choose a PDF file first.');
+        return;
+      }
+
+      var f = el.files[0];
+      var nm = String((f && f.name) ? f.name : '').toLowerCase();
+      var isPdfByName = nm.endsWith('.pdf');
+      var isPdfByType = (f && f.type) ? (String(f.type).toLowerCase() === 'application/pdf') : false;
+      if (!isPdfByName && !isPdfByType) {
+        dispDocsSetAlert('warning', 'PDF files only. Please select a .pdf document.');
+        return;
+      }
+
+      var $btn = $(this);
+      $btn.prop('disabled', true);
+      dispDocsSetAlert('info', 'Uploading selected document...');
+
+      var fd = new FormData();
+      fd.append('disposal_upload_documents', 1);
+      fd.append('disposal_reference', ref);
+      fd.append('docs[]', f);
+
+      $.ajax({
+        type: 'POST',
+        url: '../auth/auth.php',
+        data: fd,
+        processData: false,
+        contentType: false,
+        success: function(resp){
+          var res = resp;
+          if (typeof resp === 'string') { try { res = JSON.parse(resp); } catch (e) { res = null; } }
+          if (res && res.status === 200) {
+            var errList = (res.data && res.data.errors && res.data.errors.length) ? res.data.errors.join('\n') : '';
+            if (errList) {
+              dispDocsSetAlert('warning', (res.message || 'Uploaded with warnings') + ' ' + errList);
+              $btn.prop('disabled', false);
+              dispDocsSetStatus(inputSel, false);
+            } else {
+              dispDocsUploaded[inputSel] = true;
+              dispDocsSetStatus(inputSel, true);
+              dispDocsSetAlert('success', 'Uploaded.');
+            }
+          } else {
+            dispDocsSetAlert('danger', (res && res.message) ? res.message : 'Upload failed.');
+            $btn.prop('disabled', false);
+          }
+          dispDocsSyncUploadButton();
+        },
+        error: function(){
+          dispDocsSetAlert('danger', 'Server error. Upload failed.');
+          $btn.prop('disabled', false);
+          dispDocsSyncUploadButton();
+        }
+      });
+    });
+
+    // Footer button = Submit (requires all 7 uploaded)
+    $(document).off('click.dispDocsSubmit').on('click.dispDocsSubmit', '#dispDocsUploadBtn', function(){
+      dispDocsClearAlert();
+      if (!dispDocsAllUploaded()) {
+        dispDocsSetAlert('warning', 'Please upload all ' + String(dispDocsRequiredIds.length) + ' required documents before submitting.');
+        dispDocsSyncUploadButton();
+        return;
+      }
+      dispDocsSetAlert('success', 'Submitted.');
+      setTimeout(function(){ $('#disposalDocsModal').modal('hide'); }, 700);
+    });
+  }
+
+  // Disposal - Items filtered by Account Code
+  if ($('#disposalItemsTable').length && !$.fn.dataTable.isDataTable('#disposalItemsTable')) {
+    function escDI(text){ return $('<div>').text(text === null || text === undefined ? '' : String(text)).html(); }
+    function formatMoneyDI(n){
+      var num = Number(n || 0) || 0;
+      try { return '₱ ' + num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+      catch (e) { return '₱ ' + num.toFixed(2); }
+    }
+
+    function formatNumberDI(n){
+      var num = Number(n || 0);
+      if (!isFinite(num)) { num = 0; }
+      try { return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+      catch (e) { return num.toFixed(2); }
+    }
+
+    function parseNumberDI(v){
+      var raw = String(v == null ? '' : v).trim();
+      if (!raw) { return 0; }
+      // Remove thousand separators and anything non-numeric except dot and minus.
+      raw = raw.replace(/,/g, '').replace(/[^0-9.\-]/g, '');
+      var num = Number(raw);
+      if (!isFinite(num) || num < 0) { return 0; }
+      return num;
+    }
+
+    // Live formatting helper: insert commas while preserving caret position.
+    function liveFormatNumberInputDI(inputEl){
+      if (!inputEl) { return; }
+      var $el = $(inputEl);
+      if ($el.data('gsoFmtLock')) { return; }
+
+      var raw = String(inputEl.value == null ? '' : inputEl.value);
+      var selStart = typeof inputEl.selectionStart === 'number' ? inputEl.selectionStart : raw.length;
+      var beforeCaretRaw = raw.slice(0, selStart);
+
+      // Token count = number of non-comma characters to the left (digits/dot/minus only).
+      var beforeTokens = beforeCaretRaw.replace(/,/g, '').replace(/[^0-9.\-]/g, '');
+      var tokenCount = beforeTokens.length;
+
+      // Clean input (keep one leading minus, keep first dot; cap decimals to 2).
+      var cleaned = raw.replace(/,/g, '').replace(/[^0-9.\-]/g, '');
+      if (cleaned === '' || cleaned === '-' || cleaned === '.' || cleaned === '-.') {
+        return; // let user type, format on blur
+      }
+
+      var sign = '';
+      if (cleaned[0] === '-') {
+        sign = '-';
+        cleaned = cleaned.slice(1);
+      }
+
+      // Split on first dot only.
+      var dotIdx = cleaned.indexOf('.');
+      var intPart = dotIdx === -1 ? cleaned : cleaned.slice(0, dotIdx);
+      var decPart = dotIdx === -1 ? '' : cleaned.slice(dotIdx + 1);
+
+      intPart = intPart.replace(/\D/g, '');
+      decPart = decPart.replace(/\D/g, '').slice(0, 2);
+
+      // If user started with dot (e.g., ".5"), normalize to "0.5".
+      var hadDot = dotIdx !== -1;
+      if (intPart === '' && hadDot) {
+        intPart = '0';
+      }
+
+      var intFmt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      var formatted = sign + (intFmt || '0');
+      if (hadDot) {
+        formatted += '.' + decPart;
+      }
+
+      if (formatted === raw) {
+        return;
+      }
+
+      // Restore caret by tokenCount into formatted (count non-comma chars).
+      var targetCount = tokenCount;
+      var nonCommaLen = formatted.replace(/,/g, '').length;
+      if (targetCount > nonCommaLen) { targetCount = nonCommaLen; }
+      var pos = 0;
+      var seen = 0;
+      while (pos < formatted.length && seen < targetCount) {
+        if (formatted[pos] !== ',') {
+          seen++;
+        }
+        pos++;
+      }
+
+      $el.data('gsoFmtLock', true);
+      inputEl.value = formatted;
+      try { inputEl.setSelectionRange(pos, pos); } catch (e) {}
+      $el.data('gsoFmtLock', false);
+    }
+
+    function renderAppraiseInput(val, row){
+      var id = row && row.iirup_id ? String(row.iirup_id) : '';
+          var num = Number(val || 0);
+          if (!isFinite(num)) { num = 0; }
+          return '<input type="text" inputmode="decimal" class="form-control form-control-sm iirup-appraise-input" ' +
+            'data-iirup-id="' + escDI(id) + '" value="' + escDI(formatNumberDI(num)) + '" style="max-width:160px; text-align:right;" />';
+    }
+
+    function saveAppraiseValue(iirupId, value){
+      var fd = new FormData();
+      fd.append('iirup_update_appraise_value', 1);
+      fd.append('iirup_id', iirupId);
+      fd.append('appraise_value', value);
+      return $.ajax({
+        type: 'POST',
+        url: '../auth/auth.php',
+        data: fd,
+        processData: false,
+        contentType: false
+      });
+    }
+    var dCode = '';
+    var dispRef2 = '';
+    try { dCode = String($('#disposalItemsPage').attr('data-account-code') || '').trim(); } catch (e) { dCode = ''; }
+    try { dispRef2 = String($('#disposalItemsPage').attr('data-disposal-ref') || '').trim(); } catch (e) { dispRef2 = ''; }
+
+    var disposalItemsTable = $('#disposalItemsTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      autoWidth: false,
+      processing: true,
+      serverSide: true,
+      searchDelay: 500,
+      dom: "<'row mb-2'<'col-md-8'B><'col-md-4 text-right'f>>rtip",
+      buttons: [
+        {
+          extend: 'excel',
+          title: 'Disposal Items - ' + (dCode || ''),
+          exportOptions: { columns: [0,1,2,3,4,5,6,7] }
+        },
+        {
+          extend: 'print',
+          title: 'Disposal Items - ' + (dCode || ''),
+          exportOptions: { columns: [0,1,2,3,4,5,6,7] }
+        },
+        {
+          text: 'IIRUP',
+          action: function(){
+            if (!dispRef2 || !dCode) {
+              try { Swal.fire({ icon:'warning', title:'Missing reference', text:'Unable to print IIRUP: missing disposal reference or account code.' }); } catch (e) {}
+              return;
+            }
+            var url = 'print-iirup.php?ref=' + encodeURIComponent(dispRef2) + '&code=' + encodeURIComponent(dCode);
+            window.open(url, '_blank');
+          }
+        }
+      ],
+      ajax: {
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: function(d){ d.disposal_items_by_account_code_dt = 1; d.code = dCode; d.disposal_reference = dispRef2; return d; }
+      },
+      columns: [
+        { data: 'fund', className: 'text-center', render: function(d){ return escDI(d || ''); } },
+        { data: 'category', className: 'text-center', render: function(d){ return escDI(d || ''); } },
+        { data: 'qty', className: 'text-center', render: function(d){
+            var n = parseInt(d, 10);
+            if (!isFinite(n) || n <= 0) { n = 1; }
+            return String(n);
+          }
+        },
+        { data: 'particular', render: function(d){ return escDI(d || ''); } },
+        { data: 'par_number', render: function(d){ return escDI(d || ''); } },
+        { data: 'unit_cost', className: 'text-right', render: function(d){ return formatMoneyDI(d); } },
+        { data: 'appraise_value', className: 'text-right', orderable: false, render: function(d, t, row){ return renderAppraiseInput(d, row); } },
+        { data: 'total_appraise_value', className: 'text-right', orderable: false, render: function(d, t, row){
+            var id = row && row.iirup_id ? String(row.iirup_id) : '';
+            var qty = parseInt(row && row.qty ? row.qty : 1, 10);
+            if (!isFinite(qty) || qty <= 0) { qty = 1; }
+            var av = Number(row && row.appraise_value ? row.appraise_value : 0);
+            if (!isFinite(av)) { av = 0; }
+            var total = qty * av;
+            return '<span class="iirup-total-appraise" data-iirup-id="' + escDI(id) + '">' + escDI(formatMoneyDI(total)) + '</span>';
+          }
+        }
+      ],
+      columnDefs: [
+        // Make UNIT COST a bit narrower
+        { targets: 5, width: '160px' }
+      ],
+      order: [[3, 'asc']]
+    });
+
+    function updateTotalAppraiseFor(iirupId, qty, appraiseValue){
+      var id = String(iirupId || '').trim();
+      if (!id) { return; }
+      var q = parseInt(qty, 10);
+      if (!isFinite(q) || q <= 0) { q = 1; }
+      var av = Number(appraiseValue);
+      if (!isFinite(av)) { av = 0; }
+      var total = q * av;
+      // Update both normal + responsive child rendering (if any) by id.
+      try {
+        $('#disposalItemsTable').find('.iirup-total-appraise[data-iirup-id="' + escDI(id) + '"]').text(formatMoneyDI(total));
+      } catch (e) {}
+    }
+
+    function updateTotalFromInput(inputEl){
+      var $inp = $(inputEl);
+      var id = String($inp.data('iirup-id') || '').trim();
+      if (!id) { return; }
+
+      // Resolve row data even when input is inside responsive child row.
+      var $tr = $inp.closest('tr');
+      if ($tr.hasClass('child')) {
+        $tr = $tr.prev();
+      }
+      var rowData = {};
+      try { rowData = disposalItemsTable.row($tr).data() || {}; } catch (e) { rowData = {}; }
+      var qty = rowData && rowData.qty ? rowData.qty : 1;
+      var av = parseNumberDI($inp.val());
+      updateTotalAppraiseFor(id, qty, av);
+    }
+
+    // Auto-save appraisal value (debounced per row, formats with separators on blur/change)
+    var appraiseTimers = {};
+    function queueAppraiseSave($inp){
+      var id = String($inp.data('iirup-id') || '').trim();
+      if (!id) { return; }
+      if (appraiseTimers[id]) {
+        try { clearTimeout(appraiseTimers[id]); } catch (e) {}
+      }
+      appraiseTimers[id] = setTimeout(function(){
+        var vNum = parseNumberDI($inp.val());
+        saveAppraiseValue(id, vNum.toFixed(2))
+          .done(function(resp){
+            var res = resp;
+            if (typeof resp === 'string') {
+              try { res = JSON.parse(resp); } catch (e) { res = null; }
+            }
+            if (!res || res.status !== 200) {
+              try {
+                Swal.fire({ icon:'error', title:'Failed', text: (res && res.message) ? res.message : 'Unable to save appraisal value.' });
+              } catch (e) {}
+            }
+          })
+          .fail(function(xhr){
+            var msg = 'Server error';
+            try { if (xhr && xhr.responseText) { msg = String(xhr.responseText).trim() || msg; } } catch (e) {}
+            try { Swal.fire({ icon:'error', title:'Server error', text: msg }); } catch (e) {}
+          });
+      }, 450);
+    }
+
+    $('#disposalItemsTable').on('change', 'input.iirup-appraise-input', function(){
+      var $inp = $(this);
+      updateTotalFromInput(this);
+      queueAppraiseSave($inp);
+    });
+
+    // Live format while typing (no save here; save on blur/change).
+    $('#disposalItemsTable').on('input', 'input.iirup-appraise-input', function(){
+      liveFormatNumberInputDI(this);
+      updateTotalFromInput(this);
+    });
+
+    // Pressing Enter should exit the input (blur) and not trigger table actions.
+    $('#disposalItemsTable').on('keydown', 'input.iirup-appraise-input', function(e){
+      var key = e && (e.key || e.code);
+      if (key === 'Enter') {
+        try { e.preventDefault(); } catch (err) {}
+        try { e.stopPropagation(); } catch (err2) {}
+        try { this.blur(); } catch (err3) {}
+        return false;
+      }
+    });
+
+    $('#disposalItemsTable').on('blur', 'input.iirup-appraise-input', function(){
+      var $inp = $(this);
+      var vNum = parseNumberDI($inp.val());
+      $inp.val(formatNumberDI(vNum));
+      updateTotalFromInput(this);
+      queueAppraiseSave($inp);
+    });
+  }
+
+  // Property Clearance list (services/clearance.php)
+  if ($('#clearanceTable').length && !$.fn.dataTable.isDataTable('#clearanceTable')) {
+    var currentRole = String(window.currentUserRole || '').trim().toUpperCase();
+    var canSeePcActions = ['SYSTEM-ADMIN', 'CLEARANCE-ADMIN'].indexOf(currentRole) !== -1;
+
+    var clearanceTable = $('#clearanceTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      autoWidth: false,
+      processing: true,
+      dom: "<'row mb-2'<'col-md-8 pcFiltersWrap'><'col-md-4 text-right'f>>rtip",
+      ajax: {
+        url: '../auth/auth.php',
+        type: 'GET',
+        cache: false,
+        data: function (d) {
+          // Backend handler expects $_GET['fetch_property_clearance_list']
+          // Add a timestamp to prevent cached responses during polling.
+          d.fetch_property_clearance_list = 1;
+          d._ts = Date.now();
+          return d;
+        },
+        dataSrc: function (json) {
+          return (json && json.data) ? json.data : [];
+        }
+      },
+      columns: [
+        { data: 'employee_cell' },
+        { data: 'clearance_name' },
+        {
+          data: 'created_at',
+          render: function (data, type, row) {
+            if (type === 'display' || type === 'filter') {
+              return row.created_at_display || '';
+            }
+            return data || '';
+          }
+        },
+        { data: 'control_number' },
+        { data: 'status_badge' },
+        { data: 'action_html' }
+      ],
+      order: [[2, 'desc']],
+      columnDefs: [
+        { targets: [0, 1, 3, 4, 5], orderable: false },
+        { targets: [5], searchable: false },
+        { targets: [5], visible: canSeePcActions }
+      ],
+      initComplete: function(){
+        try {
+          var $wrap = $(clearanceTable.table().container());
+          var $target = $wrap.find('.pcFiltersWrap');
+          var $bar = $('#pcFiltersBar');
+          if ($target.length && $bar.length) {
+            $bar.prependTo($target).addClass('mb-0');
+          }
+        } catch (e) {}
+      }
+    });
+
+    // Dropdown filters (Category + Status)
+    function escapeRegex(s){
+      return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function applyPcFilters(){
+      var cat = String($('#pcFilterCategory').val() || '').trim();
+      var st = String($('#pcFilterStatus').val() || '').trim();
+
+      // Column 1: REQUEST FOR (clearance_name)
+      if (cat) {
+        clearanceTable.column(1).search('^' + escapeRegex(cat) + '$', true, false);
+      } else {
+        clearanceTable.column(1).search('');
+      }
+
+      // Column 4: STATUS (status_badge contains the label text)
+      if (st) {
+        clearanceTable.column(4).search('\\b' + escapeRegex(st) + '\\b', true, false);
+      } else {
+        clearanceTable.column(4).search('');
+      }
+
+      clearanceTable.draw();
+    }
+
+    $('#pcFilterCategory, #pcFilterStatus').off('change.pcFilters').on('change.pcFilters', applyPcFilters);
+    $('#pcClearFilters').off('click.pcFilters').on('click.pcFilters', function(){
+      $('#pcFilterCategory').val('');
+      $('#pcFilterStatus').val('');
+      applyPcFilters();
+    });
+
+    // Tooltips for dynamically-rendered action buttons
+    clearanceTable.on('draw.dt', function(){
+      initTooltips($('#clearanceTable'));
+    });
+
+    // Global helper for reliable refreshes (used by polling + action handlers)
+    window.reloadPcClearanceTable = function () {
+      if (!$('#clearanceTable').length) { return; }
+      if (!$.fn.dataTable || !$.fn.dataTable.isDataTable('#clearanceTable')) { return; }
+      try {
+        $('#clearanceTable').DataTable().ajax.reload(null, false);
+      } catch (e) {}
+    };
+
+    // Lightweight "realtime" updates via periodic AJAX refresh
+    // Keeps the current page/filters by using ajax.reload(null, false)
+    (function setupPcRealtimeRefresh(){
+      var AUTO_REFRESH_MS = 8000; // adjust as needed
+      var timerKey = 'pcClearanceRealtimeTimer';
+
+      // Avoid duplicate timers (script.js can be loaded on many pages)
+      if (window[timerKey]) {
+        try { clearInterval(window[timerKey]); } catch (e) {}
+        window[timerKey] = null;
+      }
+
+      function safeReload() {
+        // Pause when tab is not visible
+        if (document.hidden) { return; }
+        if (typeof window.reloadPcClearanceTable === 'function') {
+          window.reloadPcClearanceTable();
+          return;
+        }
+        // Fallback (should rarely happen)
+        if (typeof clearanceTable !== 'undefined' && clearanceTable && clearanceTable.ajax && clearanceTable.ajax.reload) {
+          clearanceTable.ajax.reload(null, false);
+        }
+      }
+
+      window[timerKey] = setInterval(safeReload, AUTO_REFRESH_MS);
+      // When user returns to the tab, refresh immediately
+      document.addEventListener('visibilitychange', function(){
+        if (!document.hidden) { safeReload(); }
+      });
+    })();
+
+    function setPcEditStatusBadge(label) {
+      var $badge = $('#pcEditStatusBadge');
+      if (!$badge.length) { return; }
+      var text = String(label || '').toUpperCase();
+      if (!text) { $badge.hide(); return; }
+      $badge.removeClass('badge-primary badge-success badge-warning badge-danger');
+      if (text === 'READY') { $badge.addClass('badge badge-primary'); }
+      else if (text === 'RELEASED') { $badge.addClass('badge badge-success'); }
+      else if (text === 'CANCELED') { $badge.addClass('badge badge-danger'); }
+      else { $badge.addClass('badge badge-warning'); }
+      $badge.text(text).show();
+    }
+
+    function openPcEditModal(controlNumber) {
+      if (!controlNumber) { return; }
+      $.ajax({
+        type: 'GET',
+        url: '../auth/auth.php',
+        data: {
+          fetch_pc_details: 1,
+          control_number: controlNumber
+        },
+        success: function (response) {
+          var res;
+          try { res = jQuery.parseJSON(response); } catch (err) { res = null; }
+          if (!res || res.status !== 200 || !res.data || !res.data.record) {
+            var msg = (res && res.message) ? res.message : 'Unable to load details.';
+            if (typeof Swal !== 'undefined') { Swal.fire({ icon: 'error', title: msg }); }
+            return;
+          }
+
+          var record = res.data.record;
+          var flags = res.data.flags || {};
+
+          $('#pcEditCid').val(record.control_number || '');
+          $('#pcEditEmpId').val(record.emp_id || '');
+          $('#pcEditEmpName').val(record.emp_name || '');
+          $('#pcEditPosition').val(record.position || '');
+          $('#pcEditDept').val(record.dept_id || '');
+          $('#pcEditCtype').val(record.ctype_id || '');
+          $('#pcEditAddress').val(record.address || '');
+          $('#pcEditCity').val(record.city || '');
+          $('#pcEditOrNumber').val(record.or_number || '');
+
+          setPcEditStatusBadge(flags.status_label);
+
+          // Re-print section inside edit modal
+          var $reprintSection = $('#pcEditReprintSection');
+          var $reprintReason = $('#pcEditReprintReason');
+          var $reprintBtn = $('#pcEditReprintBtn');
+          $reprintSection.hide();
+          $reprintReason.val('');
+          $reprintBtn.hide().prop('disabled', false);
+          if (flags.can_reprint) {
+            $reprintSection.show();
+            $reprintBtn.show();
+            // Keep the control number on the button for action
+            $reprintBtn.data('control', record.control_number || '');
+          } else {
+            $reprintBtn.data('control', '');
+          }
+
+          var $approve = $('#pcEditApproveBtn');
+          var $cancel = $('#pcEditCancelBtn');
+          var $note = $('#pcEditAcctNote');
+
+          $note.hide().text('');
+          var isReleased = (Number(record.release_status) === 1);
+          var isCanceled = (Number(record.release_status) === 2);
+          var canApprove = !!flags.can_approve;
+
+          if (isCanceled) {
+            $approve.hide();
+            $cancel.hide();
+          } else if (isReleased) {
+            // Once RELEASED, cancellation is not allowed from the UI
+            $approve.hide();
+            $cancel.hide();
+          } else {
+            $cancel.show().data('value', record.control_number || '');
+            if (canApprove && !isReleased) {
+              $approve.show().data('value', record.control_number || '');
+            } else {
+              $approve.hide();
+            }
+          }
+
+          var ctName = String(record.clearance_name || '').trim().toUpperCase();
+          var ignoreAcct = (typeof flags.ignore_accountability !== 'undefined')
+            ? !!flags.ignore_accountability
+            : (ctName === 'TRAVEL ABROAD' || ctName === 'MATERNITY LEAVE' || ctName === 'VACATION LEAVE' || ctName === 'VACTION LEAVE');
+
+          if (flags.has_accountability && !ignoreAcct) {
+            $note.text('This employee still has active accountabilities. Approval/printing is blocked until cleared.');
+            $note.show();
+          }
+
+          $('#pcEditModal').modal('show');
+          initTooltips($('#pcEditModal'));
+        }
+      });
+    }
+
+    // Expose for notification deep-links / global click handler
+    window.openPcEditModal = openPcEditModal;
+
+    // (Notification click handler is registered globally above)
+
+    // Deep-link support: open a specific clearance from navbar notifications
+    (function openFromQueryParam(){
+      try {
+        var params = new URLSearchParams(window.location.search || '');
+        var ctrl = (params.get('pc') || '').trim();
+        if (!ctrl) { return; }
+
+        // Open the modal
+        openPcEditModal(ctrl);
+
+        // Remove param so refresh/back doesn't keep reopening
+        params.delete('pc');
+        var newUrl = window.location.pathname + (params.toString() ? ('?' + params.toString()) : '') + (window.location.hash || '');
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState({}, document.title, newUrl);
+        }
+      } catch (e) {}
+    })();
+
+    // Re-print from inside the Edit modal
+    $(document).on('click', '#pcEditReprintBtn', function () {
+      var controlNumber = ($(this).data('control') || '').trim();
+      var reason = ($('#pcEditReprintReason').val() || '').trim();
+      if (!controlNumber) {
+        if (typeof Swal !== 'undefined') {
+          Swal.fire({ icon: 'warning', title: 'No control number found.' });
+        }
+        return;
+      }
+      if (!reason) {
+        if (typeof Swal !== 'undefined') {
+          Swal.fire({ icon: 'warning', title: 'Please select a reason.' });
+        }
+        return;
+      }
+
+      var $btn = $(this);
+
+      function doReprint() {
+        $btn.prop('disabled', true);
+        $.ajax({
+          type: 'POST',
+          url: '../auth/auth.php',
+          data: {
+            reprint_property_clearance: true,
+            control_number: controlNumber,
+            reason: reason
+          },
+          success: function (response) {
+            var res;
+            try { res = jQuery.parseJSON(response); } catch (err) { res = null; }
+
+            if (res && res.status === 200) {
+              // Hide section after successful one-time reprint
+              $('#pcEditReprintSection').hide();
+              $('#pcEditReprintReason').val('');
+              $('#pcEditReprintBtn').hide();
+
+              var nw = window.open('../admin/print-property-clearance.php?control_id=' + encodeURIComponent(controlNumber), '_Blank');
+              if (nw) { nw.print(); }
+
+              if (typeof window.reloadPcClearanceTable === 'function') {
+                window.reloadPcClearanceTable();
+              } else if (typeof clearanceTable !== 'undefined' && clearanceTable && clearanceTable.ajax && clearanceTable.ajax.reload) {
+                clearanceTable.ajax.reload(null, false);
+              }
+              if ($('#pcEditModal').length) {
+                $('#pcEditModal').modal('hide');
+              }
+              if (typeof Swal !== 'undefined') {
+                Swal.fire({ position: 'center', icon: 'success', title: 'Re-printing...', showConfirmButton: false, timer: 1200 });
+              }
+            } else {
+              var msg = (res && res.message) ? res.message : 'Unable to re-print.';
+              if (typeof Swal !== 'undefined') {
+                Swal.fire({ icon: 'error', title: msg });
+              }
+              $btn.prop('disabled', false);
+            }
+          },
+          error: function () {
+            if (typeof Swal !== 'undefined') {
+              Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' });
+            }
+            $btn.prop('disabled', false);
+          }
+        });
+      }
+
+      // Confirmation (Re-print)
+      if (typeof Swal !== 'undefined' && Swal.fire) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'Re-print this clearance?',
+          html: 'Reason: <strong>' + $('<div/>').text(reason).html() + '</strong>',
+          showCancelButton: true,
+          confirmButtonText: 'Yes, re-print',
+          cancelButtonText: 'No, cancel'
+        }).then(function (result) {
+          if (result && result.isConfirmed) { doReprint(); }
+        });
+      } else {
+        if (confirm('Re-print this clearance?')) {
+          doReprint();
+        }
+      }
+    });
+
+    $(document).on('click', '.btnEditPc', function () {
+      var control = $(this).data('control') || '';
+      openPcEditModal(control);
+    });
+
+    // Deep-link support: services/clearance.php?control_id=XXXX
+    try {
+      var urlParams = new URLSearchParams(window.location.search);
+      var preopen = urlParams.get('control_id');
+      if (preopen) { openPcEditModal(preopen); }
+    } catch (e) {}
+
+  }
+  
+  // Add Item page: small DataTable for "recently added" list
+  if ($('#addItemTable').length && $.fn.dataTable && !$.fn.dataTable.isDataTable('#addItemTable')) {
+    $('#addItemTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      ordering: false,
+      language: {
+        emptyTable: 'No data found.',
+        zeroRecords: 'No matching records found.'
+      }
+    });
+  }
+
+  // ============================================================
+  // New Purchase: summary table (one row per P.O. No.)
+  // ============================================================
+  if ($('#addItemNewPurchaseTable').length && $.fn.dataTable && !$.fn.dataTable.isDataTable('#addItemNewPurchaseTable')) {
+    var addItemNpTable = $('#addItemNewPurchaseTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      ordering: false,
+      autoWidth: false,
+      dom: "<'row mb-2'<'col-sm-12 col-md-6'B><'col-sm-12 col-md-6'f>>" +
+           "<'row'<'col-sm-12'tr>>" +
+           "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
+      language: {
+        emptyTable: 'No data found.',
+        zeroRecords: 'No matching records found.'
+      },
+      buttons: [
+        {
+          text: 'Transfer to Records',
+          className: 'btn btn-success btn-sm',
+          action: function (e, dt, node) {
+            try { e.preventDefault(); } catch (ex) {}
+
+            var token = String($('#np_transfer_token').val() || '').trim();
+            if (!token) {
+              Swal && Swal.fire({ icon: 'error', title: 'Missing transfer token. Please refresh the page.' });
+              return;
+            }
+
+            var purchaseOrders = [];
+            $(addItemNpTable.rows({ search: 'applied' }).nodes()).find('input.add-item-np-checkbox:checked').each(function () {
+              var value = String($(this).val() || '').trim();
+              if (value) { purchaseOrders.push(value); }
+            });
+            purchaseOrders = purchaseOrders.filter(function (value, index, array) { return array.indexOf(value) === index; });
+
+            if (!purchaseOrders.length) {
+              Swal && Swal.fire({ icon: 'warning', title: 'Please select at least one P.O. row.' });
+              return;
+            }
+
+            function doTransfer() {
+              var $btn = $(node);
+              $btn.prop('disabled', true).addClass('disabled');
+              $.ajax({
+                url: '../auth/auth.php',
+                type: 'POST',
+                cache: false,
+                dataType: 'json',
+                data: {
+                  transfer_new_purchase_to_records: 1,
+                  token: token,
+                  transfer_all: 0,
+                  'purchase_orders[]': purchaseOrders
+                },
+                success: function (resp) {
+                  if (!resp || Number(resp.status) !== 200) {
+                    var msg = (resp && resp.message) ? resp.message : 'Transfer failed.';
+                    Swal ? Swal.fire({ icon: 'error', title: msg }) : alert(msg);
+                    return;
+                  }
+                  var okMsg = resp.message || 'Transferred successfully.';
+                  try {
+                    if (resp.data) {
+                      var total = Number(resp.data.general_fund || 0) + Number(resp.data.sef || 0) + Number(resp.data.trust_fund || 0) + Number(resp.data.donation || 0);
+                      if (total > 0) { okMsg += ' (' + total + ' item' + (total > 1 ? 's' : '') + ')'; }
+                    }
+                  } catch (mErr) {}
+                  if (Swal) {
+                    Swal.fire({ icon: 'success', title: okMsg }).then(function () { window.location.reload(); });
+                  } else {
+                    alert(okMsg);
+                    window.location.reload();
+                  }
+                },
+                error: function () {
+                  Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
+                },
+                complete: function () {
+                  $btn.prop('disabled', false).removeClass('disabled');
+                }
+              });
+            }
+
+            if (Swal) {
+              Swal.fire({
+                icon: 'question',
+                title: 'Transfer selected P.O. rows to records?',
+                text: 'This will move their items out of New Purchase.',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, transfer',
+                cancelButtonText: 'Cancel'
+              }).then(function (r) { if (r && r.isConfirmed) { doTransfer(); } });
+            } else {
+              if (confirm('Transfer selected P.O. rows to records?')) { doTransfer(); }
+            }
+          }
+        }
+      ],
+      columnDefs: [
+        { targets: 0, orderable: false, width: '4%' },
+        { targets: -1, orderable: false, width: '4%' }
+      ]
+    });
+
+    function syncAddItemNpSelectAll() {
+      var $checks = $(addItemNpTable.rows({ search: 'applied' }).nodes()).find('input.add-item-np-checkbox');
+      var checkedCount = $checks.filter(':checked').length;
+      $('#add_item_np_select_all')
+        .prop('checked', $checks.length > 0 && checkedCount === $checks.length)
+        .prop('indeterminate', checkedCount > 0 && checkedCount < $checks.length);
+    }
+
+    $(document)
+      .off('change.addItemNpSelectAll', '#add_item_np_select_all')
+      .on('change.addItemNpSelectAll', '#add_item_np_select_all', function () {
+        $(addItemNpTable.rows({ search: 'applied' }).nodes()).find('input.add-item-np-checkbox').prop('checked', $(this).is(':checked'));
+        syncAddItemNpSelectAll();
+      });
+
+    $(document)
+      .off('change.addItemNpRowCheckbox', '#addItemNewPurchaseTable input.add-item-np-checkbox')
+      .on('change.addItemNpRowCheckbox', '#addItemNewPurchaseTable input.add-item-np-checkbox', syncAddItemNpSelectAll);
+
+    addItemNpTable.on('draw', syncAddItemNpSelectAll);
+    syncAddItemNpSelectAll();
+  }
+
+  // ============================================================
+  // New Purchase: edit P.O. modal
+  // ============================================================
+  $(document)
+    .off('click.npEditBtn', '.np-edit-btn')
+    .on('click.npEditBtn', '.np-edit-btn', function () {
+      var $b = $(this);
+      var deptValue = String($b.data('dept') || '').trim();
+      var $deptSelect = $('#edit_np_dept');
+      $('#edit_np_original_po').val($b.data('po'));
+      $('#edit_np_fund').val($b.data('fund'));
+      $deptSelect.find('option[data-current-dept="1"]').remove();
+      if (deptValue && !$deptSelect.find('option').filter(function () { return this.value === deptValue; }).length) {
+        $('<option>', { value: deptValue, text: deptValue }).attr('data-current-dept', '1').insertAfter($deptSelect.find('option:first'));
+      }
+      $deptSelect.val(deptValue);
+      $('#edit_np_po').val($b.data('po'));
+      $('#edit_np_pr').val($b.data('pr'));
+      $('#edit_np_obr').val($b.data('obr'));
+      $('#edit_np_supplier').val($b.data('supplier'));
+      $('#edit_np_paricsno').val($b.data('paricsno'));
+      $('#editNpPoModal').modal('show');
+    });
+
+  $(document)
+    .off('submit.editNpPoForm', '#editNpPoForm')
+    .on('submit.editNpPoForm', '#editNpPoForm', function (e) {
+      e.preventDefault();
+      var $btn = $('#editNpPoSaveBtn').prop('disabled', true);
+
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        cache: false,
+        dataType: 'json',
+        data: {
+          update_np_po: 1,
+          original_po:      $('#edit_np_original_po').val(),
+          fund:             $('#edit_np_fund').val(),
+          dept_id:          $('#edit_np_dept').val(),
+          purchase_order:   $('#edit_np_po').val(),
+          purchase_request: $('#edit_np_pr').val(),
+          obr_number:       $('#edit_np_obr').val(),
+          supplier:         $('#edit_np_supplier').val(),
+          par_ics_number:   $('#edit_np_paricsno').val()
+        },
+        success: function (resp) {
+          if (!resp || Number(resp.status) !== 200) {
+            var msg = (resp && resp.message) ? resp.message : 'Update failed.';
+            Swal ? Swal.fire({ icon: 'error', title: msg }) : alert(msg);
+            return;
+          }
+          $('#editNpPoModal').modal('hide');
+          if (Swal) {
+            Swal.fire({ icon: 'success', title: resp.message || 'Updated successfully.' })
+              .then(function () { window.location.reload(); });
+          } else {
+            alert(resp.message || 'Updated successfully.');
+            window.location.reload();
+          }
+        },
+        error: function () {
+          Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
+        },
+        complete: function () { $btn.prop('disabled', false); }
+      });
+    });
+
+  // ============================================================
+  // New Purchase Items page: datatable with Excel/Print/Re-Print
+  // ============================================================
+  if ($('#npItemsTable').length && $.fn.dataTable && !$.fn.dataTable.isDataTable('#npItemsTable')) {
+    var npItemsTable = $('#npItemsTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      ordering: false,
+      autoWidth: false,
+      language: {
+        emptyTable: 'No items found for this P.O.',
+        zeroRecords: 'No matching records found.'
+      },
+      buttons: [
+        {
+          extend: 'excel',
+          orientation: 'landscape',
+          pageSize: 'LEGAL',
+          title: 'NEW PURCHASE ITEMS',
+          exportOptions: { columns: ':not(:first-child):not(:last-child)' }
+        },
+        {
+          extend: 'print',
+          orientation: 'landscape',
+          pageSize: 'LEGAL',
+          title: 'NEW PURCHASE ITEMS',
+          exportOptions: { columns: ':not(:first-child):not(:last-child)' }
+        },
+        {
+          text: 'Re-Print',
+          className: 'btn btn-info btn-sm',
+          action: function () {
+            var $checked = $('#npItemsTable tbody input.np-items-checkbox:checked');
+            if (!$checked.length) {
+              Swal && Swal.fire({ icon: 'warning', title: 'No items selected.', text: 'Please check at least one item to re-print.' });
+              return;
+            }
+
+            // Group selected property numbers by ref + docType
+            // parRefs = { ref: [pn1, pn2, ...] }, icsRefs = { ref: [pn1, ...] }
+            var parRefs = {}, icsRefs = {};
+            $checked.each(function () {
+              var docType = String($(this).data('doc-type') || '').toUpperCase().trim();
+              var refNum  = String($(this).data('ref-number') || '').trim();
+              var propNum = String($(this).val() || '').trim();
+              if (!refNum || !propNum) return;
+              if (docType === 'PAR') {
+                if (!parRefs[refNum]) parRefs[refNum] = [];
+                parRefs[refNum].push(propNum);
+              } else if (docType === 'ICS') {
+                if (!icsRefs[refNum]) icsRefs[refNum] = [];
+                icsRefs[refNum].push(propNum);
+              }
+            });
+
+            var parList = Object.keys(parRefs);
+            var icsList = Object.keys(icsRefs);
+
+            if (!parList.length && !icsList.length) {
+              Swal && Swal.fire({ icon: 'warning', title: 'No printable documents found.', text: 'Selected items have no PAR or ICS assignment yet.' });
+              return;
+            }
+
+            // PAR: one window per reference number, filtered to only selected property numbers
+            parList.forEach(function (ref) {
+              var url = 'printpar.php?refnumber=' + encodeURIComponent(ref)
+                      + '&pars=' + parRefs[ref].map(encodeURIComponent).join(',');
+              window.open(url, '_blank');
+            });
+
+            // ICS: one window for all selected ICS items, filtered to only selected property numbers
+            if (icsList.length) {
+              var allIcsPars = icsList.reduce(function (acc, ref) { return acc.concat(icsRefs[ref]); }, []);
+              window.open(
+                'inventory_custodian_slip.php?refs=' + icsList.map(encodeURIComponent).join(',')
+                + '&pars=' + allIcsPars.map(encodeURIComponent).join(','),
+                '_blank'
+              );
+            }
+          }
+        }
+      ],
+      columnDefs: [
+        { targets: 0, orderable: false, width: '4%' },
+        { targets: 1, width: '13%' },
+        { targets: 2, width: '20%' },
+        { targets: 3, width: '10%' },
+        { targets: 4, width: '10%' },
+        { targets: 5, width: '12%' },
+        { targets: 6, width: '13%' },
+        { targets: 7, width: '12%' },
+        { targets: 8, orderable: false, width: '6%' }
+      ]
+    });
+
+    try { npItemsTable.buttons().container().appendTo('#npItemsTable_wrapper .col-md-6:eq(0)'); } catch (e) {}
+
+    // Re-Print button is index 2; disable until something is checked
+    function npSyncReprintBtn() {
+      var hasChecked = $('#npItemsTable tbody input.np-items-checkbox:checked').length > 0;
+      npItemsTable.button(2).enable(hasChecked);
+    }
+    npSyncReprintBtn();
+
+    // Select-all checkbox
+    $(document)
+      .off('change.npItemsSelectAll', '#np_items_select_all')
+      .on('change.npItemsSelectAll', '#np_items_select_all', function () {
+        $('#npItemsTable tbody input.np-items-checkbox').prop('checked', $(this).is(':checked'));
+        npSyncReprintBtn();
+      });
+
+    $(document)
+      .off('change.npItemsRowCheckbox', '#npItemsTable input.np-items-checkbox')
+      .on('change.npItemsRowCheckbox', '#npItemsTable input.np-items-checkbox', function () {
+        var $all = $('#npItemsTable tbody input.np-items-checkbox');
+        var chk  = $all.filter(':checked').length;
+        $('#np_items_select_all')
+          .prop('checked', chk === $all.length)
+          .prop('indeterminate', chk > 0 && chk < $all.length);
+        npSyncReprintBtn();
+      });
+  }
+
+  // ============================================================
+  // New Purchase Items: Edit item modal (new-purchase-items.php only)
+  // ============================================================
+  if ($('#npItemsTable').length) {
+    var npEditOriginal = {};
+    var npEditPropertyRequestId = 0;
+    var npEditPropertyGenerating = false;
+    var npEditPropertyValid = true;
+
+    function npNormalizeFund(value) {
+      var fund = String(value || '').trim().toUpperCase();
+      var fundMap = { 'GF': 'GENERAL FUND', 'SF': 'SEF', 'SPECIAL EDUCATION FUND': 'SEF' };
+
+      return fundMap[fund] || fund;
+    }
+
+    function npSetPropertyHelp(message, type) {
+      var $help = $('#edit_property_number_help');
+      var classes = 'form-text text-muted text-danger text-success text-info';
+      var className = 'form-text text-muted';
+
+      if (type === 'error') {
+        className = 'form-text text-danger';
+      } else if (type === 'success') {
+        className = 'form-text text-success';
+      } else if (type === 'info') {
+        className = 'form-text text-info';
+      }
+
+      $help.removeClass(classes).addClass(className).text(message || 'Generated from account code.');
+    }
+
+    function npGetDeptFromPropertyNumber(value) {
+      var parts = String(value || '').trim().split('-');
+
+      return parts.length ? parts[parts.length - 1] : '';
+    }
+
+    function npSetSelectValue($select, value, label, marker) {
+      var selectedValue = String(value || '').trim();
+      var optionMarker = marker || 'data-current-value';
+
+      $select.find('option[' + optionMarker + '="1"]').remove();
+
+      var hasOption = $select.find('option').filter(function () {
+        return this.value === selectedValue;
+      }).length > 0;
+
+      if (selectedValue && !hasOption) {
+        $('<option>', {
+          value: selectedValue,
+          text: label || selectedValue
+        }).attr(optionMarker, '1').insertAfter($select.find('option:first'));
+      }
+
+      $select.val(selectedValue);
+    }
+
+    function npCleanUnitValue(value) {
+      var raw = String(value || '').replace(/,/g, '').replace(/[^0-9.]/g, '');
+      var parts = raw.split('.');
+
+      if (parts.length > 2) {
+        raw = parts.shift() + '.' + parts.join('');
+      }
+
+      return raw;
+    }
+
+    function npFormatUnitValue(value, fixedDecimals) {
+      var clean = npCleanUnitValue(value);
+      if (!clean) {
+        return '';
+      }
+
+      var parts = clean.split('.');
+      var whole = parts[0] || '';
+      var decimals = parts.length > 1 ? parts[1].slice(0, 2) : '';
+
+      whole = whole.replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+      if (!whole && decimals) {
+        whole = '0';
+      }
+
+      if (fixedDecimals) {
+        decimals = (decimals + '00').slice(0, 2);
+        return (whole || '0') + '.' + decimals;
+      }
+
+      return parts.length > 1 ? whole + '.' + decimals : whole;
+    }
+
+    function npSetUnitValue(value) {
+      $('#edit_unit_value').val(npFormatUnitValue(value, true));
+    }
+
+    function npGetYearAcquired(value) {
+      var acquired = String(value || '').trim();
+      var yearMatch = acquired.match(/^\d{4}/);
+
+      return yearMatch ? yearMatch[0] : acquired;
+    }
+
+    function npSetYearAcquired(value) {
+      var yearAcquired = npGetYearAcquired(value);
+      var $yearSelect = $('#edit_date_aquired');
+
+      npSetSelectValue($yearSelect, yearAcquired, yearAcquired, 'data-current-year');
+    }
+
+    function npSetAccountCode(value) {
+      npSetSelectValue($('#edit_account_code'), value, value, 'data-current-account-code');
+    }
+
+    function npSetCategory(value) {
+      var category = String(value || '').trim().toUpperCase();
+
+      npSetSelectValue($('#edit_category'), category, category, 'data-current-category');
+    }
+
+    function npShouldRegeneratePropertyNumber() {
+      return String($('#edit_account_code').val() || '').trim() !== String(npEditOriginal.accountCode || '').trim()
+        || npGetYearAcquired($('#edit_date_aquired').val()) !== String(npEditOriginal.year || '').trim()
+        || String($('#edit_category').val() || '').trim().toUpperCase() !== String(npEditOriginal.category || '').trim().toUpperCase()
+        || npNormalizeFund($('#edit_fund').val()) !== npNormalizeFund(npEditOriginal.fund);
+    }
+
+    function npRegenerateEditPropertyNumber() {
+      var requestId = ++npEditPropertyRequestId;
+      var oldPropertyNumber = String(npEditOriginal.propertyNumber || '').trim();
+
+      if (!npShouldRegeneratePropertyNumber()) {
+        $('#show_property_number').val(oldPropertyNumber);
+        npSetPropertyHelp('Generated from account code.');
+        npEditPropertyValid = true;
+        return;
+      }
+
+      var accountCode = String($('#edit_account_code').val() || '').trim();
+      var category = String($('#edit_category').val() || '').trim().toUpperCase();
+      var year = npGetYearAcquired($('#edit_date_aquired').val());
+      var fund = npNormalizeFund($('#edit_fund').val());
+      var dept = String(npEditOriginal.dept || '').trim() || npGetDeptFromPropertyNumber(oldPropertyNumber);
+
+      if (fund === 'TRUST FUND') {
+        $('#show_property_number').val('');
+        npSetPropertyHelp('Property number is not generated for TRUST FUND.', 'info');
+        npEditPropertyGenerating = false;
+        npEditPropertyValid = true;
+        $('#npEditSaveBtn').prop('disabled', false);
+        return;
+      }
+
+      if (!accountCode || !category || !year || !fund || !dept) {
+        $('#show_property_number').val(oldPropertyNumber);
+        npSetPropertyHelp('Select account code, category, fund, and year to generate a property number.', 'error');
+        npEditPropertyValid = false;
+        return;
+      }
+
+      npEditPropertyGenerating = true;
+      npEditPropertyValid = false;
+      $('#npEditSaveBtn').prop('disabled', true);
+      $('#show_property_number').val('Generating...');
+      npSetPropertyHelp('Checking available property number...', 'info');
+
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        cache: false,
+        dataType: 'json',
+        data: {
+          generate_new_purchase_edit_property_number: 1,
+          new_purchase_id: $('#edit_new_purchase_id').val(),
+          property_number: oldPropertyNumber,
+          category: category,
+          year: year,
+          account_code: accountCode,
+          dept: dept,
+          fund: fund
+        },
+        success: function (resp) {
+          if (requestId !== npEditPropertyRequestId) {
+            return;
+          }
+
+          if (resp && Number(resp.status) === 200 && resp.data && resp.data.property_number) {
+            $('#show_property_number').val(resp.data.property_number);
+            npSetPropertyHelp('Available property number generated.', 'success');
+            npEditPropertyValid = true;
+            return;
+          }
+
+          $('#show_property_number').val(oldPropertyNumber);
+          npSetPropertyHelp((resp && resp.message) ? resp.message : 'Unable to generate an available property number.', 'error');
+          npEditPropertyValid = false;
+        },
+        error: function () {
+          if (requestId !== npEditPropertyRequestId) {
+            return;
+          }
+
+          $('#show_property_number').val(oldPropertyNumber);
+          npSetPropertyHelp('Unable to check property number availability.', 'error');
+          npEditPropertyValid = false;
+        },
+        complete: function () {
+          if (requestId !== npEditPropertyRequestId) {
+            return;
+          }
+
+          npEditPropertyGenerating = false;
+          $('#npEditSaveBtn').prop('disabled', false);
+        }
+      });
+    }
+
+    $(document)
+      .off('input.npEditUnitValue', '#edit_unit_value')
+      .on('input.npEditUnitValue', '#edit_unit_value', function () {
+        var cursorAtEnd = this.selectionStart === this.value.length;
+        this.value = npFormatUnitValue(this.value);
+
+        if (cursorAtEnd) {
+          this.setSelectionRange(this.value.length, this.value.length);
+        }
+      })
+      .off('blur.npEditUnitValue', '#edit_unit_value')
+      .on('blur.npEditUnitValue', '#edit_unit_value', function () {
+        this.value = npFormatUnitValue(this.value, true);
+      });
+
+    $(document)
+      .off('click.npEditBtn', '.np-edit-btn')
+      .on('click.npEditBtn', '.np-edit-btn', function () {
+        var d = {};
+        try { d = JSON.parse($(this).attr('data-item') || '{}'); } catch (e) {}
+
+        var fundVal = npNormalizeFund(d.fund || '');
+
+        npEditOriginal = {
+          propertyNumber: String(d.property_number || '').trim(),
+          accountCode: String(d.account_code || '').trim(),
+          year: npGetYearAcquired(d.date_aquired),
+          category: String(d.category || '').trim().toUpperCase(),
+          fund: fundVal,
+          dept: String(d.dept || '').trim() || npGetDeptFromPropertyNumber(d.property_number)
+        };
+
+        $('#edit_new_purchase_id').val(d.id || '');
+        $('#edit_property_number').val(d.property_number  || '');
+        $('#show_property_number').val(d.property_number  || '');
+        $('#edit_item').val(d.item             || '');
+        $('#edit_model').val(d.model            || '');
+        $('#edit_description').val(d.description      || '');
+        $('#edit_serial_number').val(d.serial_number    || '');
+        $('#edit_serial_number_2').val(d.serial_number_2  || '');
+        npSetUnitValue(d.unit_value       || '');
+        npSetYearAcquired(d.date_aquired);
+        npSetAccountCode(d.account_code     || '');
+        $('#edit_supplier').val(d.supplier         || '');
+        $('#edit_par_ics_number').val(d.par_ics_number   || '');
+        $('#edit_purchase_request').val(d.purchase_request || '');
+        $('#edit_obr_number').val(d.obr_number       || '');
+        $('#edit_jev_number').val(d.jev_number       || '');
+        $('#edit_remarks').val(d.remarks          || '');
+        npSetCategory(d.category         || '');
+
+        $('#edit_fund').val(fundVal);
+        npSetPropertyHelp('Generated from account code.');
+        npEditPropertyValid = true;
+
+        $('#npEditModal').modal('show');
+      });
+
+    $(document)
+      .off('change.npEditPropertyInputs', '#edit_account_code, #edit_date_aquired, #edit_category, #edit_fund')
+      .on('change.npEditPropertyInputs', '#edit_account_code, #edit_date_aquired, #edit_category, #edit_fund', npRegenerateEditPropertyNumber);
+
+    $('#npEditForm').off('submit.npEdit').on('submit.npEdit', function (e) {
+      e.preventDefault();
+
+      if (npEditPropertyGenerating) {
+        Swal ? Swal.fire({ icon: 'info', title: 'Please wait for property number validation.' }) : alert('Please wait for property number validation.');
+        return;
+      }
+
+      if (npShouldRegeneratePropertyNumber() && !npEditPropertyValid) {
+        Swal ? Swal.fire({ icon: 'warning', title: 'Please generate an available property number before saving.' }) : alert('Please generate an available property number before saving.');
+        return;
+      }
+
+      var $btn = $('#npEditSaveBtn').prop('disabled', true);
+      var formData = $(this).serializeArray();
+
+      $.each(formData, function (_, field) {
+        if (field.name === 'unit_value') {
+          field.value = npCleanUnitValue(field.value);
+        }
+      });
+
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        cache: false,
+        dataType: 'json',
+        data: $.param(formData),
+        success: function (resp) {
+          if (!resp || Number(resp.status) !== 200) {
+            var msg = (resp && resp.message) ? resp.message : 'Update failed.';
+            Swal ? Swal.fire({ icon: 'error', title: msg }) : alert(msg);
+            return;
+          }
+          $('#npEditModal').modal('hide');
+          Swal ? Swal.fire({ icon: 'success', title: resp.message || 'Updated.' }).then(function () { location.reload(); })
+               : (alert(resp.message || 'Updated.'), location.reload());
+        },
+        error: function () {
+          Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
+        },
+        complete: function () { $btn.prop('disabled', false); }
+      });
+    });
+  }
+
+  // DataTables inside tabs need a recalculation when the tab becomes visible
+  $(document)
+    .off('shown.bs.tab.addItemRecentTables')
+    .on('shown.bs.tab.addItemRecentTables', 'a[data-toggle="tab"][href="#addItemExistingPane"], a[data-toggle="tab"][href="#addItemNewPurchasePane"]', function () {
+      try {
+        if ($.fn.dataTable && $.fn.dataTable.isDataTable('#addItemTable')) {
+          $('#addItemTable').DataTable().columns.adjust().responsive.recalc();
+        }
+        if ($.fn.dataTable && $.fn.dataTable.isDataTable('#addItemNewPurchaseTable')) {
+          $('#addItemNewPurchaseTable').DataTable().columns.adjust().responsive.recalc();
+        }
+      } catch (e) {}
+    });
+
+  // Infrastructure register
+  if ($('#infrastructureTable').length && $.fn.dataTable && !$.fn.dataTable.isDataTable('#infrastructureTable')) {
+    function infraEsc(text){
+      return $('<div>').text(text === null || text === undefined ? '' : String(text)).html();
+    }
+
+    var infrastructureTable = $('#infrastructureTable').DataTable({
+      responsive: true,
+      lengthChange: false,
+      autoWidth: false,
+      processing: true,
+      ajax: {
+        url: '../auth/auth.php',
+        type: 'POST',
+        dataType: 'json',
+        data: function(d){
+          d.fetch_infrastructure_dt = 1;
+          return d;
+        },
+        dataSrc: function(resp){
+          return resp && Array.isArray(resp.data) ? resp.data : [];
+        }
+      },
+      columns: [
+        { data: 'account_code', render: function(d){ return infraEsc(d || ''); } },
+        { data: 'description', render: function(d){ return infraEsc(d || ''); } }
+      ],
+      order: [[0, 'asc']]
+    });
+
+    function syncInfrastructureAccountCode(){
+      var code = $('#infra_classification option:selected').data('accountCode') || '';
+      $('#infra_account_code').val(String(code || '').trim());
+    }
+
+    function syncInfrastructureFundBadge(){
+      var fund = String($('#infra_fund_cluster').val() || 'GENERAL FUND').trim();
+      $('#infraFundIndicator').text(fund.toUpperCase());
+    }
+
+    function syncInfrastructureYear(){
+      var dateVal = String($('#infra_date_acquired').val() || '').trim();
+      if (!dateVal || dateVal.length < 4) { return; }
+      $('#infra_year_acquired').val(dateVal.slice(0, 4));
+    }
+
+    $(document)
+      .off('change.infrastructureClassification', '#infra_classification')
+      .on('change.infrastructureClassification', '#infra_classification', syncInfrastructureAccountCode)
+      .off('change.infrastructureFund', '#infra_fund_cluster')
+      .on('change.infrastructureFund', '#infra_fund_cluster', syncInfrastructureFundBadge)
+      .off('change.infrastructureDate', '#infra_date_acquired')
+      .on('change.infrastructureDate', '#infra_date_acquired', syncInfrastructureYear)
+      .off('submit.addInfrastructure', '#addInfrastructureForm')
+      .on('submit.addInfrastructure', '#addInfrastructureForm', function(e){
+        e.preventDefault();
+
+        var $form = $(this);
+        var $btn = $('#addInfrastructureSubmitBtn');
+        var fd = new FormData(this);
+        fd.append('save_infrastructure', 1);
+
+        $btn.prop('disabled', true);
+        $btn.find('.btn-text').text('Saving...');
+
+        $.ajax({
+          type: 'POST',
+          url: '../auth/auth.php',
+          data: fd,
+          processData: false,
+          contentType: false,
+          dataType: 'json',
+          success: function(res){
+            if (res && res.status === 200) {
+              Swal.fire({ position: 'center', icon: 'success', title: res.message || 'Saved successfully.', showConfirmButton: false, timer: 1600 }).then(function(){
+                $('#addInfrastructureModal').modal('hide');
+                $form[0].reset();
+                $('#infra_fund_cluster').val('GENERAL FUND');
+                $('#infra_condition_status').val('SERVICEABLE');
+                $('#infra_year_acquired').val(String(new Date().getFullYear()));
+                syncInfrastructureAccountCode();
+                syncInfrastructureFundBadge();
+                infrastructureTable.ajax.reload(null, false);
+              });
+              return;
+            }
+
+            Swal.fire({ icon: 'error', title: 'Unable to save', text: (res && res.message) ? res.message : 'Please review the form and try again.' });
+          },
+          error: function(xhr){
+            var msg = 'Server error.';
+            try {
+              if (xhr && xhr.responseJSON && xhr.responseJSON.message) {
+                msg = xhr.responseJSON.message;
+              }
+            } catch (e2) {}
+            Swal.fire({ icon: 'error', title: 'Unable to save', text: msg });
+          },
+          complete: function(){
+            $btn.prop('disabled', false);
+            $btn.find('.btn-text').text('Save');
+          }
+        });
+      });
+
+    $('#addInfrastructureModal')
+      .off('shown.bs.modal.infrastructure')
+      .on('shown.bs.modal.infrastructure', function(){
+        syncInfrastructureAccountCode();
+        syncInfrastructureFundBadge();
+        setTimeout(function(){ $('#infra_fund_cluster').trigger('focus'); }, 0);
+      })
+      .off('hidden.bs.modal.infrastructure')
+      .on('hidden.bs.modal.infrastructure', function(){
+        var form = document.getElementById('addInfrastructureForm');
+        if (form) { form.reset(); }
+        $('#infra_fund_cluster').val('GENERAL FUND');
+        $('#infra_condition_status').val('SERVICEABLE');
+        $('#infra_year_acquired').val(String(new Date().getFullYear()));
+        syncInfrastructureAccountCode();
+        syncInfrastructureFundBadge();
+      });
+
+    syncInfrastructureAccountCode();
+    syncInfrastructureFundBadge();
+  }
+
+  // Land property register
+  if ($('#landPropertyTable').length && $.fn.dataTable && !$.fn.dataTable.isDataTable('#landPropertyTable')) {
+    function landEsc(text){
+      return $('<div>').text(text === null || text === undefined ? '' : String(text)).html();
+    }
+
+    function landMoney(value){
+      var amount = Number(value || 0);
+      return '₱ ' + amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    var landPropertyTable = $('#landPropertyTable').DataTable({
+      responsive: true,
+      lengthChange: true,
+      pageLength: 25,
+      lengthMenu: [[10, 25, 50, 100, 500], [10, 25, 50, 100, 500]],
+      autoWidth: false,
+      processing: true,
+       dom: "<'row align-items-end mb-3'<'col-sm-12 col-lg-2'l><'col-sm-12 col-lg-3 land-classification-filter-slot'><'col-sm-12 col-lg-3 land-barangay-filter-slot'><'col-sm-12 col-lg-4'f>>" +
+         "<'row'<'col-sm-12'tr>>" +
+         "<'row mt-2'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
+      ajax: {
+        url: '../auth/auth.php',
+        type: 'POST',
+        dataType: 'json',
+        data: function(d){
+          d.fetch_land_property_dt = 1;
+          return d;
+        },
+        dataSrc: function(resp){
+          return resp && Array.isArray(resp.data) ? resp.data : [];
+        }
+      },
+      columns: [
+        { data: null, orderable: false, searchable: false, className: 'text-center', render: function(){ return '<button type="button" class="btn btn-xs btn-success land-edit-btn" title="Edit"><i class="fas fa-edit"></i></button>'; } },
+        { data: 'fund_cluster', render: function(d){ return landEsc(d || ''); } },
+        { data: 'classification', render: function(d){ return landEsc(d || ''); } },
+        { data: 'declared_owner', render: function(d){ return landEsc(d || ''); } },
+        { data: 'tct_no', render: function(d){ return landEsc(d || ''); } },
+        { data: 'project_name', render: function(d){ return landEsc(d || ''); } },
+        { data: 'area_sqm', className: 'text-right', render: function(d){ return Number(d || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } },
+        { data: 'barangay', render: function(d){ return landEsc(d || ''); } },
+        { data: 'acquisition_cost', className: 'text-right', render: landMoney },
+        { data: 'capital_gains_tax', className: 'text-right', render: landMoney },
+        { data: 'documentary_stamp_tax', className: 'text-right', render: landMoney },
+        { data: 'other_incidental_transfer_fees', className: 'text-right', render: landMoney },
+        { data: 'total_amount', className: 'text-right', render: landMoney },
+        { data: null, render: function(row){ return landEsc((row.current_status || '') + (row.transfer_status === 'TRANSFERRED' ? ' / TRANSFERRED' : '')); } }
+      ],
+      order: [[1, 'asc']]
+    });
+
+    $('#landTableClassificationFilter').closest('.form-group').appendTo('#landPropertyTable_wrapper .land-classification-filter-slot');
+    $('#landTableBarangayFilter').closest('.form-group').appendTo('#landPropertyTable_wrapper .land-barangay-filter-slot');
+    $('#landTableFilterControls').remove();
+
+    function applyLandTableFilters(){
+      var classification = String($('#landTableClassificationFilter').val() || '');
+      var barangay = String($('#landTableBarangayFilter').val() || '');
+      var escapeRegex = $.fn.dataTable.util.escapeRegex;
+
+      landPropertyTable
+        .column(2).search(classification ? '^' + escapeRegex(classification) + '$' : '', true, false)
+        .column(7).search(barangay ? '^' + escapeRegex(barangay) + '$' : '', true, false)
+        .draw();
+    }
+
+    function parseLandMoney(value){
+      return Number(String(value || '0').replace(/,/g, '')) || 0;
+    }
+
+    function formatLandMoney(value){
+      return parseLandMoney(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function formatLandMoneyLive(input){
+      var value = String(input.value || '').replace(/,/g, '').replace(/[^0-9.]/g, '');
+      var cursor = input.selectionStart || value.length;
+      var digitsBeforeCursor = String(input.value || '').slice(0, cursor).replace(/[^0-9]/g, '').length;
+      var parts = value.split('.');
+      var whole = (parts[0] || '').replace(/^0+(?=\d)/, '');
+      var decimals = parts.length > 1 ? '.' + parts.slice(1).join('').replace(/\D/g, '').slice(0, 2) : '';
+      var formatted = (whole || '0').replace(/\B(?=(\d{3})+(?!\d))/g, ',') + decimals;
+      var nextCursor = formatted.length;
+      var seenDigits = 0;
+
+      input.value = formatted;
+      for (var i = 0; i < formatted.length; i++) {
+        if (/\d/.test(formatted.charAt(i))) { seenDigits++; }
+        if (seenDigits >= digitsBeforeCursor) { nextCursor = i + 1; break; }
+      }
+      try { input.setSelectionRange(nextCursor, nextCursor); } catch (e) {}
+    }
+
+    function syncLandTotal(scope){
+      var $scope = scope ? $(scope) : $('#addLandForm');
+      var total = 0;
+      $scope.find('.land-money').each(function(){ total += parseLandMoney($(this).val()); });
+      $scope.find('[name="total_amount"]').val(formatLandMoney(total));
+    }
+
+    function isLandDocSelected(value){
+      value = String(value || '').toUpperCase();
+      return value !== '' && value !== 'NO' && value !== 'N/A';
+    }
+
+    function syncLandDoasDod(scope, changed){
+      var $scope = scope ? $(scope) : $('#addLandForm');
+      var $doas = $scope.find('[name="has_doas"]');
+      var $dod = $scope.find('[name="has_dod"]');
+      var doasSelected = isLandDocSelected($doas.val());
+      var dodSelected = isLandDocSelected($dod.val());
+
+      $doas.prop('disabled', false);
+      $dod.prop('disabled', false);
+
+      if (changed === 'doas' && doasSelected) {
+        $dod.val('N/A').prop('disabled', true);
+        return;
+      }
+      if (changed === 'dod' && dodSelected) {
+        $doas.val('N/A').prop('disabled', true);
+        return;
+      }
+      if (doasSelected) {
+        $dod.val('N/A').prop('disabled', true);
+        return;
+      }
+      if (dodSelected) {
+        $doas.val('N/A').prop('disabled', true);
+      }
+    }
+
+    function includeLandDocValues(fd, form){
+      var $form = $(form);
+      fd.set('has_doas', String($form.find('[name="has_doas"]').val() || ''));
+      fd.set('has_dod', String($form.find('[name="has_dod"]').val() || ''));
+    }
+
+    function syncLandNoneField(checkbox){
+      var $checkbox = $(checkbox);
+      var $field = $($checkbox.data('target'));
+      var $hidden = $($checkbox.data('hidden'));
+      var checked = $checkbox.is(':checked');
+
+      if (!$field.length) { return; }
+
+      if (checked) {
+        $field.val($field.is('input[type="date"]') ? '' : 'N/A').prop('disabled', !!$hidden.length).prop('readonly', !$hidden.length);
+        if ($hidden.length) { $hidden.prop('disabled', false).val('N/A'); }
+        return;
+      }
+
+      $field.prop('disabled', false).prop('readonly', false);
+      if (String($field.val() || '').toUpperCase() === 'N/A') { $field.val(''); }
+      if ($hidden.length) { $hidden.prop('disabled', true); }
+    }
+
+    function syncLandNoneFields(scope){
+      $(scope || document).find('.land-none-toggle').each(function(){ syncLandNoneField(this); });
+    }
+
+    function setLandNoneState(selector, isNone){
+      $(selector).prop('checked', !!isNone).each(function(){ syncLandNoneField(this); });
+    }
+
+    function landRow($btn){
+      var $tr = $btn.closest('tr');
+      if ($tr.hasClass('child')) { $tr = $tr.prev(); }
+      return landPropertyTable.row($tr).data() || null;
+    }
+
+    function setLandEdit(row){
+      $('#edit_land_id').val(row.land_id || '');
+      $('#edit_land_fund_cluster').val(row.fund_cluster || '');
+      $('#edit_land_classification').val(row.classification || '');
+      $('#edit_land_declared_owner').val(row.declared_owner || '');
+      $('#edit_land_tct_no').val(row.tct_no || '');
+      $('#edit_land_area_sqm').val(Number(row.area_sqm || 0).toFixed(2));
+      $('#edit_land_date_acquired').val(row.date_acquired || '');
+      $('#edit_land_project_name').val(row.project_name || '');
+      $('#edit_land_address').val(row.address || '');
+      $('#edit_land_barangay').val(row.barangay || '');
+      $('#edit_land_transfer_status').val(row.transfer_status || '');
+      $('#edit_land_current_status').val(row.current_status || '');
+      $('#edit_land_remarks').val(row.remarks || '');
+      $('#edit_land_acquisition_cost').val(formatLandMoney(row.acquisition_cost || 0));
+      $('#edit_land_documentary_stamp_tax').val(formatLandMoney(row.documentary_stamp_tax || 0));
+      $('#edit_land_capital_gains_tax').val(formatLandMoney(row.capital_gains_tax || 0));
+      $('#edit_land_other_fees').val(formatLandMoney(row.other_incidental_transfer_fees || 0));
+      $('#edit_land_has_original_tct').val(row.has_original_tct || '');
+      $('#edit_land_tax_declaration_no').val(row.tax_declaration_no || '');
+      $('#edit_land_has_doas').val(row.has_doas || '');
+      $('#edit_land_has_dod').val(row.has_dod || '');
+      $('#edit_land_other_supporting_documents').val(row.other_supporting_documents || '');
+      setLandNoneState('#edit_land_date_acquired_none', String(row.date_acquired || '').toUpperCase() === 'N/A');
+      setLandNoneState('#edit_land_address_none', String(row.address || '').toUpperCase() === 'N/A');
+      setLandNoneState('#edit_land_barangay_none', String(row.barangay || '').toUpperCase() === 'N/A');
+      syncLandTotal('#editLandForm');
+      syncLandDoasDod('#editLandForm');
+    }
+
+    $(document)
+      .off('change.landTableFilters', '#landTableClassificationFilter, #landTableBarangayFilter')
+      .on('change.landTableFilters', '#landTableClassificationFilter, #landTableBarangayFilter', applyLandTableFilters)
+      .off('input.landMoney change.landMoney', '.land-money')
+      .on('input.landMoney change.landMoney', '.land-money', function(){
+        syncLandTotal($(this).closest('form'));
+      })
+      .off('input.landMoneyFormatLive', '.land-money-format')
+      .on('input.landMoneyFormatLive', '.land-money-format', function(){
+        formatLandMoneyLive(this);
+        syncLandTotal($(this).closest('form'));
+      })
+      .off('click.editLand', '.land-edit-btn')
+      .on('click.editLand', '.land-edit-btn', function(){
+        var row = landRow($(this));
+        if (!row) { return; }
+        setLandEdit(row);
+        $('#editLandModal').modal('show');
+      })
+      .off('change.landDoasDod', '#land_has_doas, #land_has_dod, #edit_land_has_doas, #edit_land_has_dod')
+      .on('change.landDoasDod', '#land_has_doas, #land_has_dod, #edit_land_has_doas, #edit_land_has_dod', function(){
+        syncLandDoasDod($(this).closest('form'), $(this).attr('name') === 'has_doas' ? 'doas' : 'dod');
+      })
+      .off('change.landNoneToggle', '.land-none-toggle')
+      .on('change.landNoneToggle', '.land-none-toggle', function(){
+        syncLandNoneField(this);
+      })
+      .off('focus.landMoneyFormat', '.land-money-format')
+      .on('focus.landMoneyFormat', '.land-money-format', function(){
+        $(this).val(String($(this).val() || '').replace(/,/g, ''));
+      })
+      .off('blur.landMoneyFormat', '.land-money-format')
+      .on('blur.landMoneyFormat', '.land-money-format', function(){
+        $(this).val(formatLandMoney($(this).val()));
+        syncLandTotal($(this).closest('form'));
+      })
+      .off('submit.addLand', '#addLandForm')
+      .on('submit.addLand', '#addLandForm', function(e){
+        e.preventDefault();
+
+        var $form = $(this);
+        syncLandTotal($form);
+        syncLandNoneFields($form);
+        var $btn = $('#addLandSubmitBtn');
+        var fd = new FormData(this);
+        includeLandDocValues(fd, this);
+        fd.append('save_land_property', 1);
+
+        $btn.prop('disabled', true);
+        $btn.find('.btn-text').text('Saving...');
+
+        $.ajax({
+          type: 'POST',
+          url: '../auth/auth.php',
+          data: fd,
+          processData: false,
+          contentType: false,
+          dataType: 'json',
+          success: function(res){
+            if (res && res.status === 200) {
+              Swal.fire({ position: 'center', icon: 'success', title: res.message || 'Saved successfully.', showConfirmButton: false, timer: 1600 }).then(function(){
+                $('#addLandModal').modal('hide');
+                $form[0].reset();
+                $('#land_fund_cluster').val('');
+                $('#land_transfer_status').val('');
+                $('#land_current_status').val('');
+                syncLandTotal($form);
+                landPropertyTable.ajax.reload(null, false);
+              });
+              return;
+            }
+            Swal.fire({ icon: 'error', title: 'Unable to save', text: (res && res.message) ? res.message : 'Please review the form and try again.' });
+          },
+          error: function(xhr){
+            var msg = 'Server error.';
+            try { if (xhr && xhr.responseJSON && xhr.responseJSON.message) { msg = xhr.responseJSON.message; } } catch (e2) {}
+            Swal.fire({ icon: 'error', title: 'Unable to save', text: msg });
+          },
+          complete: function(){
+            $btn.prop('disabled', false);
+            $btn.find('.btn-text').text('Save');
+          }
+        });
+      })
+      .off('submit.editLand', '#editLandForm')
+      .on('submit.editLand', '#editLandForm', function(e){
+        e.preventDefault();
+
+        var $form = $(this);
+        syncLandTotal($form);
+        syncLandNoneFields($form);
+        var $btn = $('#editLandSubmitBtn');
+        var fd = new FormData(this);
+        includeLandDocValues(fd, this);
+        fd.append('update_land_property', 1);
+
+        $btn.prop('disabled', true);
+        $btn.find('.btn-text').text('Updating...');
+
+        $.ajax({
+          type: 'POST',
+          url: '../auth/auth.php',
+          data: fd,
+          processData: false,
+          contentType: false,
+          dataType: 'json',
+          success: function(res){
+            if (res && res.status === 200) {
+              Swal.fire({ position: 'center', icon: 'success', title: res.message || 'Updated successfully.', showConfirmButton: false, timer: 1600 }).then(function(){
+                $('#editLandModal').modal('hide');
+                landPropertyTable.ajax.reload(null, false);
+              });
+              return;
+            }
+            Swal.fire({ icon: 'error', title: 'Unable to update', text: (res && res.message) ? res.message : 'Please review the form and try again.' });
+          },
+          error: function(xhr){
+            var msg = 'Server error.';
+            try { if (xhr && xhr.responseJSON && xhr.responseJSON.message) { msg = xhr.responseJSON.message; } } catch (e2) {}
+            Swal.fire({ icon: 'error', title: 'Unable to update', text: msg });
+          },
+          complete: function(){
+            $btn.prop('disabled', false);
+            $btn.find('.btn-text').text('Update');
+          }
+        });
+      });
+
+    $('#addLandModal')
+      .off('shown.bs.modal.land')
+      .on('shown.bs.modal.land', function(){
+        syncLandTotal();
+        setTimeout(function(){ $('#land_fund_cluster').trigger('focus'); }, 0);
+      })
+      .off('hidden.bs.modal.land')
+      .on('hidden.bs.modal.land', function(){
+        var form = document.getElementById('addLandForm');
+        if (form) { form.reset(); }
+        $('#land_fund_cluster').val('');
+        $('#land_transfer_status').val('');
+        $('#land_current_status').val('');
+        $('#land_has_doas, #land_has_dod').prop('disabled', false);
+        $('#land_date_acquired_none, #land_address_none, #land_barangay_none').prop('checked', false);
+        syncLandNoneFields('#addLandForm');
+        syncLandTotal('#addLandForm');
+        syncLandDoasDod('#addLandForm');
+      });
+
+    $('#editLandModal')
+      .off('hidden.bs.modal.landEdit')
+      .on('hidden.bs.modal.landEdit', function(){
+        var form = document.getElementById('editLandForm');
+        if (form) { form.reset(); }
+        $('#edit_land_has_doas, #edit_land_has_dod').prop('disabled', false);
+        $('#edit_land_date_acquired_none, #edit_land_address_none, #edit_land_barangay_none').prop('checked', false);
+        syncLandNoneFields('#editLandForm');
+        syncLandTotal('#editLandForm');
+        syncLandDoasDod('#editLandForm');
+      });
+
+    syncLandNoneFields('#addLandForm');
+    syncLandTotal('#addLandForm');
+    syncLandDoasDod('#addLandForm');
+  }
+
+  // Default DataTable initializer (skip when a page provides its own custom init)
+  if (
+    $('#dataTable').length &&
+    $.fn.dataTable &&
+    !$.fn.dataTable.isDataTable('#dataTable') &&
+    !$('#dataTable').data('dtCustom')
+  ) {
+    $("#dataTable").DataTable({
+      "responsive": true,
+      "lengthChange": false,
+      "autoWidth": false,
+      "stateSave": true,
+      "buttons": [
+        {
+          extend: "excel",
+          orientation: "landscape",
+          pageSize: "LEGAL",
+          title: function () {
+            return $('#reportTitle').text() || "Default Title";
+          },
+          exportOptions: {
+            columns: ':not(:first-child)'
+          }
+        },
+        {
+          extend: "print",
+          orientation: "landscape",
+          pageSize: "LEGAL",
+          title: function () {
+            return $('#reportTitle').text() || "Default Title";
+          },
+          exportOptions: {
+            columns: ':not(:first-child)'
+          }
+        },
+        { extend: "pdfHtml5", orientation: "landscape", pageSize: "LEGAL", title: "INVENTORY REPORT" }
+      ]
+    }).buttons().container().appendTo('#dataTable_wrapper .col-md-6:eq(0)');
+  }
+  
+  $('#clearanceModal').on('hidden.bs.modal', function () {
+    $(this).find('form').trigger('reset');
+  });
+
+  $('.btn-link[aria-expanded="true"]').closest('.accordion-item').addClass('active');
+  $('.collapse').on('show.bs.collapse', function () {
+    $(this).closest('.accordion-item').addClass('active');
+  });
+
+  $('.collapse').on('hidden.bs.collapse', function () {
+    $(this).closest('.accordion-item').removeClass('active');
+  });
+
+  $('#date').datepicker({
+    startDate:'tomorrow',
+    autoclose:true,
+    format:'M-dd-yyyy',
+    todayHighlight:true,
+    orientation:'auto',
+  }).on('changeDate',function(selected){
+    var minDate = new Date(selected.date.valueOf());
+    $('#datepick').datepicker('setStartDate',minDate);
+  });
+
+  $('#datepick').datepicker({
+    startDate:'tomorrow',
+    autoclose:true,
+    format:'M-dd-yyyy',
+    todayHighlight:true,
+    orientation:'auto',
+  }).on('changeDate',function(selected){
+    var maxDate = new Date(selected.date.valueOf());
+    $('#date').datepicker('setEndDate',maxDate);
+  });
+  
+  $('.editBtn').popover(); // hover-popover
+
+  $(document).on('change','#dept',function(){//dynamic dependent dropdown, select employee per department
+    var departmentid = $(this).val();
+    // Reset position when switching departments
+    $('#position').val('');
+    // Defensive UX: reset employee dropdown while loading
+    if(!departmentid){
+      $("#employee").html('<option value="">-SELECT-</option><option value="add_new_emp">+ ADD NEW EMPLOYEE</option>');
+      return;
+    }
+    $("#employee").html('<option value="">Loading...</option>');
+    $.ajax({
+      type: "POST",
+      url: "../auth/auth.php",
+      data:{'departmentid':departmentid},
+      success:function(data){
+        $("#employee").html(data);
+        $("#parEmp").html(data);
+        $("#employee_id").html(data);
+
+        // Keep Select2 (if enabled) in sync after options refresh
+        try {
+          if ($('#employee').hasClass('select2-hidden-accessible')) {
+            $('#employee').val('').trigger('change');
+          } else if (window.GSO && window.GSO.UI && typeof window.GSO.UI.initPcEmployeeSelect2 === 'function') {
+            window.GSO.UI.initPcEmployeeSelect2();
+          }
+        } catch(e) {}
+      },
+      error:function(){
+        $("#employee").html('<option value="">-SELECT-</option><option value="add_new_emp">+ ADD NEW EMPLOYEE</option>');
+        if (typeof Swal !== 'undefined') {
+          Swal.fire({ icon:'error', title:'Unable to load employees', text:'Please try selecting the department again.' });
+        }
+      }
+    })
+  });
+
+  $(document).on('change','#deptid',function(){//dynamic dependent dropdown, select custodian per department
+    var deptid = $(this).val();
+    $.ajax({
+      type: "POST",
+      url: "../auth/auth.php",
+      data:{'deptid':deptid},
+      success:function(data){
+        $("#custodian").html(data);
+      }
+    })
+  });
+
+  // Property Clearance details (modal or legacy page)
+  $(document).on('submit', '#pcEditForm, #pc_details_form', function (e) {
+    e.preventDefault();
+    var formEl = this;
+
+    function doSavePcDetails() {
+      var fd = new FormData(formEl);
+      fd.append('save_pc_details', true);
+
+      $.ajax({
+        type: 'POST',
+        url: '../auth/auth.php',
+        data: fd,
+        processData: false,
+        contentType: false,
+        success: function (response) {
+          var res;
+          try { res = jQuery.parseJSON(response); } catch (err) { res = null; }
+          if (res && res.status === 200) {
+            if (typeof Swal !== 'undefined') {
+              Swal.fire({ position: 'center', icon: 'success', title: res.message || 'Saved.', showConfirmButton: false, timer: 1200 });
+            }
+            // Reflect updates immediately in the list
+            if (typeof window.reloadPcClearanceTable === 'function') {
+              window.reloadPcClearanceTable();
+            } else if ($('#clearanceTable').length && $.fn.dataTable && $.fn.dataTable.isDataTable('#clearanceTable')) {
+              try { $('#clearanceTable').DataTable().ajax.reload(null, false); } catch (e) {}
+            }
+          } else {
+            var msg = (res && res.message) ? res.message : 'Unable to save.';
+            if (typeof Swal !== 'undefined') {
+              Swal.fire({ icon: 'error', title: msg });
+            }
+          }
+        },
+        error: function () {
+          if (typeof Swal !== 'undefined') {
+            Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' });
+          }
+        }
+      });
+    }
+
+    var isInModal = $(formEl).closest('.modal').length > 0 || $(formEl).is('#pcEditForm');
+    if (!isInModal) {
+      doSavePcDetails();
+      return;
+    }
+
+    // Confirmation (Update) for modal safety/validation
+    if (typeof Swal !== 'undefined' && Swal.fire) {
+      Swal.fire({
+        icon: 'question',
+        title: 'Update details?',
+        text: 'Please confirm you want to save these changes.',
+        showCancelButton: true,
+        confirmButtonText: 'Yes, update',
+        cancelButtonText: 'No, go back'
+      }).then(function (result) {
+        if (result && result.isConfirmed) { doSavePcDetails(); }
+      });
+    } else {
+      if (confirm('Are you sure you want to update these details?')) {
+        doSavePcDetails();
+      }
+    }
+  });
+
+  $(document).on('click', '.approvePcBtn', function (e) {
+    e.preventDefault();
+    var $form = $(this).closest('.modal').find('form');
+    if (!$form.length) { $form = $('#pcEditForm'); }
+    if (!$form.length) { $form = $('#pc_details_form'); }
+    if (!$form.length) { return; }
+    var clearanceId = ($form.find('input[name="cid"]').val() || $('#cid').val() || '').trim();
+    var fd = new FormData($form[0]);
+    fd.append('update_pc', true);
+
+    function doApproveAndPrint() {
+      $.ajax({
+        type: 'POST',
+        url: '../auth/auth.php',
+        data: fd,
+        processData: false,
+        contentType: false,
+        success: function (response) {
+          var res;
+          try { res = jQuery.parseJSON(response); } catch (err) { res = null; }
+          if (res && res.status === 200) {
+            var shouldPrint = (typeof res.should_print === 'undefined') ? true : !!res.should_print;
+            var swalIcon = shouldPrint ? 'success' : 'info';
+            var swalTitle = res.message || (shouldPrint ? 'Approved.' : 'Updated, but printing is blocked.');
+            if (typeof Swal !== 'undefined') {
+              Swal.fire({ position: 'center', icon: swalIcon, title: swalTitle, showConfirmButton: false, timer: 1500 }).then(function () {
+                if (shouldPrint && clearanceId) {
+                  var nw = window.open('../admin/print-property-clearance.php?control_id=' + encodeURIComponent(clearanceId), '_Blank');
+                  if (nw) { nw.print(); }
+                }
+                if ($('#pcEditModal').length) {
+                  $('#pcEditModal').modal('hide');
+                }
+                if (typeof window.reloadPcClearanceTable === 'function') {
+                  window.reloadPcClearanceTable();
+                } else if (typeof clearanceTable !== 'undefined' && clearanceTable && clearanceTable.ajax && clearanceTable.ajax.reload) {
+                  clearanceTable.ajax.reload(null, false);
+                } else {
+                  location.reload();
+                }
+              });
+            } else {
+              if (shouldPrint && clearanceId) {
+                var nw2 = window.open('../admin/print-property-clearance.php?control_id=' + encodeURIComponent(clearanceId), '_Blank');
+                if (nw2) { nw2.print(); }
+              }
+              if ($('#pcEditModal').length) {
+                $('#pcEditModal').modal('hide');
+              }
+              if (typeof window.reloadPcClearanceTable === 'function') {
+                window.reloadPcClearanceTable();
+              } else if (typeof clearanceTable !== 'undefined' && clearanceTable && clearanceTable.ajax && clearanceTable.ajax.reload) {
+                clearanceTable.ajax.reload(null, false);
+              } else {
+                location.reload();
+              }
+            }
+          } else {
+            var msg = (res && res.message) ? res.message : 'Unable to approve.';
+            if (typeof Swal !== 'undefined') {
+              Swal.fire({ icon: 'error', title: msg });
+            }
+          }
+        }
+      });
+    }
+
+    // Confirmation (Approve & Print)
+    if (typeof Swal !== 'undefined' && Swal.fire) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'Approve & print this clearance?',
+        text: 'This will mark it as approved and open the print dialog.',
+        showCancelButton: true,
+        confirmButtonText: 'Yes, approve & print',
+        cancelButtonText: 'No, cancel'
+      }).then(function (result) {
+        if (result && result.isConfirmed) { doApproveAndPrint(); }
+      });
+    } else {
+      if (confirm('Approve and print this clearance?')) {
+        doApproveAndPrint();
+      }
+    }
+  });
+
+  $(document).on('click', '.cancelBtnClearance', function (e) {
+    e.preventDefault();
+    var cid = $(this).data('value');
+
+    function doCancelClearance() {
+      $.ajax({
+        type: 'POST',
+        url: '../auth/auth.php',
+        data: {
+          propertyClearanceCancelBtn_id: true,
+          propertyClearanceCancelBtn: cid
+        },
+        success: function (response) {
+          var res;
+          try { res = jQuery.parseJSON(response); } catch (err) { res = null; }
+          if (res && res.status === 200) {
+            if (typeof Swal !== 'undefined') {
+              Swal.fire({ position: 'center', icon: 'success', title: 'Cancelled Successfully', showConfirmButton: false, timer: 1200 }).then(function () {
+                if ($('#pcEditModal').length) {
+                  $('#pcEditModal').modal('hide');
+                }
+                if (typeof window.reloadPcClearanceTable === 'function') {
+                  window.reloadPcClearanceTable();
+                } else if (typeof clearanceTable !== 'undefined' && clearanceTable && clearanceTable.ajax && clearanceTable.ajax.reload) {
+                  clearanceTable.ajax.reload(null, false);
+                } else {
+                  location.reload();
+                }
+              });
+            } else {
+              if ($('#pcEditModal').length) {
+                $('#pcEditModal').modal('hide');
+              }
+              if (typeof window.reloadPcClearanceTable === 'function') {
+                window.reloadPcClearanceTable();
+              } else if (typeof clearanceTable !== 'undefined' && clearanceTable && clearanceTable.ajax && clearanceTable.ajax.reload) {
+                clearanceTable.ajax.reload(null, false);
+              } else {
+                location.reload();
+              }
+            }
+          } else {
+            var msg = (res && res.message) ? res.message : 'Unable to cancel.';
+            if (typeof Swal !== 'undefined') {
+              Swal.fire({ icon: 'error', title: msg });
+            }
+          }
+        }
+      });
+    }
+
+    // Confirmation (Cancel)
+    if (typeof Swal !== 'undefined' && Swal.fire) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'Cancel this clearance?',
+        text: 'This action cannot be undone.',
+        showCancelButton: true,
+        confirmButtonText: 'Yes, cancel it',
+        cancelButtonText: 'No, keep it'
+      }).then(function (result) {
+        if (result && result.isConfirmed) { doCancelClearance(); }
+      });
+    } else {
+      if (confirm('Are you sure you want to cancel this clearance?')) {
+        doCancelClearance();
+      }
+    }
+  });
+  
+  //adminstrator
+  $(document).on('submit','#admin_form',function (e){// to save adminstrator information
+    e.preventDefault();
+    var fd = new FormData(this);
+    fd.append("save_admin_info", true);
+  
+    $.ajax({
+      type: "POST",
+      url: "../auth/auth.php",
+      data: fd,
+      processData: false,
+      contentType: false,
+      success:function(response){
+        
+        var res = jQuery.parseJSON(response);
+  
+        if(res.status == 200 ){
+          Swal.fire({
+            position: 'center',
+            icon: 'success',
+            title: 'Save Successfully',
+            showConfirmButton: false,
+            timer: 1700
+          }).then(()=>{
+            $('#addAdministrator').modal('hide');
+            $('#admin_form')[0].reset();
+            location.reload();
+        });
+       }
+      }
+    });
+  });
+
+  $(document).on('click','.editAdmin', function (){// to fetch administrator information
+    var adminid = $(this).val();
+   $.ajax({
+     type:'GET',
+     url: '../auth/auth.php?adminid='+adminid,
+     success:function(response){
+  
+        var res = jQuery.parseJSON(response);
+  
+        if(res.status == 422){
+          alert(res.message);
+        }else if(res.status == 200 ){
+          
+          $('#id').val(res.data.admin_id);
+          $('#efname').val(res.data.first_name);
+          $('#elname').val(res.data.last_name);
+          $('#econtact').val(res.data.contact_number);
+          $('#eemail').val(res.data.email);
+          $('#empnumber').val(res.data.emp_number);
+          $('#erole').val(res.data.role);
+          $('#updateAdministrator').modal('show');
+        }
+     }
+   })
+  });
+  $(document).on('submit','#admin_update',function(e){ // to update administrator information
+    e.preventDefault();
+    var fd = new FormData(this);
+    fd.append("update_admin_info",true);
+
+    $.ajax({
+      type: "POST",
+      url: "../auth/auth.php",
+      data: fd,
+      processData: false,
+      contentType: false,
+      success:function(response){
+        var res = jQuery.parseJSON(response);
+
+        if(res.status == 200){
+            Swal.fire({
+                position: 'center',
+                icon: 'success',
+                title: 'Admin Updated Successfully',
+                showConfirmButton: false,
+                timer: 2000
+          }).then(()=>{
+            $('#updateAdministrato').modal('hide');
+            $('#admin_update')[0].reset();
+            location.reload();
+        });  
+      }
+      }
+    });
+ });
+ $(document).on('click','.delAdmin', function(e){// to delete administrator information
+  e.preventDefault();
+  if(confirm("Are you sure? ")){
+  var deladmin = $(this).val();
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data:{
+      'delete_admin':true,
+      'deladmin':deladmin
+    },
+    success:function(response){
+      var res = jQuery.parseJSON(response);
+      if(res.status == 500){
+        alert(res.message);
+      }else{
+        alert(res.message);
+        location.reload();
+      }
+    }
+  });
+ }
+ });
+
+ $(document).on('submit','#acct_update',function(e){ // to update account code
+    e.preventDefault();
+    var fd = new FormData(this);
+    fd.append("update_acct",true);
+
+    $.ajax({
+      type: "POST",
+      url: "../auth/auth.php",
+      data: fd,
+      processData: false,
+      contentType: false,
+      success:function(response){
+        var res = jQuery.parseJSON(response);
+
+        if(res.status == 200){
+            Swal.fire({
+                position: 'center',
+                icon: 'success',
+                title: 'Account Code Updated Successfully',
+                showConfirmButton: false,
+                timer: 2000
+          }).then(()=>{
+            $('#editAccntModal').modal('hide');
+            $('#acct_update')[0].reset();
+            if (window.GSO && window.GSO.GfAccountCodes && typeof window.GSO.GfAccountCodes.reload === 'function') {
+              window.GSO.GfAccountCodes.reload();
+            } else {
+              location.reload();
+            }
+        });  
+      }
+      }
+    });
+ });
+
+  // add account code
+  $(document).on('submit', '#acct_form', function(e){
+    e.preventDefault();
+    var $form = $(this);
+    if (typeof $form.valid === 'function' && !$form.valid()) { return; }
+
+    var fd = new FormData(this);
+    fd.append('save_acct', true);
+
+    $.ajax({
+      type: 'POST',
+      url: '../auth/auth.php',
+      data: fd,
+      processData: false,
+      contentType: false,
+      success: function(response){
+        var res;
+        try { res = jQuery.parseJSON(response); } catch (e) { res = null; }
+        if (res && res.status == 200) {
+          Swal.fire({ position:'center', icon:'success', title: res.message || 'Added successfully!', showConfirmButton:false, timer:1500 })
+            .then(function(){
+              $('#addAccntModal').modal('hide');
+              $('#acct_form')[0].reset();
+              if (window.GSO && window.GSO.GfAccountCodes && typeof window.GSO.GfAccountCodes.reload === 'function') {
+                window.GSO.GfAccountCodes.reload();
+              } else {
+                location.reload();
+              }
+            });
+        } else {
+          var msg = (res && res.message) ? res.message : 'Unable to save account code.';
+          if (window.Swal) { Swal.fire({ icon:'error', title: msg }); }
+        }
+      },
+      error: function(){
+        if (window.Swal) { Swal.fire({ icon:'error', title:'Request failed. Please try again.' }); }
+      }
+    });
+  });
+
+  // fetch account code info -> edit modal
+  $(document).on('click', '.editacct', function(e){
+    e.preventDefault();
+    var id = $(this).val();
+    if (!id) { return; }
+
+    $.ajax({
+      type: 'GET',
+      url: '../auth/auth.php',
+      data: { accntcode: id },
+      dataType: 'json',
+      success: function(res){
+        if (!res || res.status !== 200 || !res.data) {
+          if (window.Swal) { Swal.fire({ icon:'error', title:(res && res.message) ? res.message : 'Unable to load account code.' }); }
+          return;
+        }
+        $('#AccntId').val(res.data.id || '');
+        $('#eacctname').val(res.data.account_name || '');
+        $('#eacctcode').val(res.data.account_code || '');
+        $('#editAccntModal').modal('show');
+      },
+      error: function(){
+        if (window.Swal) { Swal.fire({ icon:'error', title:'Unable to load account code.' }); }
+      }
+    });
+  });
+ $(document).on('click','.delacct', function(e){ //to delate account code
+    e.preventDefault();
+
+    if(confirm("Are you sure? ")){
+      var delacct = $(this).val();
+      $.ajax({
+        type: "POST",
+        url: "../auth/auth.php",
+        data:{
+          'delete_acct':true,
+          'delacct':delacct
+        },
+        success:function(response){
+          var res = jQuery.parseJSON(response);
+          if (res.status == 200){
+            
+            Swal.fire({
+                position: 'center',
+                icon: 'success',
+                title: 'Account Code Deleted!',
+                showConfirmButton: false,
+                timer: 2000
+          }).then(()=>{
+            if (window.GSO && window.GSO.GfAccountCodes && typeof window.GSO.GfAccountCodes.reload === 'function') {
+              window.GSO.GfAccountCodes.reload();
+            } else {
+              location.reload();
+            }
+              }); 
+            }
+          }
+      });
+    }
+ });
+//employee
+$(document).on('submit','#emp_form',function(e){// to save employee information
+  e.preventDefault();
+  var fd = new FormData(this);
+  fd.append("save_employee_info",true);
+  $.ajax({
+    type: "POST",
+    url:  "../auth/auth.php",
+    data: fd,
+    processData: false,
+    contentType: false,
+    success:function(response){
+      var res = jQuery.parseJSON(response);
+      if(res.status==200){
+        Swal.fire({
+          position: 'center',
+          icon: 'success',
+          title: 'Save Successfully',
+          showConfirmButton: false,
+          timer: 1700
+        }).then(()=>{
+          $('#addEmployeeModal').modal('hide');
+          $('#emp_form')[0].reset();
+          location.reload();
+      });  
+      }
+    }
+  })
+});
+
+$(document).on('click','.editEmployee', function(){// to fetch employee information
+  var empId = $(this).val();
+  $.ajax({
+    type:'GET',
+    url:'../auth/auth.php?empid='+ empId,
+    success:function(response){
+
+      var res = jQuery.parseJSON(response);
+      
+     if(res.status == 200){
+        $('#empId').val(res.data.emp_id);
+        $('#name').val(res.data.name);
+          $('#edepartment').val(res.data.department_code || '');
+        $('#eposition').val(res.data.position);
+        $('#epcustodian').val(res.data.property_custodian);
+        $('#editEmployeeModal').modal('show');
+      }
+    }
+  });
+});
+
+$(document).on('submit','#emp_update',function(e){//to update employee information
+  e.preventDefault();
+  var fd = new FormData(this);
+  fd.append("update_employee_info", true);
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data: fd,
+    processData: false,
+    contentType: false,
+    timeout: 20000,
+    success: function(response){
+      var res = jQuery.parseJSON(response);
+
+      if(res.status==200){
+        Swal.fire({
+          position: 'center',
+          icon: 'success',
+          title: 'Employee Updated Successfully',
+          showConfirmButton: false,
+          timer: 2000
+        }).then(()=>{
+          $('#editEmployeeModal').modal('hide');
+          $('#emp_update')[0].reset();
+          location.reload();
+        });     
+      }
+    }
+  })
+});
+
+$(document).on('click','.deleteEmployee', function(e){//to delete employee data
+  e.preventDefault();
+  if(confirm("Are you sure? ")){
+  var delemployee = $(this).val();
+  
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data:{
+      'delete_emp':true,
+      'delemployee':delemployee
+    },
+    success:function(response){
+      var res = jQuery.parseJSON(response);
+      if(res.status==200){
+        alert(res.message);
+        location.reload();
+      }
+    }
+  });
+}
+});
+//employee
+
+//department
+$(document).on('submit','#dept_form',function(e){//to save department information
+  e.preventDefault();
+  var fd = new FormData(this);
+  fd.append("save_dept",true);
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data: fd,
+    processData: false,
+    contentType: false,
+    success:function(response){
+      var res = jQuery.parseJSON(response);
+        if(res.status == 200 ){
+          Swal.fire({
+            position: 'center',
+            icon: 'success',
+            title: 'Save Successfully',
+            showConfirmButton: false,
+            timer: 1700
+          }).then(()=>{
+            $('#addDeptModal').modal('hide');
+            $('#dept_form')[0].reset();
+            location.reload();
+        });  
+      }
+    }
+  });
+});
+$(document).on('click','.editdept', function(){// to fetch department information
+  var deptid = $(this).val();
+  $.ajax({
+    type:'GET',
+    url:'../auth/auth.php?deptid='+ deptid,
+    success:function(response){
+
+      var res = jQuery.parseJSON(response);
+      
+     if(res.status == 200){
+        $('#DeptId').val(res.data.dept_id);
+        // Populate agency type
+        var agencyVal = (res.data.agencies || '').trim();
+        if(agencyVal){
+          // Try direct set first
+          $('#eagency_type').val(agencyVal);
+          // If not selected (value not in list), append then select
+          if($('#eagency_type').val() !== agencyVal){
+            $('#eagency_type').append('<option value="'+agencyVal+'">'+agencyVal+'</option>')
+                               .val(agencyVal);
+          }
+        }
+        $('#edeptname').val(res.data.department_name);
+        $('#edeptcode').val(res.data.department_code);
+        $('#editDeptModal').modal('show');
+      }
+    }
+  });
+});
+$(document).on('submit','#dept_update',function(e){// to update department information
+  e.preventDefault();
+  var fd = new FormData(this);
+  fd.append("update_dept", true);
+
+    $.ajax({
+      type: "POST",
+      url: "../auth/auth.php",
+      data: fd,
+      processData: false,
+      contentType: false,
+      success: function(response){
+        var res = jQuery.parseJSON(response);
+
+        if(res.status == 200 ){
+          Swal.fire({
+            position: 'center',
+            icon: 'success',
+            title: 'Department Updated Successfully',
+            showConfirmButton: false,
+            timer: 2000
+          }).then(()=>{
+            $('#editDeptModal').modal('hide');
+            $('#dept_update')[0].reset();
+            location.reload();
+          });     
+          }
+        }
+    });
+});
+$(document).on('click','.deldept', function(e){// to delete department data
+  e.preventDefault();
+  if(confirm("Are you sure? ")){
+  var deldept = $(this).val();
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data:{
+      'delete_dept':true,
+      'deldept':deldept
+    },
+    success:function(response){
+      var res = jQuery.parseJSON(response);
+      if(res.status == 500){
+        alert(res.message);
+      }else{
+        alert(res.message);
+        location.reload();
+      }
+    }
+  });
+}
+});
+//department
+
+// ------------------------------
+// Property clearance: preview + confirm before submit
+// ------------------------------
+function pcIsNewEmployee(employeeVal){
+  return String(employeeVal || '').toLowerCase() === 'add_new_emp';
+}
+
+function pcEntrySubmitBtn(){
+  return $('#clearanceSubmitButton').closest('button');
+}
+
+function pcSyncNewEmployeeSection(employeeVal, sectionSelector, nameInputSelector, msgSelector, btnSelectorOrFn){
+  var isNew = pcIsNewEmployee(employeeVal);
+  var $section = $(sectionSelector);
+  var $name = $(nameInputSelector);
+  var $msg = $(msgSelector);
+  var $btn = (typeof btnSelectorOrFn === 'function') ? btnSelectorOrFn() : $(btnSelectorOrFn);
+
+  if(isNew){
+    $section.slideDown();
+    $name.prop('required', true);
+  } else {
+    $section.slideUp();
+    $name.val('').prop('required', false);
+    $msg.hide().text('');
+    if($btn.length){ $btn.prop('disabled', false); }
+  }
+}
+
+function pcSelectedEmployeePosition(){
+  var $opt = $('#employee option:selected');
+  if(!$opt.length){ return ''; }
+  var pos = ($opt.data('position') || '').toString().trim();
+  return pos;
+}
+
+function pcFetchAndFillEmployeePosition(empId){
+  var id = (empId || '').toString().trim();
+  if(!id){ return; }
+
+  $.ajax({
+    url: '../auth/auth.php',
+    type: 'GET',
+    data: { empid: id },
+    dataType: 'json',
+    success: function(res){
+      if(!res || res.status !== 200 || !res.data){ return; }
+
+      // Avoid overwriting user edits or stale responses
+      var currentSelected = ($('#employee').val() || '').toString().trim();
+      if(currentSelected !== id){ return; }
+
+      var currentPos = ($('#position').val() || '').toString().trim();
+      if(currentPos){ return; }
+
+      var fetchedPos = (res.data.position || '').toString().trim();
+      if(fetchedPos){ $('#position').val(fetchedPos); }
+    }
+  });
+}
+
+function pcSyncPositionField(employeeVal){
+  // New employee: always require manual entry
+  if(pcIsNewEmployee(employeeVal)){
+    $('#position').val('');
+    return;
+  }
+
+  // Nothing selected
+  if(!employeeVal){
+    $('#position').val('');
+    return;
+  }
+
+  // Existing employee: fill from DB if present, else leave blank for manual entry
+  var pos = pcSelectedEmployeePosition();
+  $('#position').val(pos || '');
+
+  // Fallback: if option had no data-position, fetch employee record
+  if(!pos){ pcFetchAndFillEmployeePosition(employeeVal); }
+}
+
+function pcSetPreviewText(selector, value){
+  var txt = (value === null || value === undefined || value === '') ? '-' : String(value);
+  $(selector).text(txt);
+}
+
+function pcOpenPreviewModal(){
+  var deptVal = $('#dept').val() || '';
+  var deptText = ($('#dept option:selected').text() || '').trim();
+
+  var employeeVal = $('#employee').val() || '';
+  var employeeText = ($('#employee option:selected').text() || '').trim();
+
+  var newEmployeeName = ($('#new_employee_name').val() || '').toString().trim();
+  var position = ($('#position').val() || '').toString().trim();
+
+  var ctypeVal = $('#ctype').val() || '';
+  var ctypeText = ($('#ctype option:selected').text() || '').trim();
+
+  var ornumber = ($('#ornumber').val() || '').toString().trim();
+  var address = ($('#address').val() || '').toString().trim();
+  var cityVal = $('#city').val() || '';
+  var cityText = ($('#city option:selected').text() || '').trim();
+
+  // hidden values for submission
+  $('#pv_ctrlno').val($('#ctrlno').val() || '');
+  $('#pv_dept').val(deptVal);
+  $('#pv_employee').val(employeeVal);
+  $('#pv_emp_id').val('');
+  $('#pv_new_employee_name').val(newEmployeeName);
+  $('#pv_position').val(position);
+  $('#pv_ctype').val(ctypeVal);
+  $('#pv_ornumber').val(ornumber);
+  $('#pv_address').val(address);
+  $('#pv_city').val(cityVal);
+
+  // readable preview
+  pcSetPreviewText('#pv_txt_dept', deptText);
+  if(pcIsNewEmployee(employeeVal)){
+    pcSetPreviewText('#pv_txt_employee', newEmployeeName ? (newEmployeeName.toUpperCase()) : employeeText);
+  } else {
+    pcSetPreviewText('#pv_txt_employee', employeeText);
+  }
+  pcSetPreviewText('#pv_txt_position', position ? position.toUpperCase() : position);
+  pcSetPreviewText('#pv_txt_ctype', ctypeText);
+  pcSetPreviewText('#pv_txt_ornumber', ornumber);
+  pcSetPreviewText('#pv_txt_address', address ? address.toUpperCase() : address);
+  pcSetPreviewText('#pv_txt_city', cityText);
+
+  $('#addClearanceModal').modal('hide');
+  $('#pcPreviewModal').modal('show');
+}
+
+function pcBindNewEmployeeNameValidation(inputSelector, msgSelector, btnSelectorOrFn){
+  var debounceTimer;
+  $(document).off('input.pcName', inputSelector).on('input.pcName', inputSelector, function(){
+    clearTimeout(debounceTimer);
+    var name = ($(this).val() || '').toString().trim();
+    var $msg = $(msgSelector);
+    var $btn = (typeof btnSelectorOrFn === 'function') ? btnSelectorOrFn() : $(btnSelectorOrFn);
+
+    if(!name){
+      $msg.hide().text('');
+      if($btn.length){ $btn.prop('disabled', false); }
+      return;
+    }
+
+    $msg.show().text('Validating...').css('color','red');
+    if($btn.length){ $btn.prop('disabled', true); }
+
+    debounceTimer = setTimeout(function(){
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: { validate_employee_name: 1, emp_name: name },
+        dataType: 'json',
+        success: function(res){
+          if(res && res.exists){
+            $msg.text('Employee name already exists!').css('color','red');
+            if($btn.length){ $btn.prop('disabled', true); }
+          } else {
+            $msg.text('Employee name is available.').css('color','green');
+            if($btn.length){ $btn.prop('disabled', false); }
+          }
+        },
+        error: function(){
+          $msg.text('Validation error.').css('color','red');
+          if($btn.length){ $btn.prop('disabled', true); }
+        }
+      });
+    }, 700);
+  });
+}
+
+$(document).off('change.pcEmployee', '#employee').on('change.pcEmployee', '#employee', function(){
+  var employeeVal = $(this).val();
+  pcSyncNewEmployeeSection(employeeVal, '#add_new_employee', '#new_employee_name', '#name-validation-msg', pcEntrySubmitBtn);
+  pcSyncPositionField(employeeVal);
+});
+pcBindNewEmployeeNameValidation('#new_employee_name', '#name-validation-msg', pcEntrySubmitBtn);
+
+// Property Clearance: department type-to-search + employee select2
+$(function(){
+  if(!$('#pc_form').length){ return; }
+
+  // Init department datalist autocomplete (type to search) for clearance modal
+  if(window.GSO && window.GSO.UI && typeof window.GSO.UI.initDeptDatalistAutocomplete === 'function'){
+    window.GSO.UI.initDeptDatalistAutocomplete({
+      select: '#dept',
+      input: '#deptSearch',
+      list: '#deptDatalist',
+      modal: '#addClearanceModal'
+    });
+  }
+
+  // Init Select2 for employee dropdown when the modal opens
+  $('#addClearanceModal').off('shown.bs.modal.pcSelect2').on('shown.bs.modal.pcSelect2', function(){
+    if(window.GSO && window.GSO.UI && typeof window.GSO.UI.initPcEmployeeSelect2 === 'function'){
+      window.GSO.UI.initPcEmployeeSelect2();
+    }
+  });
+});
+
+$(document).off('submit.pcForm', '#pc_form').on('submit.pcForm', '#pc_form', function(e){
+  e.preventDefault();
+  var $form = $(this);
+  if (typeof $form.valid === 'function' && !$form.valid()) { return; }
+  pcOpenPreviewModal();
+});
+
+$(document).off('click.pcPreviewBack', '#pcPreviewBackBtn').on('click.pcPreviewBack', '#pcPreviewBackBtn', function(){
+  $('#pcPreviewModal').modal('hide');
+  $('#addClearanceModal').modal('show');
+});
+
+$(document).off('click.pcPreviewConfirm', '#pcPreviewConfirmBtn').on('click.pcPreviewConfirm', '#pcPreviewConfirmBtn', function(){
+  var $btn = $(this);
+  if ($btn.data('submitting')) { return; }
+
+  var formEl = document.getElementById('pc_preview_form');
+  if (formEl && !formEl.checkValidity()) { formEl.reportValidity(); return; }
+
+  Swal.fire({
+    icon: 'question',
+    title: 'Submit the application now?',
+    showCancelButton: true,
+    confirmButtonText: 'YES',
+    cancelButtonText: 'NO'
+  }).then(function(result){
+    if(!result.isConfirmed){
+      // NO -> keep preview modal open
+      return;
+    }
+
+    $btn.data('submitting', true);
+    var originalHtml = $btn.html();
+    $btn.prop('disabled', true).html('<i class="fas fa-circle-notch fa-spin"></i>&nbsp;Submitting...');
+
+    var fd = new FormData(formEl);
+    fd.append('save_pc', true);
+
+    $.ajax({
+      type: 'POST',
+      url: '../auth/auth.php',
+      data: fd,
+      processData: false,
+      contentType: false,
+      success: function(response){
+        var res;
+        try { res = jQuery.parseJSON(response || '{}'); }
+        catch(e){
+          Swal.fire({ icon:'error', title:'Unexpected response', text:'The server returned an invalid response. Please try again.' });
+          return;
+        }
+
+        if(res.status == 200){
+          Swal.fire({ position:'center', icon:'success', title:'Form submitted successfully.', showConfirmButton:false, timer:1500 });
+          setTimeout(function(){
+            $('#pcPreviewModal').modal('hide');
+            $('#addClearanceModal').modal('hide');
+            var entryForm = document.getElementById('pc_form');
+            if(entryForm){ entryForm.reset(); }
+
+            if(res.should_print){
+              var url = '../admin/print-property-clearance.php?control_id=' + encodeURIComponent(res.control_number);
+              var win = window.open(url, '_blank');
+              if (win) { win.print(); }
+              else { alert('Please allow popups for this site.'); }
+            }
+            location.reload();
+          }, 1700);
+        } else if (res.status == 409) {
+          Swal.fire({ icon:'warning', title:'Application already in process', text: res.message || 'This employee already has an ongoing RESIGNATION/RETIREMENT clearance.' });
+        } else if (res.status == 422) {
+          Swal.fire({ icon:'warning', title:'Validation error', text: res.message || 'Please check your inputs.' });
+        } else if (res.status == 500) {
+          Swal.fire({ icon:'error', title:'Server error', text: res.message || 'Unexpected error occurred.' });
+        } else {
+          Swal.fire({ icon:'info', title:'Notice', text: res.message || 'Unexpected response.' });
+        }
+      },
+      error: function(){
+        Swal.fire({ icon:'error', title:'Network error', text:'Please check your connection and try again.' });
+      },
+      complete: function(){
+        $btn.data('submitting', false);
+        $btn.prop('disabled', false).html(originalHtml);
+      }
+    });
+  });
+});
+// ------------------------------
+// End property clearance preview
+// ------------------------------
+
+// ==========================================================
+// Add Item: Bundle equipment property numbers
+// - Bundle rows are assigned to a parent set
+// - Each bundle row mirrors the selected parent set's property number
+// - Bundle set selection drives both property number and multi-end-user mapping
+// ==========================================================
+window.GSO = window.GSO || {};
+window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
+  var inited = false;
+  var refreshTimer = null;
+
+  function hasUI(){
+    return $('#addItemModal').length && $('#bundleRows').length && $('#btnAddBundleRow').length;
+  }
+
+  function esc(text){ return $('<div>').text(text === null || text === undefined ? '' : String(text)).html(); }
+
+  function setBundleHelp(msg){
+    var $h = $('#bundleHelp');
+    if(!$h.length){ return; }
+    if(!msg){ $h.hide().text(''); return; }
+    $h.show().text(String(msg));
+  }
+
+  function getParentQty(){
+    var q = parseInt($('#quantity').val(), 10);
+    if (!q || q < 1) { q = 1; }
+    return q;
+  }
+
+  function getParentPropertyNumbersPreview(){
+    var out = [];
+    $('#itemSetRows .js-item-property-number').each(function(){
+      var value = String($(this).val() || '').trim();
+      out.push(value);
+    });
+    return out.filter(function(v){ return v !== ''; });
+  }
+
+  function nextPropertyNumber(num){
+    var parts = String(num || '').split('-');
+    if (parts.length < 4) { return String(num || ''); }
+    var idx = parts.length - 2;
+    var seq = String(parts[idx] || '');
+    if (!seq || !/^\d+$/.test(seq)) { return String(num || ''); }
+    var pad = seq.length;
+    parts[idx] = String((parseInt(seq, 10) || 0) + 1).padStart(pad, '0');
+    return parts.join('-');
+  }
+
+  function buildBundleSetOptionsHtml(selected){
+    var qty = getParentQty();
+    var sel = String(selected || '').trim();
+    var html = '<option value="">-SELECT-</option>';
+    for (var i = 1; i <= qty; i++) {
+      var s = (sel === String(i)) ? ' selected' : '';
+      html += '<option value="' + i + '"' + s + '>Set ' + i + ' (Unit ' + i + ')</option>';
+    }
+    return html;
+  }
+
+  function syncBundleSetSelectors(){
+    var qty = getParentQty();
+    bundleRowEls().each(function(){
+      var $sel = $(this).find('select[name="bundle_parent_index[]"]');
+      if (!$sel.length) { return; }
+      var current = String($sel.val() || '').trim();
+      $sel.html(buildBundleSetOptionsHtml(current));
+      if (!current || (parseInt(current, 10) > qty)) {
+        $sel.val('');
+      }
+      if (qty === 1 && !$sel.val()) {
+        $sel.val('1');
+      }
+    });
+  }
+
+  function syncBundlePropertyNumbers(){
+    var parentNums = getParentPropertyNumbersPreview();
+    bundleRowEls().each(function(){
+      var $row = $(this);
+      var setVal = String($row.find('select[name="bundle_parent_index[]"]').val() || '').trim();
+      var $input = $row.find('input[name="bundle_property_number[]"]');
+      if (!setVal || !parentNums.length) {
+        $input.val('');
+        return;
+      }
+      var idx = parseInt(setVal, 10);
+      $input.val((idx >= 1 && idx <= parentNums.length) ? parentNums[idx - 1] : '');
+    });
+  }
+
+  function bundleRowEls(){
+    return $('#bundleRows .bundle-row');
+  }
+
+  function syncBundleCardVisibility(animate){
+    var hasRows = bundleRowEls().length > 0;
+    var $body = $('#bundleCardBody');
+    var $rows = $('#bundleRows');
+    var doAnim = (animate !== false);
+    var speed = doAnim ? 320 : 0;
+    var easing = 'swing';
+
+    if (hasRows) {
+      $rows.show();
+      if ($body.is(':visible')) { return; }
+      $body.stop(true, true).slideDown(speed, easing);
+      return;
+    }
+    if (!$body.is(':visible')) {
+      $rows.hide().empty();
+      return;
+    }
+    $body.stop(true, true).slideUp(speed, easing, function(){
+      $rows.hide();
+    });
+  }
+
+  function getBundleAssetOptionsHtml(){
+    var html = String($('#asset').html() || '');
+    if (!html || !html.trim()) { html = '<option value="">-SELECT-</option>'; }
+    return html;
+  }
+
+  function getBundleCategoryOptionsHtml(){
+    var html = String($('#category').html() || '');
+    if (!html || !html.trim()) { html = '<option value="">-SELECT-</option>'; }
+    return html;
+  }
+
+  function addBundleRow(){
+    var opts = getBundleAssetOptionsHtml();
+    var catOpts = getBundleCategoryOptionsHtml();
+    var idx = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+    var row = ''
+      + '<div class="border rounded p-3 mb-2 bundle-row" data-bundle-row="' + esc(idx) + '">' 
+      + '  <div class="d-flex justify-content-between align-items-center mb-2">'
+      + '    <strong>Bundle Item</strong>'
+      + '    <button type="button" class="btn btn-sm btn-outline-danger btnRemoveBundleRow" title="Remove">'
+      + '      <i class="fas fa-trash"></i>'
+      + '    </button>'
+      + '  </div>'
+      + '  <div class="form-row">'
+      + '    <div class="col-md-8">'
+      + '      <div class="form-row">'
+      + '        <div class="form-group col-md-4">'
+      + '          <label>Bundle Set</label>'
+      + '          <select class="form-control" name="bundle_parent_index[]">' + buildBundleSetOptionsHtml('') + '</select>'
+      + '        </div>'
+      + '        <div class="form-group col-md-4">'
+      + '          <label>Category</label>'
+      + '          <select class="form-control" name="bundle_category[]">' + catOpts + '</select>'
+      + '        </div>'
+      + '        <div class="form-group col-md-4">'
+      + '          <label>Asset Class</label>'
+      + '          <select class="form-control" name="bundle_asset_class[]">' + opts + '</select>'
+      + '        </div>'
+      + '      </div>'
+      + '      <div class="form-row">'
+      + '        <div class="form-group col-md-4 mb-0">'
+      + '          <label>Primary Serial Number</label>'
+      + '          <input type="text" class="form-control text-uppercase" name="bundle_serial1[]" placeholder="Enter serial number">'
+      + '        </div>'
+      + '        <div class="form-group col-md-4 mb-0">'
+      + '          <label>Secondary Serial Number</label>'
+      + '          <input type="text" class="form-control text-uppercase" name="bundle_serial2[]" placeholder="Enter serial number">'
+      + '        </div>'
+      + '        <div class="form-group col-md-4 mb-0">'
+      + '          <label>Property Number</label>'
+      + '          <input type="text" class="form-control text-uppercase" name="bundle_property_number[]" placeholder="Property Number" readonly value="">'
+      + '        </div>'
+      + '      </div>'
+      + '    </div>'
+      + '    <div class="col-md-4">'
+      + '      <div class="form-group">'
+      + '        <label>Brand/Model'
+      + '          <span class="text-muted" style="margin-left:10px;">'
+      + '            <input type="checkbox" class="form-check-input bundle-no-brand-model" style="position:static; margin-left:0; margin-right:6px;">'
+      + '            <span class="form-check-label">no brand/model</span>'
+      + '          </span>'
+      + '        </label>'
+      + '        <input type="text" class="form-control text-uppercase" name="bundle_brand_model[]" placeholder="Enter brand/model">'
+      + '      </div>'
+      + '      <div class="form-group mb-0">'
+      + '        <label>Description</label>'
+      + '        <textarea class="form-control text-uppercase" name="bundle_description[]" rows="5" placeholder="Enter description"></textarea>'
+      + '      </div>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>';
+
+    $('#bundleRows').append(row).show();
+    syncBundleSetSelectors();
+    // Default bundle category to the parent category if available
+    var pCat = String($('#category').val() || '').trim();
+    if (pCat) {
+      try {
+        var $last = $('#bundleRows .bundle-row').last();
+        var $sel = $last.find('select[name="bundle_category[]"]');
+        if ($sel.length && $sel.find('option[value="' + pCat + '"]').length) {
+          $sel.val(pCat);
+        }
+      } catch (e) {}
+    }
+    syncBundleCardVisibility(true);
+    // Ensure deptSearch -> dept select sync has a chance to run
+    try { $('#deptSearch').trigger('change'); } catch(e) {}
+    scheduleRefresh();
+  }
+
+  function scheduleRefresh(){
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(function(){
+      refreshBundlePropertyNumbers();
+    }, 250);
+  }
+
+  function refreshBundlePropertyNumbers(){
+    if (!hasUI()) { return; }
+    if (!bundleRowEls().length) { return; }
+
+    if (String($('#fund').val() || '').trim().toUpperCase() === 'TRUST FUND') {
+      $('input[name="bundle_property_number[]"]').val('');
+      setBundleHelp('');
+      return;
+    }
+
+    var first = String($('#par_number_value').val() || '').trim();
+    if (!first) {
+      $('input[name="bundle_property_number[]"]').val('');
+      setBundleHelp('Parent property number is not yet generated.');
+      return;
+    }
+    setBundleHelp('');
+    syncBundlePropertyNumbers();
+  }
+
+  function init(){
+    if (inited) { return; }
+    if (!hasUI()) { return; }
+    inited = true;
+
+    $(document).off('click.addBundleRow', '#btnAddBundleRow').on('click.addBundleRow', '#btnAddBundleRow', function(){
+      addBundleRow();
+    });
+
+    $(document).off('click.removeBundleRow', '.btnRemoveBundleRow').on('click.removeBundleRow', '.btnRemoveBundleRow', function(){
+      $(this).closest('.bundle-row').remove();
+      syncBundleCardVisibility(true);
+      scheduleRefresh();
+    });
+
+    $(document).off('change.bundleCategory', 'select[name="bundle_category[]"]').on('change.bundleCategory', 'select[name="bundle_category[]"]', function(){
+      scheduleRefresh();
+    });
+
+    $(document).off('change.bundleSet', 'select[name="bundle_parent_index[]"]').on('change.bundleSet', 'select[name="bundle_parent_index[]"]', function(){
+      scheduleRefresh();
+    });
+
+    $(document).off('input.bundleQty change.bundleQty', '#quantity').on('input.bundleQty change.bundleQty', '#quantity', function(){
+      syncBundleSetSelectors();
+      scheduleRefresh();
+    });
+
+    // Bundle Brand/Model: "no brand/model" checkbox behavior
+    $(document).off('change.bundleNoBrandModel', '#bundleRows .bundle-no-brand-model').on('change.bundleNoBrandModel', '#bundleRows .bundle-no-brand-model', function(){
+      var $cb = $(this);
+      var $row = $cb.closest('.bundle-row');
+      var $model = $row.find('input[name="bundle_brand_model[]"]');
+      if(!$model.length){ return; }
+
+      var checked = $cb.is(':checked');
+      var DEFAULT_VAL = 'NO BRAND/MODEL';
+      if(checked){
+        $model.val(DEFAULT_VAL).prop('readonly', true);
+      } else {
+        if(String($model.val() || '').trim().toUpperCase() === DEFAULT_VAL){
+          $model.val('');
+        }
+        $model.prop('readonly', false);
+      }
+    });
+
+    // Parent fields that influence numbering
+    $(document).off('change.bundleParent', '#fund, #year, .js-item-account-code, #dept').on('change.bundleParent', '#fund, #year, .js-item-account-code, #dept', function(){
+      scheduleRefresh();
+    });
+
+    // Department is a type-to-search input; refresh when it changes too.
+    $(document).off('change.bundleDeptSearch', '#deptSearch').on('change.bundleDeptSearch', '#deptSearch', function(){
+      scheduleRefresh();
+    });
+
+    // Parent category: if bundle rows have no category selected yet, default them.
+    $(document).off('change.bundleParentCat', '#category').on('change.bundleParentCat', '#category', function(){
+      var pCat = String($('#category').val() || '').trim();
+      if (!pCat) { scheduleRefresh(); return; }
+      bundleRowEls().each(function(){
+        var $sel = $(this).find('select[name="bundle_category[]"]');
+        if (!$sel.length) { return; }
+        var cur = String($sel.val() || '').trim();
+        if (!cur && $sel.find('option[value="' + pCat + '"]').length) {
+          $sel.val(pCat);
+        }
+      });
+      scheduleRefresh();
+    });
+
+    $('#addItemModal').off('shown.bs.modal.addItemBundle').on('shown.bs.modal.addItemBundle', function(){
+      syncBundleCardVisibility(false);
+      syncBundleSetSelectors();
+      scheduleRefresh();
+    });
+  }
+
+  // Best-effort auto-init
+  $(function(){ init(); });
+
+  return {
+    init: init,
+    refreshBundlePropertyNumbers: refreshBundlePropertyNumbers,
+    syncBundleCardVisibility: syncBundleCardVisibility
+  };
+})();
+
+// ==========================================================
+// Add Item: Year Acquired + PAR/ICS No auto-generate
+// ==========================================================
+window.GSO = window.GSO || {};
+window.GSO.AddItemMeta = window.GSO.AddItemMeta || (function(){
+  var inited = false;
+  var lastGenReq = 0;
+
+  function hasUI(){
+    return $('#addItemModal').length && $('#addItem').length;
+  }
+
+  function fillYearOptions(){
+    var $year = $('#year');
+    if (!$year.length) { return; }
+
+    // If already populated, leave it (avoid clobbering user's selection)
+    if ($year.find('option').length > 1) { return; }
+
+    var start = 2001;
+    var current = new Date().getFullYear();
+    var options = "<option value='' >-SELECT-</option>";
+    for (var y = current; y >= start; y--) {
+      options += "<option value='" + y + "'>" + y + "</option>";
+    }
+    options += "<option value='RFS'>Found at Station</option>";
+    $year.html(options);
+  }
+
+  function setParIcsHelp(msg, kind){
+    var $h = $('#par-ics-help');
+    if (!$h.length) { return; }
+    if (!msg) { $h.hide().text(''); return; }
+    $h.show().text(String(msg));
+    $h.removeClass('text-muted text-success text-danger');
+    if (kind === 'success') { $h.addClass('text-success'); }
+    else if (kind === 'error') { $h.addClass('text-danger'); }
+    else { $h.addClass('text-muted'); }
+  }
+
+  function isAutoParIcs(){
+    return $('#par_ics_auto').is(':checked');
+  }
+
+  function currentCategory(){
+    return String($('#category').val() || '').trim().toUpperCase();
+  }
+
+  function lockParIcsInput(locked){
+    var $inp = $('#par_ics_no');
+    if (!$inp.length) { return; }
+    $inp.prop('readonly', !!locked);
+  }
+
+  function syncYearLockWithCondition(){
+    var $year = $('#year');
+    if (!$year.length) { return; }
+
+    var cond = String($('#condition').val() || '').trim().toUpperCase();
+    var currentYear = String(new Date().getFullYear());
+
+    // Ensure options exist (server usually renders them, but keep this as a fallback)
+    if ($year.find('option').length === 0) {
+      fillYearOptions();
+    }
+
+    if (!cond) {
+      $year.val('');
+      $year.prop('disabled', true);
+      $year.trigger('change');
+    } else if (cond === 'NEW') {
+      $year.val(currentYear);
+      $year.prop('disabled', true);
+      $year.trigger('change');
+    } else {
+      $year.prop('disabled', false);
+    }
+  }
+
+  function generateParIcs(){
+    if (!hasUI()) { return; }
+    if (!isAutoParIcs()) { return; }
+    var cat = currentCategory();
+    var cond = String($('#condition').val() || '').trim().toUpperCase();
+    if (cat !== 'PAR' && cat !== 'ICS') {
+      // Keep it readonly in NEW mode; just guide the user to pick the category.
+      lockParIcsInput(true);
+      $('#par_ics_no').val('');
+      setParIcsHelp('', 'muted');
+      return;
+    }
+
+    lockParIcsInput(true);
+    setParIcsHelp('Generating...', 'muted');
+
+    var reqId = ++lastGenReq;
+    $.ajax({
+      url: '../auth/auth.php',
+      method: 'POST',
+      dataType: 'json',
+      data: { generate_par_ics_code: 1, category: cat, condition: cond },
+      success: function(res){
+        if (reqId !== lastGenReq) { return; }
+        if (res && res.status === 200 && res.code) {
+          $('#par_ics_no').val(String(res.code));
+          setParIcsHelp('', 'muted');
+        } else {
+          setParIcsHelp((res && (res.error || res.message)) ? (res.error || res.message) : 'Failed to auto-generate.', 'error');
+        }
+      },
+      error: function(){
+        if (reqId !== lastGenReq) { return; }
+        setParIcsHelp('Failed to auto-generate (network/server error).', 'error');
+      }
+    });
+  }
+
+  function validateParIcsUnique(){
+    if (!hasUI()) { return; }
+    if (isAutoParIcs()) { return; }
+    var val = String($('#par_ics_no').val() || '').trim().toUpperCase();
+    var cond = String($('#condition').val() || '').trim().toUpperCase();
+    var po = String($('#po').val() || '').trim().toUpperCase();
+    if (!val) {
+      setParIcsHelp('', 'muted');
+      return;
+    }
+
+    $.ajax({
+      url: '../auth/auth.php',
+      method: 'POST',
+      dataType: 'json',
+      data: { validate_par_ics_unique: 1, par_ics_no: val, condition: cond, purchase_order: po },
+      success: function(res){
+        if (res && res.status === 200) {
+          if (res.exists && res.po_match) {
+            setParIcsHelp('', 'muted');
+          } else if (res.exists) {
+            setParIcsHelp('Already exists', 'error');
+          } else {
+            setParIcsHelp('PAR/ICS No. is available.', 'success');
+          }
+        }
+      }
+    });
+  }
+
+  function onConditionChange(){
+    if (!hasUI()) { return; }
+    syncYearLockWithCondition();
+    applyParIcsMode();
+  }
+
+  function applyParIcsMode(){
+    if (!hasUI()) { return; }
+    if (isAutoParIcs()) {
+      lockParIcsInput(true);
+      generateParIcs();
+    } else {
+      lockParIcsInput(false);
+      $('#par_ics_no').val('');
+      setParIcsHelp('', 'muted');
+    }
+  }
+
+  function init(){
+    if (inited) { return; }
+    if (!hasUI()) { return; }
+    inited = true;
+
+    // Ensure Year dropdown is always populated when modal opens
+    $('#addItemModal')
+      .off('shown.bs.modal.addItemMeta')
+      .on('shown.bs.modal.addItemMeta', function(){
+        fillYearOptions();
+        syncYearLockWithCondition();
+        // Enforce NEW-condition default behavior on open (browser may restore previous selection).
+        onConditionChange();
+        // If in NEW mode, ensure code is generated
+        if (isAutoParIcs()) { generateParIcs(); }
+      });
+
+    $(document)
+      .off('change.addItemMetaCond', '#condition')
+      .on('change.addItemMetaCond', '#condition', onConditionChange);
+
+    $(document)
+      .off('change.addItemMetaCat', '#category')
+      .on('change.addItemMetaCat', '#category', function(){
+        if (isAutoParIcs()) { generateParIcs(); }
+      });
+
+    $(document)
+      .off('blur.addItemMetaUnique', '#par_ics_no')
+      .on('blur.addItemMetaUnique', '#par_ics_no', validateParIcsUnique);
+
+    $(document)
+      .off('change.addItemAutoChk', '#par_ics_auto')
+      .on('change.addItemAutoChk', '#par_ics_auto', applyParIcsMode);
+
+    // Best-effort: populate year even if modal isn't opened yet
+    fillYearOptions();
+    syncYearLockWithCondition();
+  }
+
+  $(function(){ init(); });
+  return { init: init, fillYearOptions: fillYearOptions, generateParIcs: generateParIcs, syncYearLockWithCondition: syncYearLockWithCondition };
+})();
+
+// ==========================================================
+// Add Item page UI (admin/add-item.php)
+// - Migrated from inline JS to keep templates clean
+// - Guarded so it only runs on the Add Item modal/form
+// ==========================================================
+window.GSO = window.GSO || {};
+window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
+  var inited = false;
+  var MAX_ITEM_SETS = 10;
+
+  var empOptionsAll = '';
+  var itemSetByRow = {};
+  var endUserByRow = {};
+
+  var reqFundDepts = null;
+  var debFundDepts = null;
+  var debPropNum = null;
+
+  function hasUI(){
+    return $('#addItemModal').length && $('#addItem').length;
+  }
+
+  function toRowKey(rowIndex){
+    var n = parseInt(rowIndex, 10);
+    if (!n || n < 1) { return null; }
+    return String(n);
+  }
+
+  function esc(text){
+    return $('<div>').text(text === null || text === undefined ? '' : String(text)).html();
+  }
+
+  function normalizeSetCount(count){
+    var normalized = parseInt(count, 10) || 1;
+    if (normalized < 1) { normalized = 1; }
+    if (normalized > MAX_ITEM_SETS) { normalized = MAX_ITEM_SETS; }
+    return normalized;
+  }
+
+  function getSetCount(){
+    var count = normalizeSetCount($('#quantity').val());
+    if (String($('#quantity').val() || '') !== String(count)) {
+      $('#quantity').val(count);
+    }
+    return count;
+  }
+
+  function getSetLabel(setIndex){
+    return 'Set ' + setIndex;
+  }
+
+  function defaultItemSetState(){
+    return {
+      itemQuantity: 1,
+      unit: '',
+      asset: '',
+      accountCode: '',
+      noAccountProperty: false,
+      brand: '',
+      noBrand: false,
+      addSerial: false,
+      description: '',
+      serials: {},
+      serial1: '',
+      serial2: '',
+      unitvalue: '0.00',
+      noAmount: false,
+      remarks: ''
+    };
+  }
+
+  function getItemSetState(setIndex){
+    var idxKey = toRowKey(setIndex);
+    if (!idxKey) { return defaultItemSetState(); }
+    if (!itemSetByRow[idxKey]) {
+      itemSetByRow[idxKey] = defaultItemSetState();
+    }
+    return $.extend({}, defaultItemSetState(), itemSetByRow[idxKey]);
+  }
+
+  function setPrimaryId(fieldName, setIndex){
+    if (setIndex !== 1) { return ''; }
+    var idMap = {
+      unit: 'unit',
+      asset: 'asset',
+      brand: 'brand',
+      noBrand: 'noBrandModelCheckBox',
+      addSerial: 'addSerialCheckBox',
+      description: 'description',
+      unitvalue: 'unitvalue',
+      noAmount: 'noAmountValueCheckBox',
+      total: 'total_amount',
+      accountCode: 'account_code',
+      noAccountProperty: 'noAccountPropertyCheckBox',
+      remarks: 'remarks'
+    };
+    return idMap[fieldName] ? (' id="' + idMap[fieldName] + '"') : '';
+  }
+
+  function getItemUnitOptionsHtml(){
+    return String($('#itemUnitOptionsTemplate').html() || '<option value="">-SELECT-</option>');
+  }
+
+  function getItemAccountCodeOptionsHtml(){
+    return String($('#itemAccountCodeOptionsTemplate').html() || '<option value="">-SELECT-</option>');
+  }
+
+  function usesManualAccountCodeInput(){
+    var fund = String($('#fund').val() || '').trim().toUpperCase();
+    return fund === 'TRUST FUND' || fund === 'DONATION';
+  }
+
+  function sanitizeManualAccountCode(value){
+    return String(value || '').replace(/[^0-9-]/g, '').slice(0, 18);
+  }
+
+  function buildAccountCodeControlHtml(setIndex, state){
+    var primaryId = setPrimaryId('accountCode', setIndex);
+    if (usesManualAccountCodeInput()) {
+      return '<input type="text" class="form-control js-item-account-code" name="account_code[' + setIndex + ']" inputmode="numeric" maxlength="18" pattern="^[0-9-]{1,18}$" title="Use numbers and hyphen only, maximum 18 characters" placeholder="Enter account code" value="' + esc(sanitizeManualAccountCode(state.accountCode)) + '" required' + primaryId + '>';
+    }
+    return '<select class="form-control js-item-account-code" name="account_code[' + setIndex + ']" required' + primaryId + '>' + withSelectedOption(getItemAccountCodeOptionsHtml(), state.accountCode) + '</select>';
+  }
+
+  function getItemAssetOptionsHtml(){
+    return String($('#itemAssetOptionsTemplate').html() || '<option value="">-SELECT-</option>');
+  }
+
+  function withSelectedOption(optionsHtml, selectedValue){
+    var $wrap = $('<select>' + optionsHtml + '</select>');
+    $wrap.val(String(selectedValue || ''));
+    return $wrap.html();
+  }
+
+  function parseMoneyValue(raw){
+    var s = String(raw || '').replace(/,/g, '').trim();
+    var n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function formatMoneyValue(n){
+    var num = Number(n || 0);
+    if (!isFinite(num)) { num = 0; }
+    return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function snapshotItemSetInputsIntoCache(){
+    $('#itemSetRows .item-set-card').each(function(){
+      var $row = $(this);
+      var idxKey = toRowKey($row.data('setIndex'));
+      if (!idxKey) { return; }
+      var serials = {};
+      $row.find('.js-item-serial-copy-row').each(function(){
+        var copyKey = toRowKey($(this).data('copyIndex'));
+        if (!copyKey) { return; }
+        serials[copyKey] = {
+          serial1: String($(this).find('.js-item-serial1').val() || ''),
+          serial2: String($(this).find('.js-item-serial2').val() || '')
+        };
+      });
+      itemSetByRow[idxKey] = {
+        itemQuantity: Math.max(1, parseInt($row.find('.js-item-quantity').val(), 10) || 1),
+        unit: String($row.find('.js-item-unit').val() || ''),
+        asset: String($row.find('.js-item-asset').val() || ''),
+        accountCode: String($row.find('.js-item-account-code').val() || ''),
+        noAccountProperty: $row.find('.js-item-no-account-property').is(':checked'),
+        brand: String($row.find('.js-item-brand').val() || ''),
+        noBrand: $row.find('.js-item-no-brand').is(':checked'),
+        addSerial: $row.find('.js-item-add-serial').is(':checked'),
+        description: String($row.find('.js-item-description').val() || ''),
+        serials: serials,
+        serial1: String((serials['1'] && serials['1'].serial1) || $row.find('.js-item-serial1').first().val() || ''),
+        serial2: String((serials['1'] && serials['1'].serial2) || $row.find('.js-item-serial2').first().val() || ''),
+        unitvalue: String($row.find('.js-item-unitvalue').val() || '0.00'),
+        noAmount: $row.find('.js-item-no-amount').is(':checked'),
+        remarks: String($row.find('.js-item-remarks').val() || '')
+      };
+    });
+  }
+
+  function snapshotEndUserInputsIntoCache(){
+    $('#endUserRows select.parEmpRow').each(function(){
+      var idxKey = toRowKey($(this).data('row'));
+      if(!idxKey) return;
+      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { emp: '', newName: '', newPos: '' };
+      endUserByRow[idxKey].emp = String($(this).val() || '');
+    });
+    $('#endUserRows input.parEmpNewName').each(function(){
+      var idxKey = toRowKey($(this).data('row'));
+      if(!idxKey) return;
+      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { emp: '', newName: '', newPos: '' };
+      endUserByRow[idxKey].newName = String($(this).val() || '');
+    });
+    $('#endUserRows input.parEmpNewPos').each(function(){
+      var idxKey = toRowKey($(this).data('row'));
+      if(!idxKey) return;
+      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { emp: '', newName: '', newPos: '' };
+      endUserByRow[idxKey].newPos = String($(this).val() || '');
+    });
+  }
+
+  function reindexCache(cacheObj, removedIndex, totalCount){
+    var nextCache = {};
+    var cursor = 1;
+    for (var i = 1; i <= totalCount; i++) {
+      if (i === removedIndex) { continue; }
+      var srcKey = toRowKey(i);
+      var dstKey = toRowKey(cursor);
+      if (srcKey && dstKey && cacheObj[srcKey]) {
+        nextCache[dstKey] = $.extend({}, cacheObj[srcKey]);
+      }
+      cursor++;
+    }
+    return nextCache;
+  }
+
+  function getSerialValueForCopy(state, copyIndex, fieldName){
+    var copyKey = toRowKey(copyIndex);
+    var serials = (state && state.serials) ? state.serials : {};
+    if (copyKey && serials[copyKey] && serials[copyKey][fieldName] !== undefined) {
+      return String(serials[copyKey][fieldName] || '');
+    }
+    if (copyIndex === 1 && state && state[fieldName] !== undefined) {
+      return String(state[fieldName] || '');
+    }
+    return '';
+  }
+
+  function buildSerialRowsHtml(setIndex, state){
+    var itemQty = Math.max(1, parseInt(state.itemQuantity, 10) || 1);
+    var html = ''
+      + '<div class="table-responsive">'
+      + '<table class="table table-sm table-bordered mb-0">'
+      + '<thead class="bg-light">'
+      + '<tr>'
+      + '<th style="width:80px;">Item</th>'
+      + '<th>Primary Serial Number</th>'
+      + '<th>Secondary Serial Number</th>'
+      + '</tr>'
+      + '</thead><tbody>';
+    for (var copyIndex = 1; copyIndex <= itemQty; copyIndex++) {
+      html += '<tr class="js-item-serial-copy-row" data-copy-index="' + copyIndex + '">'
+        + '<td class="align-middle text-center">' + copyIndex + '</td>'
+        + '<td><input type="text" class="form-control text-uppercase js-item-serial1" name="serial[' + setIndex + '][' + copyIndex + ']" placeholder="Enter primary serial number" value="' + esc(getSerialValueForCopy(state, copyIndex, 'serial1')) + '"></td>'
+        + '<td><input type="text" class="form-control text-uppercase js-item-serial2" name="serial2[' + setIndex + '][' + copyIndex + ']" placeholder="Enter secondary serial number" value="' + esc(getSerialValueForCopy(state, copyIndex, 'serial2')) + '"></td>'
+        + '</tr>';
+    }
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  function refreshSerialRowsForItemSet($row){
+    if (!$row || !$row.length) { return; }
+    snapshotItemSetInputsIntoCache();
+    var setIndex = parseInt($row.data('setIndex'), 10) || 1;
+    var state = getItemSetState(setIndex);
+    $row.find('.js-item-serial-table-wrap').html(buildSerialRowsHtml(setIndex, state));
+    applySerialVisibilityState($row);
+  }
+
+  function buildItemSetCardHtml(setIndex){
+    var state = getItemSetState(setIndex);
+    var removeHidden = (getSetCount() === 1) ? ' style="visibility:hidden;"' : '';
+    return ''
+      + '<div class="border rounded p-3 item-set-card" data-set-index="' + setIndex + '">'
+      + '  <div class="d-flex justify-content-between align-items-center mb-3">'
+      + '    <strong>' + getSetLabel(setIndex) + '</strong>'
+      + '    <button type="button" class="btn btn-sm btn-outline-danger btnRemoveItemSet" data-set-index="' + setIndex + '" title="Remove set"' + removeHidden + '>'
+      + '      <i class="fas fa-trash"></i>'
+      + '    </button>'
+      + '  </div>'
+      + '  <div class="form-row">'
+      + '    <div class="form-group col-md-2">'
+      + '      <label>Quantity</label>'
+      + '      <input type="number" class="form-control js-item-quantity" name="item_quantity[' + setIndex + ']" value="' + esc(state.itemQuantity || 1) + '" min="1" step="1">'
+      + '    </div>'
+      + '    <div class="form-group col-md-2">'
+      + '      <label>Unit</label>'
+      + '      <select class="form-control js-item-unit" name="unit[' + setIndex + ']" required' + setPrimaryId('unit', setIndex) + '>' + withSelectedOption(getItemUnitOptionsHtml(), state.unit) + '</select>'
+      + '    </div>'
+      + '    <div class="form-group col-md-4">'
+      + '      <label>Asset Class</label>'
+      + '      <select class="form-control js-item-asset" name="asset[' + setIndex + ']" required' + setPrimaryId('asset', setIndex) + '>' + withSelectedOption(getItemAssetOptionsHtml(), state.asset) + '</select>'
+      + '    </div>'
+      + '    <div class="form-group col-md-4">'
+      + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+      + '        <label class="mb-0">Brand/Model</label>'
+      + '        <div class="form-check form-check-inline mb-0 text-muted">'
+      + '          <input type="checkbox" class="form-check-input js-item-no-brand" name="item_no_brand[' + setIndex + ']" value="1"' + (state.noBrand ? ' checked' : '') + setPrimaryId('noBrand', setIndex) + '>'
+      + '          <label class="form-check-label">none</label>'
+      + '        </div>'
+      + '      </div>'
+      + '      <input type="text" class="form-control text-uppercase js-item-brand" name="brand[' + setIndex + ']" placeholder="Enter Brand and model" value="' + esc(state.brand) + '" required' + setPrimaryId('brand', setIndex) + '>'
+      + '    </div>'
+      + '  </div>'
+      + '  <div class="form-row">'
+      + '    <div class="form-group col-md-12">'
+      + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+      + '        <label class="mb-0">Description</label>'
+      + '        <div class="form-check form-check-inline mb-0 text-muted">'
+      + '          <input type="checkbox" class="form-check-input js-item-add-serial" name="item_add_serial[' + setIndex + ']" value="1"' + (state.addSerial ? ' checked' : '') + setPrimaryId('addSerial', setIndex) + '>'
+      + '          <label class="form-check-label">add serial number</label>'
+      + '        </div>'
+      + '      </div>'
+      + '      <textarea class="form-control text-uppercase js-item-description" name="description[' + setIndex + ']" rows="4" placeholder="Enter description" required' + setPrimaryId('description', setIndex) + '>' + esc(state.description) + '</textarea>'
+      + '    </div>'
+      + '  </div>'
+      + '  <div class="form-row js-item-serial-row"' + (state.addSerial ? '' : ' style="display:none;"') + '>'
+      + '    <div class="form-group col-12">'
+      + '      <div class="js-item-serial-table-wrap">' + buildSerialRowsHtml(setIndex, state) + '</div>'
+      + '    </div>'
+      + '  </div>'
+      + '  <div class="form-row">'
+      + '    <div class="form-group col-md-3">'
+      + '      <label>Unit Value <span class="text-muted">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'
+      + '        <input type="checkbox" class="form-check-input js-item-no-amount" name="item_no_amount[' + setIndex + ']" value="1"' + (state.noAmount ? ' checked' : '') + setPrimaryId('noAmount', setIndex) + '>'
+      + '        <label class="form-check-label">no amount value</label>'
+      + '      </span></label>'
+      + '      <input type="text" class="form-control js-item-unitvalue" name="unitvalue[' + setIndex + ']" value="' + esc(state.unitvalue || '0.00') + '" required pattern="^\\d{1,3}(,\\d{3})*(\\.\\d{2})?$" title="Enter a valid amount (e.g. 1,234.56)"' + setPrimaryId('unitvalue', setIndex) + '>'
+      + '      <div class="text-danger item-unitvalue-error" style="display:none;font-size:13px;"></div>'
+      + '    </div>'
+      + '    <div class="form-group col-md-3">'
+      + '      <label>Total Amount</label>'
+      + '      <input type="text" class="form-control js-item-total" name="total_amount_preview[' + setIndex + ']" value="0.00" readonly' + setPrimaryId('total', setIndex) + '>'
+      + '    </div>'
+      + '    <div class="form-group col-md-6">'
+      + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+      + '        <label class="mb-0">Account Code</label>'
+      + '        <div class="form-check form-check-inline mb-0 text-muted js-item-no-account-property-wrap">'
+      + '          <input type="checkbox" class="form-check-input js-item-no-account-property" name="item_no_account_property[' + setIndex + ']" value="1"' + (state.noAccountProperty ? ' checked' : '') + setPrimaryId('noAccountProperty', setIndex) + '>'
+      + '          <label class="form-check-label">none</label>'
+      + '        </div>'
+      + '      </div>'
+      + '      ' + buildAccountCodeControlHtml(setIndex, state)
+      + '    </div>'
+      + '  </div>'
+      + '  <div class="form-row mb-0">'
+      + '    <div class="form-group col-md-6 mb-0">'
+      + '      <label>Property Number</label>'
+      + '      <input type="hidden" class="js-item-property-number-value" name="property_numbers[' + setIndex + ']" value="">'
+      + '      <textarea class="form-control js-item-property-number" name="property_number_preview[' + setIndex + ']" rows="3" readonly></textarea>'
+      + '    </div>'
+      + '    <div class="form-group col-md-6 mb-0">'
+      + '      <label>Remarks</label>'
+      + '      <textarea class="form-control text-uppercase js-item-remarks" name="remarks[' + setIndex + ']" rows="3" placeholder="Enter remarks"' + setPrimaryId('remarks', setIndex) + '>' + esc(state.remarks) + '</textarea>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>';
+  }
+
+  function applyNoBrandModelState($row){
+    var $brand = $row.find('.js-item-brand');
+    var $cb = $row.find('.js-item-no-brand');
+    if(!$brand.length || !$cb.length) return;
+
+    if($cb.is(':checked')){
+      if ($brand.data('prevUserValueCaptured') !== true) {
+        $brand.data('prevUserValue', String($brand.val() || ''));
+        $brand.data('prevUserValueCaptured', true);
+      }
+      $brand.val('NO BRAND/MODEL').prop('readonly', true).prop('required', false);
+    } else {
+      var prev = String($brand.data('prevUserValue') || '');
+      if (String($brand.val() || '').trim().toUpperCase() === 'NO BRAND/MODEL') {
+        $brand.val(prev);
+      }
+      $brand.prop('readonly', false).prop('required', true);
+      $brand.data('prevUserValueCaptured', false);
+    }
+  }
+
+  function isNewCondition(){
+    return String($('#condition').val() || '').toUpperCase() === 'NEW';
+  }
+
+  function applyNoAccountPropertyState($row){
+    var $cb = $row.find('.js-item-no-account-property');
+    var $wrap = $row.find('.js-item-no-account-property-wrap');
+    var $account = $row.find('.js-item-account-code');
+    var $propertyPreview = $row.find('.js-item-property-number');
+    var $propertyValue = $row.find('.js-item-property-number-value');
+    if(!$cb.length || !$account.length) return;
+
+    var allowOptional = isNewCondition();
+    $wrap.toggle(allowOptional);
+    $cb.prop('disabled', !allowOptional);
+    if(!allowOptional && $cb.is(':checked')){
+      $cb.prop('checked', false);
+    }
+
+    if(allowOptional && $cb.is(':checked')){
+      $account.val('').prop('disabled', true).prop('required', false);
+      $propertyPreview.val('').attr('placeholder', 'No property number');
+      $propertyValue.val('');
+    } else {
+      $account.prop('disabled', false).prop('required', true);
+      $propertyPreview.attr('placeholder', '');
+    }
+  }
+
+  function applyNoAccountPropertyStateToAll(){
+    $('#itemSetRows .item-set-card').each(function(){
+      applyNoAccountPropertyState($(this));
+    });
+  }
+
+  function applySerialVisibilityState($row, animate){
+    var $serialRow = $row.find('.js-item-serial-row');
+    var $toggle = $row.find('.js-item-add-serial');
+    var showSerial = $toggle.is(':checked');
+    if(!$serialRow.length || !$toggle.length) { return; }
+
+    $serialRow.stop(true, true);
+    if (showSerial) {
+      if (animate && !$serialRow.is(':visible')) {
+        $serialRow
+          .css({ display: 'flex', overflow: 'hidden', opacity: 0 })
+          .hide()
+          .slideDown({ duration: 280, queue: false, complete: function(){
+            $serialRow.css({ display: 'flex', overflow: '', opacity: '' });
+          }});
+        $serialRow.animate({ opacity: 1 }, { duration: 280, queue: false });
+      } else {
+        $serialRow.css({ display: 'flex', overflow: '', opacity: '' });
+      }
+    } else if (animate && $serialRow.is(':visible')) {
+      $serialRow.animate({ opacity: 0 }, { duration: 240, queue: false });
+      $serialRow.slideUp({ duration: 240, queue: false, complete: function(){
+        $serialRow.css({ overflow: '', opacity: '' });
+      }});
+    } else {
+      $serialRow.hide().css({ overflow: '', opacity: '' });
+    }
+
+    $serialRow.find('.js-item-serial1, .js-item-serial2').prop('disabled', !showSerial);
+  }
+
+  function applyNoAmountValueState($row){
+    var $input = $row.find('.js-item-unitvalue');
+    var $cb = $row.find('.js-item-no-amount');
+    if(!$input.length || !$cb.length) return;
+    if($cb.is(':checked')){
+      if(!String($input.val() || '').trim()){
+        $input.val('0.00');
+      }
+      $input.prop('readonly', true).prop('required', false);
+      $row.find('.item-unitvalue-error').hide().text('');
+    } else {
+      $input.prop('readonly', false).prop('required', true);
+    }
+  }
+
+  function updateItemSetTotal($row){
+    var qty = parseInt($row.find('.js-item-quantity').val(), 10);
+    if(!qty || qty < 1){ qty = 1; }
+    var unit = parseMoneyValue($row.find('.js-item-unitvalue').val());
+    $row.find('.js-item-total').val(formatMoneyValue(unit * qty));
+  }
+
+  function nextPropertyNumber(num){
+    var parts = String(num || '').split('-');
+    if(parts.length < 4) return num;
+    var idx = parts.length - 2;
+    var seq = parts[idx];
+    var pad = seq.length;
+    parts[idx] = String((parseInt(seq, 10) || 0) + 1).padStart(pad, '0');
+    return parts.join('-');
+  }
+
+  function propertyNumberCopies(first, qty){
+    var copies = [];
+    var current = String(first || '').trim();
+    var count = Math.max(1, parseInt(qty, 10) || 1);
+    for (var step = 0; step < count; step++) {
+      if (current) { copies.push(current); }
+      current = nextPropertyNumber(current);
+    }
+    return copies;
+  }
+
+  function applyPropertyNumberPreview(list){
+    var previewList = Array.isArray(list) ? list : [];
+    var allNumbers = [];
+    previewList.forEach(function(rowNumbers){
+      var numbers = Array.isArray(rowNumbers) ? rowNumbers : (rowNumbers ? [rowNumbers] : []);
+      allNumbers = allNumbers.concat(numbers);
+    });
+    $('#par_number_value').val(allNumbers.length ? allNumbers[0] : '');
+    $('#par_number').val(allNumbers.join(', '));
+    $('#itemSetRows .item-set-card').each(function(index){
+      var rowNumbers = previewList[index] || [];
+      var numbers = Array.isArray(rowNumbers) ? rowNumbers : (rowNumbers ? [rowNumbers] : []);
+      $(this).find('.js-item-property-number').attr('rows', 3).val(numbers.join(', '));
+      $(this).find('.js-item-property-number-value').val(numbers.length ? numbers[0] : '');
+    });
+    if (window.GSO && window.GSO.AddItemBundle && typeof window.GSO.AddItemBundle.refreshBundlePropertyNumbers === 'function') {
+      window.GSO.AddItemBundle.refreshBundlePropertyNumbers();
+    }
+  }
+
+  function renderItemSetRows(options){
+    var opts = options || {};
+    if (!opts.skipSnapshot) {
+      snapshotItemSetInputsIntoCache();
+    }
+    var count = getSetCount();
+    var $rows = $('#itemSetRows');
+    var currentCount = $rows.find('.item-set-card').length;
+
+    if (!opts.forceRebuild && currentCount > 0 && count > currentCount) {
+      var htmlToAppend = '';
+      for (var nextIndex = currentCount + 1; nextIndex <= count; nextIndex++) {
+        htmlToAppend += buildItemSetCardHtml(nextIndex);
+      }
+      $rows.append(htmlToAppend);
+      $rows.find('.item-set-card').slice(currentCount).each(function(){
+        var $row = $(this);
+        applyNoBrandModelState($row);
+        applyNoAccountPropertyState($row);
+        applySerialVisibilityState($row);
+        applyNoAmountValueState($row);
+        updateItemSetTotal($row);
+      });
+      $rows.find('.btnRemoveItemSet').css('visibility', count === 1 ? 'hidden' : 'visible');
+      return;
+    }
+
+    if (!opts.forceRebuild && currentCount === count) {
+      $rows.find('.btnRemoveItemSet').css('visibility', count === 1 ? 'hidden' : 'visible');
+      return;
+    }
+
+    var html = '';
+    for (var i = 1; i <= count; i++) {
+      html += buildItemSetCardHtml(i);
+    }
+    $rows.html(html);
+    $rows.find('.item-set-card').each(function(){
+      var $row = $(this);
+      applyNoBrandModelState($row);
+      applyNoAccountPropertyState($row);
+      applySerialVisibilityState($row);
+      applyNoAmountValueState($row);
+      updateItemSetTotal($row);
+    });
+  }
+
+  function resetDepartmentAndEmployeeFields(){
+    $('#deptSearch').val('').prop('disabled', true);
+    $('#dept').val('');
+    $('#dept option:not(:first)').remove();
+    $('#deptDatalist').empty();
+    $('#parEmp').html('<option value="">-SELECT-</option>').prop('disabled', true);
+    empOptionsAll = '';
+    $('#add_new_employee').hide();
+    $('#new_emp, #position').prop('required', false).val('');
+    $('#additem-name-validation-msg').hide().text('');
+    applyPropertyNumberPreview([]);
+  }
+
+  function loadEmployeesForDept(deptCode, cb){
+    if(!deptCode){
+      $('#parEmp').html('<option value="">SELECT A DEPARTMENT FIRST</option>');
+      empOptionsAll = '';
+      if(typeof cb==='function') cb();
+      return;
+    }
+    $.ajax({
+      url: '../auth/auth.php',
+      method: 'POST',
+      data: { departmentid: deptCode },
+      success: function(html){
+        $('#parEmp').html(html);
+        empOptionsAll = String(html||'');
+        if ($('#multipleEndUserCheckBox').is(':checked')) {
+          renderEndUserRows();
+        }
+        if(typeof cb==='function') cb();
+      },
+      error: function(){ if(typeof cb==='function') cb(); }
+    });
+  }
+
+  function populateDeptFromOptions(optionsHtml){
+    var $select = $('#dept');
+    $select.html(optionsHtml);
+    var $datalist = $('#deptDatalist');
+    $datalist.empty();
+    $select.find('option').each(function(){
+      var val = $(this).val();
+      if(!val) return;
+      $('<option>').attr('value', $(this).text().trim()).appendTo($datalist);
+    });
+  }
+
+  function enforcePerRowQtyLimit(){
+    var q = getSetCount();
+    $('#quantity-warning')
+      .text('Maximum ' + MAX_ITEM_SETS + ' item sets per submission.')
+      .toggle(q >= MAX_ITEM_SETS);
+  }
+
+  function getEmployeeOptionsHtml() {
+    var html = (empOptionsAll && empOptionsAll.trim()) ? empOptionsAll : String($('#parEmp').html() || '');
+    if (!html || !html.trim()) html = '<option value="">-SELECT-</option>';
+    return html;
+  }
+
+  function isAddNewEmpValue(v){
+    return (String(v || '').toLowerCase() === 'add_new_emp');
+  }
+
+  function canUseNoEndUser(){
+    return String($('#condition').val() || '').trim().toUpperCase() === 'NEW';
+  }
+
+  function isNoEndUserSelected(){
+    return canUseNoEndUser() && $('#endUserNoneCheckBox').is(':checked');
+  }
+
+  function hideAddNewEmployeeSection(){
+    var $section = $('#add_new_employee');
+    if ($section.length) { $section.stop(true, true).slideUp(0); }
+    $('#new_emp,#position').prop('required', false).val('');
+    $('#additem-name-validation-msg').hide().text('');
+    $('#addItemSubmitBtn').prop('disabled', false);
+  }
+
+  function syncNoEndUserState(){
+    var allowed = canUseNoEndUser();
+    var $none = $('#endUserNoneCheckBox');
+    if (!$none.length) { return; }
+    $none.prop('disabled', !allowed);
+    if (!allowed) { $none.prop('checked', false); }
+    if (isNoEndUserSelected()) {
+      $('#multipleEndUserCheckBox').prop('checked', false);
+      $('#parEmp').val('').prop('required', false).prop('disabled', true).show();
+      $('#endUserRows').hide().empty();
+      hideAddNewEmployeeSection();
+    }
+  }
+
+  function syncMultiEndUserRowState($row){
+    var $sel = $row.find('select.parEmpRow');
+    var $nm  = $row.find('input.parEmpNewName');
+    var $ps  = $row.find('input.parEmpNewPos');
+    var on = isAddNewEmpValue($sel.val());
+    $nm.prop('disabled', !on).prop('required', on);
+    $ps.prop('disabled', !on).prop('required', on);
+    if(!on){ $nm.val(''); $ps.val(''); }
+  }
+
+  function renderEndUserRows() {
+    snapshotEndUserInputsIntoCache();
+    syncNoEndUserState();
+    if (isNoEndUserSelected()) { return; }
+    var isMulti = $('#multipleEndUserCheckBox').is(':checked');
+    var setCount = getSetCount();
+
+    var $single = $('#parEmp');
+    var $singleWrap = $single.closest('.form-group');
+    var $addNewSingle = $('#add_new_employee');
+    var $wrap = $('#endUserRows');
+
+    if (!isMulti) {
+      $wrap.hide().empty();
+      $single.prop('disabled', false).prop('required', true).show();
+      $singleWrap.removeClass('mb-0');
+      return;
+    }
+
+    $single.prop('required', false).prop('disabled', true).hide().val('');
+    if ($addNewSingle.is(':visible')) {
+      $addNewSingle.hide();
+      $('#new_emp,#position').prop('required', false).val('');
+      $('#additem-name-validation-msg').hide().text('');
+    }
+
+    var opts = getEmployeeOptionsHtml();
+    var showIndex = setCount > 1;
+    var html = '<table class="table table-bordered mb-2">'
+      + '<thead class="bg-light" style="position:sticky; top:0; z-index:1">'
+      + '<tr>'
+      + (showIndex ? '<th style="width:90px">Set</th>' : '')
+      + '<th style="min-width:220px">End User</th>'
+      + '<th style="min-width:220px">New Employee</th>'
+      + '<th style="min-width:200px">Position</th>'
+      + '</tr>'
+      + '</thead><tbody>';
+
+    for (var i = 1; i <= setCount; i++) {
+      html += '<tr>'
+        + (showIndex ? '<td>' + getSetLabel(i) + '</td>' : '')
+        + '<td><select name="parEmp_multi[' + i + ']" class="form-control parEmpRow" data-row="' + i + '" required>' + opts + '</select></td>'
+        + '<td><input type="text" class="form-control text-uppercase parEmpNewName" name="parEmp_multi_new_name[' + i + ']" data-row="' + i + '" placeholder="Enter new employee name" disabled></td>'
+        + '<td><input type="text" class="form-control text-uppercase parEmpNewPos" name="parEmp_multi_new_position[' + i + ']" data-row="' + i + '" placeholder="Enter position" disabled></td>'
+        + '</tr>';
+    }
+    html += '</tbody></table>';
+
+    $wrap.html(html).show();
+
+    for (var j = 1; j <= setCount; j++) {
+      var k = toRowKey(j);
+      if (!k || !endUserByRow[k]) continue;
+      $wrap.find('select.parEmpRow[data-row="' + j + '"]').val(endUserByRow[k].emp || '');
+      $wrap.find('input.parEmpNewName[data-row="' + j + '"]').val(endUserByRow[k].newName || '');
+      $wrap.find('input.parEmpNewPos[data-row="' + j + '"]').val(endUserByRow[k].newPos || '');
+    }
+
+    $wrap.find('tbody tr').each(function(){ syncMultiEndUserRowState($(this)); });
+  }
+
+  function validateUnitValue() {
+    var category = $('#category').val();
+    var year = $('#year').val();
+    var isValid = true;
+
+    $('#itemSetRows .item-set-card').each(function(){
+      var $row = $(this);
+      var $error = $row.find('.item-unitvalue-error');
+      var unitvalue = parseMoneyValue($row.find('.js-item-unitvalue').val());
+      var error = '';
+
+      if($row.find('.js-item-no-amount').is(':checked')) {
+        $error.hide().text('');
+        updateItemSetTotal($row);
+        return;
+      }
+
+      if (year === 'RFS' || year === 'FS') {
+        if (unitvalue !== 0) {
+          error = 'Unit Value must be 0.00 for Found at Station.';
+        }
+      } else if (category === 'ICS') {
+        if (unitvalue >= 50001) {
+          error = 'Unit Value for ICS must be less than 50,000.00.';
+        }
+      } else if (category === 'PAR') {
+        if (unitvalue < 50001) {
+          error = 'Unit Value for PAR must be 50,000.00 or above.';
+        }
+      }
+
+      if (error) {
+        $error.text(error).show();
+        isValid = false;
+      } else {
+        $error.hide().text('');
+      }
+    });
+
+    return isValid;
+  }
+
+  function validateManualAccountCodes(){
+    if (!usesManualAccountCodeInput()) { return true; }
+    var invalidSet = '';
+    $('#itemSetRows .item-set-card').each(function(){
+      var $row = $(this);
+      if (isNewCondition() && $row.find('.js-item-no-account-property').is(':checked')) { return; }
+      var value = String($row.find('.js-item-account-code').val() || '').trim();
+      if (!/^[0-9-]{1,18}$/.test(value)) {
+        invalidSet = getSetLabel($row.data('setIndex'));
+        return false;
+      }
+    });
+    if (!invalidSet) { return true; }
+    Swal.fire({ icon:'warning', title:'Validation error', text:'Account Code must contain numbers and hyphen only, up to 18 characters (' + invalidSet + ').' });
+    return false;
+  }
+
+  function updateTotalAmount(){
+    $('#itemSetRows .item-set-card').each(function(){
+      updateItemSetTotal($(this));
+    });
+  }
+
+  function updateYearOptions() {
+    var $year = $('#year');
+    var start = 2001;
+    var current = new Date().getFullYear();
+    var options = "<option value=''>-SELECT-</option>";
+    for (var y = current; y >= start; y--) {
+      options += "<option value='" + y + "'>" + y + "</option>";
+    }
+    options += "<option value='RFS'>Found at Station</option>";
+    $year.html(options);
+  }
+
+  function syncYearAcquiredWithCondition() {
+    var condition = String($('#condition').val() || '').toUpperCase();
+    var $year = $('#year');
+    var currentYear = String(new Date().getFullYear());
+    if (!$year.length) { return; }
+
+    if ($year.find('option').length === 0) {
+      updateYearOptions();
+    }
+
+    if (!condition) {
+      $year.val('');
+      $year.prop('disabled', true);
+      $year.trigger('change');
+    } else if (condition === 'NEW') {
+      $year.val(currentYear);
+      $year.prop('disabled', true);
+      $year.trigger('change');
+    } else {
+      $year.prop('disabled', false);
+    }
+  }
+
+  function updatePropertyNumber() {
+    var category = $('#category').val();
+    var year = $('#year').val();
+    var dept = $('#dept').val();
+    var fund = $('#fund').val();
+    var rows = $('#itemSetRows .item-set-card').toArray();
+
+    if (String(fund || '').trim().toUpperCase() === 'TRUST FUND') {
+      applyPropertyNumberPreview([]);
+      return;
+    }
+
+    if (!(category && year && dept && fund) || !rows.length) {
+      applyPropertyNumberPreview([]);
+      return;
+    }
+
+    var list = [];
+    var exclude = [];
+    var reqId = Date.now() + Math.random();
+    updatePropertyNumber.lastReqId = reqId;
+
+    function rememberCopies(first, qty){
+      exclude = exclude.concat(propertyNumberCopies(first, qty));
+    }
+
+    function generateRow(index){
+      if (reqId !== updatePropertyNumber.lastReqId) { return; }
+      if (index >= rows.length) {
+        applyPropertyNumberPreview(list);
+        return;
+      }
+
+      var $row = $(rows[index]);
+      if (isNewCondition() && $row.find('.js-item-no-account-property').is(':checked')) {
+        list[index] = [];
+        generateRow(index + 1);
+        return;
+      }
+      var accountCode = String($row.find('.js-item-account-code').val() || '').trim();
+      if (!accountCode) {
+        list[index] = '';
+        generateRow(index + 1);
+        return;
+      }
+
+      $.ajax({
+        url: '../auth/auth.php',
+        method: 'POST',
+        data: {
+          generate_property_number: 1,
+          category: category,
+          year: year,
+          account_code: accountCode,
+          dept: dept,
+          fund: fund,
+          exclude: exclude
+        },
+        dataType: 'json',
+        success: function(res) {
+          if (reqId !== updatePropertyNumber.lastReqId) { return; }
+          var first = (res && res.success) ? String(res.pr_number || '').trim() : '';
+          if (first) {
+            var itemQty = Math.max(1, parseInt($row.find('.js-item-quantity').val(), 10) || 1);
+            list[index] = propertyNumberCopies(first, itemQty);
+            rememberCopies(first, itemQty);
+          } else {
+            list[index] = [];
+          }
+          generateRow(index + 1);
+        },
+        error: function(){
+          if (reqId !== updatePropertyNumber.lastReqId) { return; }
+          list[index] = '';
+          generateRow(index + 1);
+        }
+      });
+    }
+
+    generateRow(0);
+  }
+
+  function scheduleUpdatePropertyNumber(){
+    clearTimeout(debPropNum);
+    debPropNum = setTimeout(function(){ updatePropertyNumber(); }, 300);
+  }
+
+  function findDeptCodeByExactName(name) {
+    var $deptSelect = $('#dept');
+    var target = String(name || '').trim().toLowerCase();
+    if(!$deptSelect.length || !target) return '';
+    var code = '';
+    $deptSelect.find('option').each(function(){
+      if ($(this).text().trim().toLowerCase() === target) {
+        code = $(this).val();
+        return false;
+      }
+    });
+    return code;
+  }
+
+  function validateDeptExactOnSubmit(){
+    var $deptInput = $('#deptSearch');
+    var $deptSelect = $('#dept');
+    if(!$deptInput.length || !$deptSelect.length){ return true; }
+    var code = findDeptCodeByExactName($deptInput.val().trim());
+    if (!code) {
+      $deptInput.addClass('is-invalid');
+      if (!$deptInput.next('.invalid-feedback').length) {
+        $('<div class="invalid-feedback">Please select a valid department from the list.</div>').insertAfter($deptInput);
+      }
+      try { $deptInput.trigger('focus'); } catch(e) {}
+      return false;
+    }
+    $deptInput.removeClass('is-invalid');
+    $deptInput.next('.invalid-feedback').remove();
+    if($deptSelect.val() !== code){
+      $deptSelect.val(code).trigger('change');
+    }
+    return true;
+  }
+
+  function resetAddNewEmpFieldsAddItem() {
+    $('#new_emp').val('');
+    $('#position').val('');
+    $('#additem-name-validation-msg').hide().text('');
+    $('#addItemSubmitBtn').prop('disabled', false);
+  }
+
+  function toggleAddNewEmpSectionAddItem() {
+    if (isNoEndUserSelected()) {
+      hideAddNewEmployeeSection();
+      return;
+    }
+
+    if ($('#multipleEndUserCheckBox').is(':checked')) {
+      var $sec = $('#add_new_employee');
+      if ($sec.length) { $sec.stop(true, true).slideUp(0); }
+      $('#new_emp').prop('required', false);
+      $('#position').prop('required', false);
+      resetAddNewEmpFieldsAddItem();
+      return;
+    }
+
+    var isAddNew = (String($('#parEmp').val() || '').toLowerCase() === 'add_new_emp');
+    var $section = $('#add_new_employee');
+    if (!$section.length) { return; }
+
+    if (isAddNew) {
+      $section.stop(true, true).slideDown(200);
+      $('#new_emp').prop('required', true);
+      $('#position').prop('required', true);
+    } else {
+      $section.stop(true, true).slideUp(200);
+      $('#new_emp').prop('required', false);
+      $('#position').prop('required', false);
+      resetAddNewEmpFieldsAddItem();
+    }
+  }
+
+  function updateParEmpStateAddItem() {
+    if ($('#multipleEndUserCheckBox').is(':checked')) { return; }
+
+    var hasDept = !!String($('#dept').val() || '').trim();
+    var $emp = $('#parEmp');
+    if (!$emp.length) { return; }
+
+    if (isNoEndUserSelected()) {
+      $emp.val('').prop('disabled', true).prop('required', false).show();
+      hideAddNewEmployeeSection();
+      return;
+    }
+
+    if (!hasDept) {
+      $emp.val('').prop('disabled', true).html('<option value="">SELECT A DEPARTMENT FIRST</option>');
+      var $section = $('#add_new_employee');
+      if ($section.length && $section.is(':visible')) {
+        $section.stop(true, true).slideUp(200);
+      }
+      $('#new_emp').prop('required', false).val('');
+      $('#position').prop('required', false).val('');
+      $('#additem-name-validation-msg').hide().text('');
+      $('#addItemSubmitBtn').prop('disabled', false);
+      return;
+    }
+
+    $emp.prop('disabled', false);
+    if ($emp.find('option').length === 0) {
+      $emp.html('<option value="">-SELECT-</option>');
+    }
+  }
+
+  function init(){
+    if(inited) return;
+    if(!hasUI()) return;
+    inited = true;
+
+    if ($('#quantity').length && $('#quantity').next('#quantity-warning').length === 0) {
+      $('#quantity').after('<div class="text-warning" id="quantity-warning" style="display:none;font-size:13px; margin-top:4px;"></div>');
+    }
+
+    renderItemSetRows();
+
+    $(document)
+      .off('click.gsoAddItemPageRemoveSet', '.btnRemoveItemSet')
+      .on('click.gsoAddItemPageRemoveSet', '.btnRemoveItemSet', function(){
+        var currentCount = getSetCount();
+        if (currentCount <= 1) { return; }
+        snapshotItemSetInputsIntoCache();
+        snapshotEndUserInputsIntoCache();
+        var setIndex = parseInt($(this).attr('data-set-index'), 10) || currentCount;
+        itemSetByRow = reindexCache(itemSetByRow, setIndex, currentCount);
+        endUserByRow = reindexCache(endUserByRow, setIndex, currentCount);
+        $('#quantity').val(currentCount - 1);
+        renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
+        renderEndUserRows();
+        scheduleUpdatePropertyNumber();
+      });
+
+    $(document)
+      .off('change.gsoAddItemPageNoBrand', '.js-item-no-brand')
+      .on('change.gsoAddItemPageNoBrand', '.js-item-no-brand', function(){
+        applyNoBrandModelState($(this).closest('.item-set-card'));
+      });
+
+    $(document)
+      .off('change.gsoAddItemPageNoAccountProperty', '.js-item-no-account-property')
+      .on('change.gsoAddItemPageNoAccountProperty', '.js-item-no-account-property', function(){
+        applyNoAccountPropertyState($(this).closest('.item-set-card'));
+        scheduleUpdatePropertyNumber();
+      });
+
+    $(document)
+      .off('change.gsoAddItemPageSerialToggle', '.js-item-add-serial')
+      .on('change.gsoAddItemPageSerialToggle', '.js-item-add-serial', function(){
+        applySerialVisibilityState($(this).closest('.item-set-card'), true);
+      });
+
+    $(document)
+      .off('input.gsoAddItemPageBrand', '.js-item-brand')
+      .on('input.gsoAddItemPageBrand', '.js-item-brand', function(){
+        var $row = $(this).closest('.item-set-card');
+        if(!$row.find('.js-item-no-brand').is(':checked')){
+          $(this).data('prevUserValue', String($(this).val() || ''));
+        }
+      });
+
+    $('#addItemModal')
+      .off('hidden.bs.modal.gsoAddItemPageBrand')
+      .on('hidden.bs.modal.gsoAddItemPageBrand', function(){
+        itemSetByRow = {};
+        endUserByRow = {};
+        $('#quantity').val(1);
+        renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
+        applyPropertyNumberPreview([]);
+      })
+      .off('shown.bs.modal.gsoAddItemPageBrand')
+      .on('shown.bs.modal.gsoAddItemPageBrand', function(){
+        renderItemSetRows();
+      });
+
+    $(document)
+      .off('change.gsoAddItemPageFund', '#fund')
+      .on('change.gsoAddItemPageFund', '#fund', function(){
+        var fund = String($(this).val() || '').trim();
+        snapshotItemSetInputsIntoCache();
+        renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
+        resetDepartmentAndEmployeeFields();
+        if(!fund){ return; }
+
+        if (reqFundDepts && reqFundDepts.readyState !== 4) {
+          try { reqFundDepts.abort(); } catch(e){}
+        }
+        clearTimeout(debFundDepts);
+        debFundDepts = setTimeout(function(){
+          reqFundDepts = $.ajax({
+            url: '../auth/auth.php',
+            method: 'POST',
+            data: { fund_for_departments: fund },
+            success: function(html){
+              populateDeptFromOptions(html);
+              $('#deptSearch').prop('disabled', false).focus();
+            },
+            error: function(){ console.error('Failed to load departments for fund ' + fund); }
+          });
+        }, 350);
+      });
+
+    $(document)
+      .off('input.gsoAddItemPageQty blur.gsoAddItemPageQty', '#quantity')
+      .on('input.gsoAddItemPageQty blur.gsoAddItemPageQty', '#quantity', function(){
+        $('#quantity').val(normalizeSetCount($(this).val()));
+        enforcePerRowQtyLimit();
+        renderItemSetRows();
+        renderEndUserRows();
+        updateTotalAmount();
+      });
+
+    $(document)
+      .off('input.gsoAddItemPageItemQty change.gsoAddItemPageItemQty blur.gsoAddItemPageItemQty', '.js-item-quantity')
+      .on('input.gsoAddItemPageItemQty change.gsoAddItemPageItemQty blur.gsoAddItemPageItemQty', '.js-item-quantity', function(){
+        var qty = parseInt($(this).val(), 10) || 1;
+        if (qty < 1) { qty = 1; }
+        $(this).val(qty);
+        var $row = $(this).closest('.item-set-card');
+        updateItemSetTotal($row);
+        refreshSerialRowsForItemSet($row);
+        scheduleUpdatePropertyNumber();
+      });
+
+    $(document)
+      .off('change.gsoAddItemPageMulti', '#multipleEndUserCheckBox')
+      .on('change.gsoAddItemPageMulti', '#multipleEndUserCheckBox', function(){
+        if ($(this).is(':checked')) { $('#endUserNoneCheckBox').prop('checked', false); }
+        renderEndUserRows();
+      });
+    $(document)
+      .off('change.gsoAddItemPageNoEndUser', '#endUserNoneCheckBox')
+      .on('change.gsoAddItemPageNoEndUser', '#endUserNoneCheckBox', function(){
+        if ($(this).is(':checked')) { $('#multipleEndUserCheckBox').prop('checked', false); }
+        syncNoEndUserState();
+        renderEndUserRows();
+        updateParEmpStateAddItem();
+      });
+    $(document)
+      .off('input.gsoAddItemPageMulti change.gsoAddItemPageMulti', '#quantity')
+      .on('input.gsoAddItemPageMulti change.gsoAddItemPageMulti', '#quantity', renderEndUserRows);
+    $(document)
+      .off('change.gsoAddItemPageMultiRow', '#endUserRows select.parEmpRow')
+      .on('change.gsoAddItemPageMultiRow', '#endUserRows select.parEmpRow', function(){
+        snapshotEndUserInputsIntoCache();
+        syncMultiEndUserRowState($(this).closest('tr'));
+      });
+
+    var debParEmp;
+    $(document)
+      .off('change.gsoAddItemPageParEmp', '#parEmp')
+      .on('change.gsoAddItemPageParEmp', '#parEmp', function(){
+        clearTimeout(debParEmp);
+        debParEmp = setTimeout(function(){ toggleAddNewEmpSectionAddItem(); }, 200);
+      });
+    $(document)
+      .off('change.gsoAddItemPageDeptEmp', '#dept')
+      .on('change.gsoAddItemPageDeptEmp', '#dept', function(){
+        updateParEmpStateAddItem();
+        toggleAddNewEmpSectionAddItem();
+      });
+
+    var addItemNameDebounce;
+    $(document)
+      .off('input.gsoAddItemPageNewEmp', '#new_emp')
+      .on('input.gsoAddItemPageNewEmp', '#new_emp', function(){
+        var name = String($(this).val() || '').trim();
+        var $msg = $('#additem-name-validation-msg');
+        var $btn = $('#addItemSubmitBtn');
+        clearTimeout(addItemNameDebounce);
+
+        if(!name){
+          $msg.hide().text('');
+          $btn.prop('disabled', false);
+          return;
+        }
+
+        $msg.show().text('Validating...').css('color','red');
+        $btn.prop('disabled', true);
+        addItemNameDebounce = setTimeout(function(){
+          $.ajax({
+            url: '../auth/auth.php',
+            type: 'POST',
+            data: { validate_employee_name: 1, emp_name: name },
+            dataType: 'json',
+            success: function(res){
+              if(res && res.exists){
+                $msg.text('Employee name already exists!').css('color','red');
+                $btn.prop('disabled', true);
+              } else {
+                $msg.text('Employee name is available.').css('color','green');
+                $btn.prop('disabled', false);
+              }
+            },
+            error: function(){
+              $msg.text('Validation error.').css('color','red');
+              $btn.prop('disabled', true);
+            }
+          });
+        }, 600);
+      });
+
+    $(document)
+      .off('change.gsoAddItemPageParEmpReset', '#parEmp')
+      .on('change.gsoAddItemPageParEmpReset', '#parEmp', function(){
+        if(String($(this).val()||'').toLowerCase() !== 'add_new_emp'){
+          $('#additem-name-validation-msg').hide().text('');
+          $('#addItemSubmitBtn').prop('disabled', false);
+        }
+      });
+
+    $('#addItemModal')
+      .off('hidden.bs.modal.gsoAddItemPageEmp')
+      .on('hidden.bs.modal.gsoAddItemPageEmp', function(){
+        try { $('#parEmp').val(''); } catch(e) {}
+        updateParEmpStateAddItem();
+        toggleAddNewEmpSectionAddItem();
+      })
+      .off('shown.bs.modal.gsoAddItemPageEmp')
+      .on('shown.bs.modal.gsoAddItemPageEmp', function(){
+        updateParEmpStateAddItem();
+        toggleAddNewEmpSectionAddItem();
+      });
+
+    $(document)
+      .off('input.gsoAddItemPageCache change.gsoAddItemPageCache', '#itemSetRows input, #itemSetRows textarea, #itemSetRows select')
+      .on('input.gsoAddItemPageCache change.gsoAddItemPageCache', '#itemSetRows input, #itemSetRows textarea, #itemSetRows select', snapshotItemSetInputsIntoCache);
+    $(document)
+      .off('input.gsoAddItemPageCache2 change.gsoAddItemPageCache2', '#endUserRows input.parEmpNewName, #endUserRows input.parEmpNewPos')
+      .on('input.gsoAddItemPageCache2 change.gsoAddItemPageCache2', '#endUserRows input.parEmpNewName, #endUserRows input.parEmpNewPos', snapshotEndUserInputsIntoCache);
+
+    $(document)
+      .off('change.gsoAddItemPageNoAmount', '.js-item-no-amount')
+      .on('change.gsoAddItemPageNoAmount', '.js-item-no-amount', function(){
+        var $row = $(this).closest('.item-set-card');
+        applyNoAmountValueState($row);
+        updateItemSetTotal($row);
+        validateUnitValue();
+      });
+
+    $(document)
+      .off('input.gsoAddItemPageUnit blur.gsoAddItemPageUnit', '.js-item-unitvalue')
+      .on('input.gsoAddItemPageUnit blur.gsoAddItemPageUnit', '.js-item-unitvalue', function(){
+        var $row = $(this).closest('.item-set-card');
+        updateItemSetTotal($row);
+        validateUnitValue();
+      });
+
+    $(document)
+      .off('input.gsoAddItemPageTotal change.gsoAddItemPageTotal blur.gsoAddItemPageTotal', '.js-item-unitvalue, #quantity')
+      .on('input.gsoAddItemPageTotal change.gsoAddItemPageTotal blur.gsoAddItemPageTotal', '.js-item-unitvalue, #quantity', updateTotalAmount);
+    $(document)
+      .off('change.gsoAddItemPageUnit', '#category, #year')
+      .on('change.gsoAddItemPageUnit', '#category, #year', validateUnitValue);
+
+    $(document)
+      .off('input.gsoAddItemPageUnitFmt', '.js-item-unitvalue')
+      .on('input.gsoAddItemPageUnitFmt', '.js-item-unitvalue', function() {
+        var val = String($(this).val() || '').replace(/[^\d.]/g, '');
+        var parts = val.split('.');
+        parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        $(this).val(parts.length > 1 ? parts[0] + '.' + parts[1].slice(0,2) : parts[0]);
+      });
+    $(document)
+      .off('blur.gsoAddItemPageUnitBlur', '.js-item-unitvalue')
+      .on('blur.gsoAddItemPageUnitBlur', '.js-item-unitvalue', function(){
+        if ($(this).val().trim() === '') {
+          $(this).val('0.00');
+        }
+        updateItemSetTotal($(this).closest('.item-set-card'));
+      });
+
+    $(document)
+      .off('change.gsoAddItemPageProp input.gsoAddItemPageProp', '#category, .js-item-account-code, #dept, #year, #quantity')
+      .on('change.gsoAddItemPageProp input.gsoAddItemPageProp', '#category, .js-item-account-code, #dept, #year, #quantity', scheduleUpdatePropertyNumber);
+
+    $(document)
+      .off('input.gsoAddItemPageTrustAcct', 'input.js-item-account-code')
+      .on('input.gsoAddItemPageTrustAcct', 'input.js-item-account-code', function(){
+        if (!usesManualAccountCodeInput()) { return; }
+        var clean = sanitizeManualAccountCode($(this).val());
+        if ($(this).val() !== clean) { $(this).val(clean); }
+      });
+
+    $(document)
+      .off('change.gsoAddItemPageCond', '#condition')
+      .on('change.gsoAddItemPageCond', '#condition', function(){
+        syncYearAcquiredWithCondition();
+        syncNoEndUserState();
+        renderEndUserRows();
+        applyNoAccountPropertyStateToAll();
+        scheduleUpdatePropertyNumber();
+      });
+
+    $('#addItemModal')
+      .off('shown.bs.modal.gsoAddItemPageMeta')
+      .on('shown.bs.modal.gsoAddItemPageMeta', function(){
+        if (window.GSO && window.GSO.AddItemMeta && typeof window.GSO.AddItemMeta.fillYearOptions === 'function') {
+          window.GSO.AddItemMeta.fillYearOptions();
+        }
+        renderItemSetRows();
+        syncYearAcquiredWithCondition();
+        applyNoAccountPropertyStateToAll();
+        updatePropertyNumber();
+        var dept = String($('#dept').val() || '').trim();
+        if(dept){ loadEmployeesForDept(dept); }
+        updateTotalAmount();
+      });
+
+    (function(){
+      var $deptSelect = $('#dept');
+      var $deptInput = $('#deptSearch');
+      var $deptDatalist = $('#deptDatalist');
+      var $modal = $('#addItemModal');
+
+      if (!$deptSelect.length || !$deptInput.length) return;
+
+      function populateDatalist() {
+        $deptDatalist.empty();
+        $deptSelect.find('option').each(function() {
+          var name = $(this).text().trim();
+          var val = $(this).val();
+          if (!val) return;
+          $('<option>').attr('value', name).appendTo($deptDatalist);
+        });
+      }
+
+      $deptSelect.off('change.gsoAddItemPageDept').on('change.gsoAddItemPageDept', function(){
+        var code = $(this).val();
+        var name = code ? $(this).find('option:selected').text().trim() : '';
+        $deptInput.val(name);
+      });
+
+      var wasSetFromSelect = false;
+      var clearedForRetype = false;
+
+      $deptInput.off('change.gsoAddItemPageDept').on('change.gsoAddItemPageDept', function(){
+        var code = findDeptCodeByExactName($(this).val());
+        if (code) {
+          $deptSelect.val(code).trigger('change');
+          wasSetFromSelect = true;
+          clearedForRetype = false;
+        } else {
+          $deptSelect.val('').trigger('change');
+        }
+      });
+
+      function markClearedIfNeeded(e){
+        if (wasSetFromSelect && !clearedForRetype) {
+          var key = e && e.key;
+          if (e && (e.ctrlKey || e.metaKey || e.altKey)) return;
+          if (key && ['Tab','Shift','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(key)) return;
+          $deptInput.val('');
+          $deptSelect.val('').trigger('change');
+          clearedForRetype = true;
+        }
+      }
+
+      $deptInput.off('beforeinput.gsoAddItemPageDept').on('beforeinput.gsoAddItemPageDept', markClearedIfNeeded);
+      $deptInput.off('keydown.gsoAddItemPageDept').on('keydown.gsoAddItemPageDept', function(e){ if (e.key !== 'Tab') markClearedIfNeeded(e); });
+      $deptInput.off('paste.gsoAddItemPageDept compositionstart.gsoAddItemPageDept').on('paste.gsoAddItemPageDept compositionstart.gsoAddItemPageDept', function(e){ markClearedIfNeeded(e); });
+
+      $deptInput.off('input.gsoAddItemPageDept').on('input.gsoAddItemPageDept', function(){
+        if (!$(this).val()) {
+          $deptSelect.val('').trigger('change');
+        }
+      });
+
+      $deptInput.off('mousedown.gsoAddItemPageDept').on('mousedown.gsoAddItemPageDept', function(e){
+        var rect = this.getBoundingClientRect();
+        var fromRight = rect.right - e.clientX;
+        if (fromRight <= 28) {
+          setTimeout(function(){
+            $deptInput.val('');
+            $deptSelect.val('').trigger('change');
+          }, 0);
+        }
+      });
+
+      $modal.off('shown.bs.modal.gsoAddItemPageDept').on('shown.bs.modal.gsoAddItemPageDept', function(){
+        populateDatalist();
+        var code = $deptSelect.val();
+        $deptInput.val(code ? $deptSelect.find('option:selected').text().trim() : '');
+        wasSetFromSelect = !!code;
+        clearedForRetype = false;
+        setTimeout(function(){ $deptInput.trigger('focus'); }, 100);
+      });
+      $modal.off('hidden.bs.modal.gsoAddItemPageDept').on('hidden.bs.modal.gsoAddItemPageDept', function(){
+        $deptInput.val('');
+        $deptSelect.val('');
+        wasSetFromSelect = false;
+        clearedForRetype = false;
+      });
+
+      $deptInput.off('input.gsoAddItemPageDeptInvalid change.gsoAddItemPageDeptInvalid').on('input.gsoAddItemPageDeptInvalid change.gsoAddItemPageDeptInvalid', function(){
+        $(this).removeClass('is-invalid');
+        $(this).next('.invalid-feedback').remove();
+      });
+
+      populateDatalist();
+    })();
+
+    enforcePerRowQtyLimit();
+    validateUnitValue();
+    updateTotalAmount();
+    syncYearAcquiredWithCondition();
+    syncNoEndUserState();
+    applyNoAccountPropertyStateToAll();
+    updateParEmpStateAddItem();
+    toggleAddNewEmpSectionAddItem();
+  }
+
+  $(document)
+    .off('submit.gsoAddItemPagePre', '#addItem')
+    .on('submit.gsoAddItemPagePre', '#addItem', function(e){
+      if(!hasUI()) { return; }
+      init();
+
+      if(!validateDeptExactOnSubmit()){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return false;
+      }
+
+      syncNoEndUserState();
+
+      var condition = String($('#condition').val() || '').toUpperCase();
+      if (condition === 'NEW') {
+        var currentYear = String(new Date().getFullYear());
+        $('#year').val(currentYear).prop('disabled', false);
+        applyNoAccountPropertyStateToAll();
+        setTimeout(function(){
+          try { $('#year').prop('disabled', true); } catch(_) {}
+        }, 0);
+      } else {
+        applyNoAccountPropertyStateToAll();
+        $('#year').prop('disabled', false);
+      }
+
+      if(!validateUnitValue()){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        try {
+          $('#itemSetRows .item-unitvalue-error:visible').first().closest('.item-set-card').find('.js-item-unitvalue').trigger('focus');
+        } catch(_) {}
+        return false;
+      }
+
+      if(!validateManualAccountCodes()){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    });
+
+  $(function(){ init(); });
+
+  return {
+    init: init,
+    validateUnitValue: validateUnitValue,
+    updatePropertyNumber: updatePropertyNumber,
+    syncYearAcquiredWithCondition: syncYearAcquiredWithCondition,
+    getSetLabel: getSetLabel
+  };
+})();
+
+//par general fund
+$(document).on('submit','#addItem',function(e){//to save p.a.r general fund information
+  e.preventDefault();
+  var $btn = $('#addItemSubmitBtn');
+  if($btn.data('submitting')){ return; }
+  $btn.data('submitting', true);
+  var originalHtml = $btn.html();
+  $btn.prop('disabled', true).html('<i class="fas fa-circle-notch fa-spin"></i>&nbsp;Saving...');
+
+  // If this is a NEW purchase, open a window now to avoid popup blockers.
+  var formCondition = String($('#condition').val() || '').toUpperCase();
+  var formCategory = String($('#category').val() || '').toUpperCase();
+  var printWin = null;
+  if(formCondition === 'NEW' && (formCategory === 'PAR' || formCategory === 'ICS')){
+    try { printWin = window.open('', '_blank'); } catch(e) { printWin = null; }
+  }
+
+  var fd = new FormData(this);
+  fd.append("save_item",true);
+  // ensure token present
+  var tokenField = document.getElementById('add_item_submission_token');
+  if(tokenField){ fd.append('submission_token', tokenField.value); }
+
+  // Multi end-user: explicitly append dynamic row values to FormData.
+  // This guards against cases where the dynamic table is not inside the form DOM
+  // (or is re-rendered) at the moment FormData is constructed.
+  var isMultiEndUser = $('#multipleEndUserCheckBox').is(':checked');
+  var isNoEndUser = formCondition === 'NEW' && $('#endUserNoneCheckBox').is(':checked');
+  if(isNoEndUser){
+    fd.set('parEmp', '');
+    fd.set('endUserNoneCheckBox', '1');
+  }
+  var getSetLabel = (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.getSetLabel === 'function')
+    ? window.GSO.AddItemPage.getSetLabel
+    : function(idx){ return 'Set ' + idx; };
+  if(isMultiEndUser && !isNoEndUser){
+    var missingSets = [];
+    var missingNewEmpSets = [];
+    $('#endUserRows select.parEmpRow').each(function(){
+      var idx = $(this).data('row');
+      if(idx === undefined || idx === null || idx === ''){ return; }
+      var val = ($(this).val() || '').toString().trim();
+      if(!val){ missingSets.push(getSetLabel(idx)); }
+      fd.append('parEmp_multi['+idx+']', val);
+
+      // Per-row add new employee + position
+      if((val || '').toString().toLowerCase() === 'add_new_emp'){
+        var nm = ($('#endUserRows input.parEmpNewName[data-row="'+idx+'"]').val() || '').toString().trim();
+        var ps = ($('#endUserRows input.parEmpNewPos[data-row="'+idx+'"]').val() || '').toString().trim();
+        if(!nm || !ps){ missingNewEmpSets.push(getSetLabel(idx)); }
+        fd.append('parEmp_multi_new_name['+idx+']', nm);
+        fd.append('parEmp_multi_new_position['+idx+']', ps);
+      }
+    });
+    if(missingSets.length){
+      Swal.fire({ icon:'warning', title:'Validation error', text:'End user is required for set(s): ' + missingSets.join(', ') + '.' });
+      // Restore button state and allow user to fix inputs without reload
+      $btn.data('submitting', false);
+      $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      return;
+    }
+    if(missingNewEmpSets.length){
+      Swal.fire({ icon:'warning', title:'Validation error', text:'New employee name and position are required for set(s): ' + missingNewEmpSets.join(', ') + '.' });
+      $btn.data('submitting', false);
+      $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      return;
+    }
+  }
+
+  // Bundle equipment: explicitly append dynamic row values to FormData.
+  // This guarantees the backend receives bundle_* arrays even if the bundle UI
+  // container is rendered outside the <form> subtree by the browser.
+  var bundleRows = $('#bundleRows .bundle-row');
+  var isTrustFund = String($('#fund').val() || '').trim().toUpperCase() === 'TRUST FUND';
+  if(bundleRows.length){
+    var bundleMissing = [];
+    bundleRows.each(function(i){
+      var $r = $(this);
+      var parentIdx = String($r.find('select[name="bundle_parent_index[]"]').val() || '').trim();
+      var cat = String($r.find('select[name="bundle_category[]"]').val() || '').trim();
+      var asset = String($r.find('select[name="bundle_asset_class[]"]').val() || '').trim();
+      var model = String($r.find('input[name="bundle_brand_model[]"]').val() || '').trim();
+      var desc = String($r.find('textarea[name="bundle_description[]"]').val() || '').trim();
+      var s1 = String($r.find('input[name="bundle_serial1[]"]').val() || '').trim();
+      var s2 = String($r.find('input[name="bundle_serial2[]"]').val() || '').trim();
+      var par = String($r.find('input[name="bundle_property_number[]"]').val() || '').trim();
+
+      // Append values in the expected PHP array keys
+  fd.append('bundle_parent_index[]', parentIdx);
+      fd.append('bundle_category[]', cat);
+      fd.append('bundle_asset_class[]', asset);
+      fd.append('bundle_brand_model[]', model);
+      fd.append('bundle_description[]', desc);
+      fd.append('bundle_serial1[]', s1);
+      fd.append('bundle_serial2[]', s2);
+      fd.append('bundle_property_number[]', par);
+
+      // Basic validation: if a row exists, require at least category/asset/property number
+      var rowNum = i + 1;
+      var hasAny = (parentIdx || cat || asset || model || desc || s1 || s2 || par);
+      if(hasAny && (!parentIdx || !cat || !asset || (!isTrustFund && !par))){
+        bundleMissing.push(rowNum);
+      }
+    });
+
+    if(bundleMissing.length){
+      var bundleMessage = isTrustFund
+        ? 'Bundle equipment requires Bundle Set, Category, and Asset Class for row(s): '
+        : 'Bundle equipment requires Bundle Set, Category, Asset Class, and Property Number for row(s): ';
+      Swal.fire({ icon:'warning', title:'Validation error', text: bundleMessage + bundleMissing.join(', ') + '.' });
+      $btn.data('submitting', false);
+      $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      return;
+    }
+  }
+  
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data: fd,
+    processData: false,
+    contentType: false,
+    success: function(response){
+      var res;
+      try { res = jQuery.parseJSON(response || '{}'); }
+      catch(e){
+        Swal.fire({ icon:'error', title:'Unexpected response', text:'The server returned an invalid response. Please try again.' });
+        setTimeout(function(){ location.reload(); }, 1500);
+        return;
+      }
+      if(res.status == 200){
+        // Print only when the backend explicitly requests it (NEW purchases).
+        try {
+          var data = (res && res.data) ? res.data : null;
+          if(data && data.should_print && String(data.condition || '').toUpperCase() === 'NEW'){
+            var ref = String(data.reference_number || '').trim();
+            var cat = String(data.category || '').toUpperCase();
+            if(ref && (cat === 'PAR' || cat === 'ICS')){
+              var url = (cat === 'PAR')
+                ? ('printpar.php?refnumber=' + encodeURIComponent(ref))
+                : ('inventory_custodian_slip.php?reference_number=' + encodeURIComponent(ref));
+              if(printWin && !printWin.closed){
+                printWin.location = url;
+              } else {
+                window.open(url, '_blank');
+              }
+            } else if(printWin && !printWin.closed){
+              // Nothing to print; close blank window.
+              printWin.close();
+            }
+          } else if(printWin && !printWin.closed) {
+            // EXISTING: no printing
+            printWin.close();
+          }
+        } catch(e) {
+          if(printWin && !printWin.closed){ try { printWin.close(); } catch(_){} }
+        }
+
+        Swal.fire({
+          position: 'center',
+          icon: 'success',
+          title: 'Property Added Successfully',
+          showConfirmButton: false,
+          timer: 1500
+        });
+        setTimeout(function(){
+          $('#addItemModal').modal('hide');
+          $('#addItem')[0].reset();
+          // Force fresh token by reloading page (simplest approach)
+          location.reload();
+        }, 1700);
+      } else if(res.status == 409){
+        // Duplicate / invalid token
+        Swal.fire({
+          icon: 'warning',
+          title: 'Duplicate submission',
+          text: res.message || 'This form was already submitted.',
+          timer: 2500
+        });
+        // Re-enable for a fresh attempt only if user keeps modal open (need new token) -> fetch new token via page reload
+        setTimeout(function(){ location.reload(); }, 2000);
+      } else if(res.status == 500){
+        Swal.fire({
+          icon: 'error',
+          title: 'Save failed',
+          text: res.message || 'Server error'
+        });
+        // Allow retry (token consumed, need new token) -> reload
+        setTimeout(function(){ location.reload(); }, 1500);
+      } else if(res.status == 422){
+        // Validation error: keep modal open so user can correct inputs
+        Swal.fire({ icon:'warning', title:'Validation error', text: res.message || 'Please check your inputs.' });
+        // Re-enable submit button for correction
+        var $btn = $('#addItemSubmitBtn');
+        $btn.data('submitting', false);
+        $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      } else {
+        // Unexpected
+        Swal.fire({ icon:'info', title:'Notice', text: res.message || 'Unexpected response.' });
+        setTimeout(function(){ location.reload(); }, 1500);
+      }
+    },
+    error: function(xhr, status){
+      Swal.fire({ icon:'error', title:'Network error', text:'Please check your connection. If unsure whether saved, the system prevented duplicate.'});
+      setTimeout(function(){ location.reload(); }, 2000);
+    },
+    complete: function(){
+      var $btn = $('#addItemSubmitBtn');
+      // Restore button to avoid hanging if no reload happens
+      $btn.data('submitting', false);
+      $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+    }
+  });
+ });
+ 
+$(document).on('submit','#parGenFundUpdate',function(e){//to update p.a.r general fund information
+  e.preventDefault();
+  var pargfid = new FormData(this);
+  pargfid.append("update_par",true);
+
+  function reloadInventoryTableKeepState(){
+    try {
+      if (!(window.$ && $.fn && $.fn.dataTable)) return false;
+      if (!$('#InventoryTable').length) return false;
+      if (!$.fn.dataTable.isDataTable || !$.fn.dataTable.isDataTable('#InventoryTable')) return false;
+      var dt = $('#InventoryTable').DataTable();
+      if (dt && dt.ajax && typeof dt.ajax.reload === 'function') {
+        dt.ajax.reload(null, false);
+        return true;
+      }
+    } catch (e) {
+      // fall through to full reload
+    }
+    return false;
+  }
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data: pargfid,
+    processData: false,
+    contentType: false,
+    dataType: 'json',
+    success: function(response){
+      var res = (typeof response === 'string') ? jQuery.parseJSON(response) : response;
+
+      if(res.status == 200){
+        Swal.fire({
+            position: 'center',
+            icon: 'success',
+            title: 'P.A.R Updated Successfully',
+            showConfirmButton: false,
+            timer: 2000
+          }).then(()=>{
+            $('#editInModal').modal('hide');
+            $('#parGenFundUpdate')[0].reset();
+            // Refresh inventory list without resetting paging/sort/search.
+            if (!reloadInventoryTableKeepState()) {
+              location.reload();
+            }
+        });  
+      } else {
+        Swal.fire({ icon: 'error', title: 'Update failed', text: res.message || 'Unable to update property details.' });
+      }
+    },
+    error: function(xhr, status, error){
+      var message = error || 'Unable to update property details.';
+      if (xhr && xhr.responseJSON && xhr.responseJSON.message) {
+        message = xhr.responseJSON.message;
+      } else if (xhr && xhr.responseText) {
+        message = xhr.responseText.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() || message;
+      }
+      Swal.fire({ icon: 'error', title: 'Update failed', text: message });
+    }
+  }); 
+});
+$(document).on('click','.transferProperty', function(){// to fetch p.a.r and i.c.s general fund information for transfer
+  var propertyTransfer = $(this).data("value");
+    $.ajax({
+      type: 'GET',
+      url:'../auth/auth.php?propertyTransfer='+propertyTransfer,
+      success:function(response){
+
+        var res = jQuery.parseJSON(response);
+
+        if(res.status==422){
+          alert(res.message);
+        }else if(res.status == 200){
+          $('#par_num').val(res.data.par_number);
+          $('#category').val(res.data.category);
+          $('#citem').val(res.data.item);
+          $('#empid').val(res.data.emp_id);
+          $('#cuser').val(res.data.user);
+          $('#cdeptid').val(res.data.dept_id);
+          $('#cdept').val(res.data.department_name);
+          $('#transInModal').modal('show');
+        }
+      }
+    });
+});
+
+// Reusable function for opening printable tabs after transfer
+function openTransferTabs(cdept, dept, category, refnum) {
+  cdept = String(cdept);
+  dept = String(dept);
+  category = String(category).toUpperCase();
+  if (category === 'PAR' || category === 'ICS') {
+    if (cdept === dept) {
+      // Same department, open one tab
+      let url = (category === 'PAR') ? 'printpt.php?reference_number=' + refnum : 'inventory_custodian_slip.php?reference_number=' + refnum;
+      let win = window.open(url, '_blank');
+      if (win) win.print();
+      else alert('Please allow popups for this site.');
+    } else {
+      // Different departments, open two tabs
+      let url1 = 'property_transfer_report.php?reference_number=' + refnum;
+      let url2 = (category === 'PAR') ? 'printpt.php?reference_number=' + refnum : 'inventory_custodian_slip.php?reference_number=' + refnum;
+      let win1 = window.open(url1, '_blank');
+      let win2 = window.open(url2, '_blank');
+      if (win1) win1.print();
+      if (win2) win2.print();
+      if (!win1 || !win2) alert('Please allow popups for this site.');
+    }
+  }
+}
+
+$(document).on('submit','#parTransfer',function(e){//to transfer p.a.r gen fund to another end user section
+  e.preventDefault();
+  var cdept = $('#cdeptid').val();
+  var dept = $('#dept').val();
+  var refnum = document.getElementById("refnum").value;
+  var category = document.getElementById("category").value;
+  var fd = new FormData(this);
+  fd.append("transferPar", true);
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data: fd,
+    processData: false,
+    contentType: false,
+    success:  function(response){
+      var res = jQuery.parseJSON(response);
+      if(res.status == 200){
+        Swal.fire({
+            position: 'center',
+            icon: 'success',
+            title: 'Property Transferred Successfully',
+            showConfirmButton: false,
+            timer: 1500
+          });
+        setTimeout(function(){
+          $('#transInModal').modal('hide');
+          openTransferTabs(cdept, dept, category, refnum);
+          location.reload();
+        },1900)
+      }
+    }
+  });
+});
+
+$(document).on('click','.transferFromStock', function(){// to fetch p.a.r and i.c.s general fund information to transfer from stock
+  var TransferFromStock = $(this).data("value");
+    $.ajax({
+      type: 'GET',
+      url:'../auth/auth.php?TransferFromStock='+TransferFromStock,
+      success:function(response){
+
+        var res = jQuery.parseJSON(response);
+
+        if(res.status==422){
+          alert(res.message);
+        }else if(res.status == 200){
+          $('#par_num').val(res.data.par_number);
+          $('#category').val(res.data.category);
+          $('#citem').val(res.data.item);
+          $('#empid').val(res.data.emp_id);
+          $('#cuser').val(res.data.user);
+          $('#cdeptid').val(res.data.dept_id);
+          $('#cdept').val(res.data.department_name);
+          $('#transInModal').modal('show');
+        }
+      }
+    });
+});
+$(document).on('submit','#parTransferFromStock',function(e){//to transfer p.a.r and i.c.s gen fund to another end user from stock
+  e.preventDefault();
+  var refnum = document.getElementById("refnum").value;
+  var category = document.getElementById("category").value;
+  var fd = new FormData(this);
+  fd.append("parTransferFromStock", true);
+
+    if(category == "PAR"){
+      $.ajax({
+        type: "POST",
+        url: "../auth/auth.php",
+        data: fd,
+        processData: false,
+        contentType: false,
+        success:  function(response){
+    
+          var res = jQuery.parseJSON(response);
+    
+          if(res.status == 200){
+            Swal.fire({
+                position: 'center',
+                icon: 'success',
+                title: 'Property Transferred Successfully',
+                showConfirmButton: false,
+                timer: 1500
+              });
+              setTimeout(function(){
+                $('#transInModal').modal('hide');  
+                var nw = window.open('printpt.php?reference_number='+refnum,"_blank");
+                location.reload();
+                nw.print();
+              },1900)    
+          }
+        }
+      });
+    }else if(category == "ICS"){
+      $.ajax({
+        type: "POST",
+        url: "../auth/auth.php",
+        data: fd,
+        processData: false,
+        contentType: false,
+        success:  function(response){
+    
+          var res = jQuery.parseJSON(response);
+    
+          if(res.status == 200){
+            Swal.fire({
+                position: 'center',
+                icon: 'success',
+                title: 'Property Transferred Successfully',
+                showConfirmButton: false,
+                timer: 1500
+              });
+              setTimeout(function(){
+                $('#transInModal').modal('hide');  
+                var nw = window.open('inventory_custodian_slip.php?reference_number='+refnum,"_blank");
+                location.reload();
+                nw.print();
+              },1900)    
+          }
+        }
+      });
+    }
+});
+
+$(document).on('click','.retInv', function(e){//to return gen fund property to stock
+  e.preventDefault();
+
+  if(confirm("Return item to GSO?")){
+
+    var retInv = $(this).data("value");
+
+    $.ajax({
+      type: "POST",
+      url: "../auth/auth.php",
+      data:{
+        'return_inv': true,
+        'retInv': retInv
+      },
+      success:function(response){
+        var res = jQuery.parseJSON(response);
+              if(res.status == 500){
+                alert(res.message);
+              }else{
+                alert(res.message);
+
+                location.reload();
+              }
+          }
+    });
+  }
+});
+
+$(document).on('click','.editPropertyDetails', function(){// to fetch p.a.r general fund information
+  var getParId = $(this).data("value");
+  $.ajax({
+    type: 'GET',
+    url:'../auth/auth.php?getParId='+ getParId,
+    success: function(response){
+
+      var res = jQuery.parseJSON(response);
+
+      if(res.status==422){
+        alert(res.message);
+      }else if(res.status == 200){
+        $('#par').val(res.data.par_number); // hidden input used for update WHERE clause
+        $('#par_display_top').val(res.data.par_number);
+        $('#par_display').val(res.data.par_number);
+        $('#edate').val(res.data.date_aquired);
+        $('#paritem').val(res.data.item);
+        $('#brand').val(res.data.model);
+        $('#description').val(res.data.description);
+        $('#remarks').val(res.data.remarks || '');
+        $('#fund').val(res.data.fund);
+        $('#par_ics_no').val(res.data.par_ics_number);
+        $('#serial').val(res.data.serial_number);
+        $('#serial2').val(res.data.serial_number_2);
+        $('#uvalue').val(res.data.amount);
+        $('#acode').val(res.data.account_code).data('original', res.data.account_code || '');
+        $('#par_new').val(''); // reset any pending property number rename
+        $('#po').val(res.data.purchase_order);
+        $('#obr').val(res.data.obr_number);
+        $('#pr').val(res.data.purchase_request);
+        $('#supplier').val(res.data.supplier);
+        $('#jev').val(res.data.jev_number);
+        // Current custodian context for bundle-with (if present)
+        try {
+          $('#gf_current_emp_id').val(res.data.current_emp_id || '');
+          $('#gf_current_dept_id').val(res.data.current_dept_id || '');
+          $('#sef_current_emp_id').val(res.data.current_emp_id || '');
+          $('#sef_current_dept_id').val(res.data.current_dept_id || '');
+        } catch (e) {}
+
+        // Keep Bundle-with table in sync with the currently viewed property number
+        try { $('#editInModal').trigger('gso:bundleWith:refresh'); } catch (e) {}
+        $('#editInModal').modal('show');
+      }
+    }
+  });
+});
+$(document).on('click','.editPropertyDetails', function (e) {// to view par property history
+  e.preventDefault();
+  var parnumberid = $(this).data("value");
+ 
+  $.ajax({
+    type: "POST",
+    url:"../auth/auth.php",
+    data: {
+      'viewHistoryBtn': true,
+      'parnumberid': parnumberid,
+    }, 
+    success: function (response) {
+      $('.ParGenHistory').html(response);
+    }
+  });   
+});
+
+// Account code change: regenerate property number live in the edit modal
+$(document).off('change.gfAcodeEdit').on('change.gfAcodeEdit', '#editInModal #acode', function () {
+  var newAcode  = $(this).val().trim();
+  var origAcode = String($(this).data('original') || '').trim();
+  var oldPar    = $('#par').val().trim();
+  var fund      = $('#fund').val().trim();
+
+  // Revert display if account code changed back to original
+  if (newAcode === origAcode) {
+    $('#par_new').val('');
+    $('#par_display, #par_display_top').val(oldPar);
+    return;
+  }
+
+  if (!newAcode || !oldPar) return;
+
+  // Determine category + year + dept from the existing property number segments
+  var parts    = oldPar.split('-');
+  var first    = parts[0] || '';
+  var deptCode = parts[parts.length - 1] || '';
+  var category, year;
+
+  if      (/^\d{4}$/.test(first)) { category = 'PAR'; year = first; }
+  else if (/^\d{2}$/.test(first)) { category = 'ICS'; year = '20' + first; }
+  else { return; } // unrecognised format
+
+  $.ajax({
+    url: '../auth/auth.php',
+    method: 'POST',
+    dataType: 'json',
+    data: {
+      generate_property_number: 1,
+      category: category,
+      year: year,
+      account_code: newAcode,
+      dept: deptCode,
+      fund: fund,
+      exclude: [oldPar]
+    },
+    success: function (res) {
+      if (res && res.success) {
+        $('#par_new').val(res.pr_number);
+        $('#par_display, #par_display_top').val(res.pr_number);
+      } else {
+        Swal && Swal.fire({ icon: 'warning', title: res.error || 'Unable to generate property number.' });
+        $('#par_new').val('');
+        $('#par_display, #par_display_top').val(oldPar);
+      }
+    },
+    error: function () {
+      $('#par_new').val('');
+      $('#par_display, #par_display_top').val(oldPar);
+    }
+  });
+});
+
+//par general fund
+
+// ==========================================================
+// General Fund: Bundle-with (Add Bundle Item)
+// ==========================================================
+(function bindGfBundleWith(){
+  // Only bind on pages that contain the bundle modal.
+  if (!$('#bundleSearchModal').length || !$('#bundleWithTbody').length) { return; }
+
+  var path = String((window.location && window.location.pathname) || '');
+  var isSef = /sef-inventory\.php$/i.test(path) || $('#sef_current_emp_id').length > 0;
+
+  function apiLookupParams(par){
+    return isSef ? { sef_bundle_lookup: 1, par_number: par } : { gf_bundle_lookup: 1, par_number: par };
+  }
+
+  function apiListParams(bundleWith){
+    return isSef ? { get_sef_bundle_with: 1, bundle_with: bundleWith } : { get_gf_bundle_with: 1, bundle_with: bundleWith };
+  }
+
+  function apiSavePayload(deptId, empId, propertyNumber, bundleWith){
+    var base = {
+      dept_id: deptId,
+      emp_id: empId,
+      property_number: propertyNumber,
+      bundle_with: bundleWith
+    };
+    if (isSef) {
+      base.save_sef_bundle_link = 1;
+    } else {
+      base.save_gf_bundle_link = 1;
+    }
+    return base;
+  }
+
+  var state = {
+    lastSearch: null,
+    lastAutoSearchedPar: '',
+    autoTimer: null,
+    searching: false
+  };
+
+  function esc(text){ return $('<div>').text(text === null || text === undefined ? '' : String(text)).html(); }
+
+  function viewedPar(){
+    return String($('#par').val() || '').trim().toUpperCase();
+  }
+
+  function viewedDeptId(){
+    var v = String($('#gf_current_dept_id').val() || $('#sef_current_dept_id').val() || '').trim();
+    var n = parseInt(v, 10);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function viewedEmpId(){
+    var v = String($('#gf_current_emp_id').val() || $('#sef_current_emp_id').val() || '').trim();
+    var n = parseInt(v, 10);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function setMsg(msg){
+    if (!msg) { $('#bundleSearchMsg').hide().text(''); return; }
+    $('#bundleSearchMsg').show().text(String(msg));
+  }
+
+  function resetSearchUI(clearInput){
+    state.lastSearch = null;
+    state.searching = false;
+    $('#bundleAddBtn').prop('disabled', true);
+    setMsg('');
+    if (clearInput) {
+      $('#bundleSearchPar').val('');
+      state.lastAutoSearchedPar = '';
+    }
+    // Reset search result table
+    $('#bundleSearchResultTbody').html(
+      '<tr id="bundleSearchEmptyRow">' +
+        '<td class="text-muted text-center" colspan="5">No result. Search a property number.</td>' +
+      '</tr>'
+    );
+  }
+
+  function renderSearchResult(d){
+    if (!d) { resetSearchUI(false); return; }
+    var rowHtml = '<tr>' +
+      '<td>' + (esc(d.item || '') || '<span class="text-muted">-</span>') + '</td>' +
+      '<td>' + (esc(d.model || '') || '<span class="text-muted">-</span>') + '</td>' +
+      '<td>' + (esc(d.serial_number || '') || '<span class="text-muted">-</span>') + '</td>' +
+      '<td>' + (esc(d.serial_number_2 || '') || '<span class="text-muted">-</span>') + '</td>' +
+      '<td class="text-nowrap">' + (esc(d.par_number || '') || '<span class="text-muted">-</span>') + '</td>' +
+    '</tr>';
+    $('#bundleSearchResultTbody').html(rowHtml);
+  }
+
+  function loadBundleWithTable(){
+    var par = viewedPar();
+    if (!par) {
+      $('#bundleWithTbody').find('tr.bundleWithRow').remove();
+      $('#bundleWithEmptyRow').show();
+      return;
+    }
+
+    $.ajax({
+      type: 'GET',
+      url: '../auth/auth.php',
+      data: apiListParams(par),
+      success: function(resp){
+        var res = resp;
+        if (typeof resp === 'string') {
+          try { res = JSON.parse(resp); } catch (e) { res = null; }
+        }
+        if (!(res && res.status === 200 && Array.isArray(res.data))) {
+          // If table doesn't exist yet, keep UI stable.
+          $('#bundleWithTbody').find('tr.bundleWithRow').remove();
+          $('#bundleWithEmptyRow').show();
+          return;
+        }
+
+        var rows = res.data;
+        $('#bundleWithTbody').find('tr.bundleWithRow').remove();
+        if (!rows.length) {
+          $('#bundleWithEmptyRow').show();
+          return;
+        }
+        $('#bundleWithEmptyRow').hide();
+        rows.forEach(function(r){
+          var itemRaw = String((r && r.item) ? r.item : '').trim();
+          var modelRaw = String((r && r.model) ? r.model : '').trim();
+          var itemDisplay = modelRaw ? (itemRaw + ' - ' + modelRaw) : itemRaw;
+          var item = esc(itemDisplay);
+          var s1 = String((r && r.serial_number) ? r.serial_number : '').trim();
+          var s2 = String((r && r.serial_number_2) ? r.serial_number_2 : '').trim();
+          var serial = esc([s1, s2].filter(Boolean).join(' / '));
+          var pnum = esc((r && r.property_number) ? r.property_number : '');
+          $('#bundleWithTbody').append(
+            '<tr class="bundleWithRow">' +
+              '<td>' + (item || '<span class="text-muted">(unknown)</span>') + '</td>' +
+              '<td>' + (serial || '<span class="text-muted">(none)</span>') + '</td>' +
+              '<td class="text-nowrap">' + (pnum || '<span class="text-muted">-</span>') + '</td>' +
+            '</tr>'
+          );
+        });
+      },
+      error: function(){
+        // Silent fail; keep table unchanged.
+      }
+    });
+  }
+
+  function performLookup(par, onDone){
+    var cleaned = String(par || '').trim().toUpperCase();
+    if (!cleaned) {
+      setMsg('Please enter a property number.');
+      return;
+    }
+    var viewPar = viewedPar();
+    if (viewPar && cleaned === viewPar) {
+      setMsg('You are viewing this same property number.');
+      return;
+    }
+
+    state.searching = true;
+    $('#bundleAddBtn').prop('disabled', true);
+    setMsg('');
+
+    $.ajax({
+      type: 'GET',
+      url: '../auth/auth.php',
+      data: apiLookupParams(cleaned),
+      success: function(resp){
+        state.searching = false;
+        var res = resp;
+        if (typeof resp === 'string') {
+          try { res = JSON.parse(resp); } catch (e) { res = null; }
+        }
+
+        if (!(res && res.status === 200 && res.data && res.data.par_number)) {
+          resetSearchUI(false);
+          setMsg((res && res.message) ? res.message : 'No matching property found.');
+          if (typeof onDone === 'function') { onDone(false); }
+          return;
+        }
+
+        state.lastSearch = {
+          par_number: String(res.data.par_number || '').trim().toUpperCase(),
+          item: res.data.item || '',
+          model: res.data.model || '',
+          serial_number: res.data.serial_number || '',
+          serial_number_2: res.data.serial_number_2 || ''
+        };
+        renderSearchResult(state.lastSearch);
+        $('#bundleAddBtn').prop('disabled', false);
+        if (typeof onDone === 'function') { onDone(true); }
+      },
+      error: function(){
+        state.searching = false;
+        setMsg('Server error while searching.');
+        if (typeof onDone === 'function') { onDone(false); }
+      }
+    });
+  }
+
+  function scheduleAutoSearch(){
+    if (state.searching) { return; }
+    var v = String($('#bundleSearchPar').val() || '').trim().toUpperCase();
+    if (!v) { return; }
+    if (v === state.lastAutoSearchedPar) { return; }
+
+    if (state.autoTimer) {
+      try { clearTimeout(state.autoTimer); } catch (e) {}
+      state.autoTimer = null;
+    }
+
+    state.autoTimer = setTimeout(function(){
+      var vv = String($('#bundleSearchPar').val() || '').trim().toUpperCase();
+      if (!vv) { return; }
+      if (vv === state.lastAutoSearchedPar) { return; }
+      state.lastAutoSearchedPar = vv;
+      performLookup(vv);
+    }, 450);
+  }
+
+  // Load bundle-with rows whenever the viewed property changes and/or modal opens.
+  $('#editInModal')
+    .off('shown.gsoBundleWith gsoBundleWithRefresh')
+    .on('shown.gsoBundleWith gso:bundleWith:refresh.gsoBundleWithRefresh', function(){
+      loadBundleWithTable();
+    });
+
+  // Open search modal
+  $(document)
+    .off('click.gsoOpenBundleSearch', '#btnAddBundleLink')
+    .on('click.gsoOpenBundleSearch', '#btnAddBundleLink', function(){
+      resetSearchUI(true);
+      $('#bundleSearchModal').modal('show');
+      setTimeout(function(){ $('#bundleSearchPar').focus(); }, 150);
+    });
+
+  // Auto-search once per entered property number
+  $(document)
+    .off('input.gsoBundleSearch', '#bundleSearchPar')
+    .on('input.gsoBundleSearch', '#bundleSearchPar', function(){
+      scheduleAutoSearch();
+    });
+
+  // Enter triggers immediate search
+  $(document)
+    .off('keydown.gsoBundleSearchEnter', '#bundleSearchPar')
+    .on('keydown.gsoBundleSearchEnter', '#bundleSearchPar', function(e){
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        var v = String($('#bundleSearchPar').val() || '').trim().toUpperCase();
+        if (!v) { setMsg('Please enter a property number.'); return; }
+        state.lastAutoSearchedPar = v;
+        performLookup(v);
+      }
+    });
+
+  // Save bundle link
+  $(document)
+    .off('click.gsoBundleAdd', '#bundleAddBtn')
+    .on('click.gsoBundleAdd', '#bundleAddBtn', function(){
+      if (!state.lastSearch || !state.lastSearch.par_number) {
+        setMsg('Search an item first.');
+        return;
+      }
+
+      var bundleWith = viewedPar();
+      var propertyNumber = String(state.lastSearch.par_number || '').trim().toUpperCase();
+      var deptId = viewedDeptId();
+      var empId = viewedEmpId();
+
+      if (!bundleWith) { setMsg('Missing viewed property number.'); return; }
+      if (!deptId || !empId) {
+        setMsg('Missing current custodian info (dept/employee).');
+        return;
+      }
+
+      $('#bundleAddBtn').prop('disabled', true);
+
+      $.ajax({
+        type: 'POST',
+        url: '../auth/auth.php',
+        data: apiSavePayload(deptId, empId, propertyNumber, bundleWith),
+        success: function(resp){
+          var res = resp;
+          if (typeof resp === 'string') {
+            try { res = JSON.parse(resp); } catch (e) { res = null; }
+          }
+          if (res && res.status === 200) {
+            if (window.toastr) toastr.success(res.message || 'Bundled successfully');
+            $('#bundleSearchModal').modal('hide');
+            loadBundleWithTable();
+            return;
+          }
+          $('#bundleAddBtn').prop('disabled', false);
+          var msg = (res && res.message) ? res.message : 'Failed to save bundle';
+          if (window.toastr) toastr.error(msg);
+          else setMsg(msg);
+        },
+        error: function(){
+          $('#bundleAddBtn').prop('disabled', false);
+          if (window.toastr) toastr.error('Server error saving bundle');
+        }
+      });
+    });
+})();
+
+//clearance type
+$(document).on('submit','#ct_form',function(e){//to save clearance type information
+  e.preventDefault();
+  var fd = new FormData(this);
+  fd.append("save_ct",true);
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data: fd,
+    processData: false,
+    contentType: false,
+    success:function(response){
+      var res = jQuery.parseJSON(response);
+
+    if(res.status == 200 ){
+      Swal.fire({
+        position: 'center',
+        icon: 'success',
+        title: 'Save Successfully',
+        showConfirmButton: false,
+        timer: 1700
+      }).then(()=>{
+        $('#addClearanceTypeModal').modal('hide');
+        $('#ct_form')[0].reset();
+        location.reload();
+    });
+  }
+}
+});
+});
+$(document).on('click','.editct', function(){//to fetch clearance information 
+  var ctid = $(this).val();
+  $.ajax({
+    type:'GET',
+    url:'../auth/auth.php?ctid='+ ctid,
+    success:function(response){
+
+      var res = jQuery.parseJSON(response);
+      
+      if(res.status == 200){
+        $('#CtId').val(res.data.ctype_id);
+        $('#ectname').val(res.data.clearance_name);
+        $('#ectcode').val(res.data.clearance_code);
+        $('#editCtModal').modal('show');
+      }
+    }
+  });
+});
+$(document).on('submit','#ct_update',function(e){//to update clearance information
+  e.preventDefault();
+
+  var fd = new FormData(this);
+  fd.append("update_clearance", true);
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data: fd,
+    processData: false,
+    contentType: false,
+    success: function(response){
+      var res = jQuery.parseJSON(response);
+
+     if(res.status == 200 ){
+        Swal.fire({
+          position: 'center',
+          icon: 'success',
+          title: 'Updated Successfully',
+          showConfirmButton: false,
+          timer: 1700
+        }).then(()=>{
+          $('#editCtModal').modal('hide');
+          $('#ct_update')[0].reset();
+          location.reload();
+      });
+      }
+    }
+  });
+});
+$(document).on('click','.delct', function(e){//to delete clearance information
+  e.preventDefault();
+
+  if(confirm("Are you sure? ")){
+
+  var delct = $(this).val();
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data:{
+      'delete_ct':true,
+      'delct':delct
+    },
+    success:function(response){
+      var res = jQuery.parseJSON(response);
+      if(res.status == 500){
+        alert(res.message);
+      }else{
+        alert(res.message);
+
+        location.reload();
+      }
+    }
+  });
+}
+});
+//clearance type
+
+    $(document).on('click','.retIcsInv', function(e){//to return i.c.s property general fund to stock
+      e.preventDefault();
+    
+      if(confirm("Return item to GSO?")){
+    
+        var retInv = $(this).data("value");
+    
+        $.ajax({
+          type: "POST",
+          url: "../auth/auth.php",
+          data:{
+            'return_icsInv': true,
+            'retIcsInv': retIcsInv
+          },
+          success:function(response){
+            var res = jQuery.parseJSON(response);
+                  if(res.status == 500){
+                    alert(res.message);
+                  }else{
+                    alert(res.message);
+    
+                    location.reload();
+                  }
+              }
+        });
+      }
+    });
+//ics general fund
+$(document).on('submit','#update_property_clearance', function(e){//to update employee property clearance details
+  e.preventDefault();
+  var fd = new FormData(this);
+  fd.append("update_pc",true);
+
+  $.ajax({
+    type:"POST",
+    url:"../auth/auth.php",
+    data:fd,
+    processData:false,
+    contentType:false,
+    success:function(response){
+      var res = jQuery.parseJSON(response);
+      if(res.status==200){
+        Swal.fire({
+          position: 'center',
+          icon: 'success',
+          title: 'Form updated successfully!',
+          showConfirmButton: false,
+          timer: 2000
+        }).then(()=>{
+          location.reload();
+        }); 
+      }
+    }
+  });
+});
+//fetch general fund property info subject for return to stock -> directly open condition modal
+$(document).on('click','.returnItem', function(e){
+  e.preventDefault();
+  var returnToStock = $(this).data('value');
+  $.ajax({
+    type: 'GET',
+    url: '../auth/auth.php?returnToStock=' + encodeURIComponent(returnToStock),
+    success: function(response){
+      var res = jQuery.parseJSON(response || '{}');
+      if(res.status == 200 && res.data){
+        $('#cond_parnum').val(res.data.par_number || '');
+        $('#cond_empid').val(res.data.emp_id || '');
+        $('#cond_deptid').val(res.data.dept_id || '');
+        $('#cond_cat').val(res.data.category || '');
+        $('#itemConditionModal').modal('show');
+      } else {
+        alert(res.message || 'Unable to fetch item details.');
+      }
+    },
+    error: function(){
+      alert('Server error fetching item details.');
+    }
+  });
+});
+// Chained prompt: after confirming return, ask condition then route accordingly
+$(document).on('submit','#returnedToStock',function(e){
+  e.preventDefault();
+  // If condition modal not present, fallback to original behavior
+  if(!$('#itemConditionModal').length){
+    var reference = document.getElementById('refnumber').value;
+    var fd = new FormData(this);
+    fd.append('returned_item', true);
+    $.ajax({
+      type:'POST', url:'../auth/auth.php', data: fd,
+      processData:false, contentType:false,
+      success:function(response){
+        var res = jQuery.parseJSON(response);
+        if(res.status == 200){
+          Swal.fire({ position:'center', icon:'success', title:'Property Returned Successfully', showConfirmButton:false, timer:1500 });
+          setTimeout(function(){
+            $('#returnToStockModal').modal('hide');
+            var nw = window.open('property_return_slip.php?reference_number='+encodeURIComponent(reference),'_blank');
+            location.reload();
+            if(nw && typeof nw.print==='function'){ nw.print(); }
+          },1900);
+        }
+      }
+    });
+    return;
+  }
+
+  // Capture values from the first modal and pass to the condition modal
+  var par = $('#returnToStockModal #parnum').val();
+  var emp = $('#returnToStockModal #empid').val();
+  var dept = $('#returnToStockModal #cdept_id').val();
+  var cat = $('#returnToStockModal #cat').val();
+  var ref = $('#returnToStockModal #refnumber').val();
+
+  $('#cond_parnum').val(par);
+  $('#cond_empid').val(emp);
+  $('#cond_deptid').val(dept);
+  $('#cond_cat').val(cat);
+  $('#cond_refnumber').val(ref);
+
+  $('#returnToStockModal').modal('hide');
+  $('#itemConditionModal').modal('show');
+});
+
+// Serviceable -> keep in return_to_stock (use existing returned_item endpoint)
+$(document).on('click','#chooseServiceable', function(){
+  var ref = $('#cond_refnumber').val();
+  var fd = new FormData();
+  fd.append('returned_item', true);
+  fd.append('parnum', $('#cond_parnum').val());
+  fd.append('empid', $('#cond_empid').val());
+  fd.append('cdept_id', $('#cond_deptid').val());
+  fd.append('cat', $('#cond_cat').val());
+  fd.append('refnumber', ref);
+
+  $(this).prop('disabled', true);
+  $.ajax({
+    type: 'POST', url: '../auth/auth.php', data: fd,
+    processData: false, contentType: false,
+    success: function(response){
+      var res = jQuery.parseJSON(response);
+      if(res.status == 200){
+        Swal.fire({ position:'center', icon:'success', title:'Property Returned Successfully', showConfirmButton:false, timer:1500 });
+        setTimeout(function(){
+          $('#itemConditionModal').modal('hide');
+          var nw = window.open('property_return_slip.php?reference_number='+encodeURIComponent(ref), '_blank');
+          location.reload();
+          if(nw && typeof nw.print==='function'){ nw.print(); }
+        }, 1900);
+      } else {
+        Swal.fire({ icon:'error', title:'Failed', text: res.message || 'Unable to return to stock.' });
+        $('#chooseServiceable').prop('disabled', false);
+      }
+    },
+    error: function(){
+      Swal.fire({ icon:'error', title:'Server error' });
+      $('#chooseServiceable').prop('disabled', false);
+    }
+  });
+});
+
+// Unserviceable -> move to return_to_stock first, then mark as unserviceable (re-use endpoints)
+$(document).on('click','#chooseUnserviceable', function(){
+  var $btn = $(this);
+  $btn.prop('disabled', true);
+  var par = $('#cond_parnum').val();
+  var emp = $('#cond_empid').val();
+  var dept = $('#cond_deptid').val();
+  var cat = $('#cond_cat').val();
+  var ref = $('#cond_refnumber').val();
+
+  // Step 1: return to stock
+  var fd1 = new FormData();
+  fd1.append('returned_item', true);
+  fd1.append('parnum', par);
+  fd1.append('empid', emp);
+  fd1.append('cdept_id', dept);
+  fd1.append('cat', cat);
+  fd1.append('refnumber', ref);
+
+  $.ajax({
+    type:'POST', url:'../auth/auth.php', data: fd1,
+    processData:false, contentType:false,
+    success:function(resp1){
+      var r1 = jQuery.parseJSON(resp1 || '{}');
+      if(!(r1 && r1.status==200)){
+        Swal.fire({ icon:'error', title:'Failed', text:(r1 && r1.message) || 'Unable to return item.' });
+        $btn.prop('disabled', false);
+        return;
+      }
+      // Step 2: mark as unserviceable (expects parnum, deptid, cat, refnumber)
+      var fd2 = new FormData();
+      fd2.append('unserviceable', true);
+      fd2.append('parnum', par);
+      fd2.append('deptid', dept); // map from cdept_id
+      fd2.append('cat', cat);
+      fd2.append('refnumber', ref);
+
+      $.ajax({
+        type:'POST', url:'../auth/auth.php', data: fd2,
+        processData:false, contentType:false,
+        success:function(resp2){
+          var r2 = jQuery.parseJSON(resp2 || '{}');
+          if(r2 && r2.status==200){
+            Swal.fire({ position:'center', icon:'success', title:'Item moved to Unserviceable', showConfirmButton:false, timer:1600 });
+            setTimeout(function(){
+              $('#itemConditionModal').modal('hide');
+              try {
+                var nw = window.open('property_return_slip.php?reference_number='+encodeURIComponent(ref), '_blank');
+                if(nw && typeof nw.print==='function'){ nw.print(); }
+              } catch(e) { /* ignore popup blockers */ }
+              location.reload();
+            }, 1700);
+          } else {
+            Swal.fire({ icon:'error', title:'Failed', text:(r2 && r2.message) || 'Unable to mark unserviceable.' });
+            $btn.prop('disabled', false);
+          }
+        },
+        error:function(){ Swal.fire({ icon:'error', title:'Server error' }); $btn.prop('disabled', false); }
+      });
+    },
+    error:function(){ Swal.fire({ icon:'error', title:'Server error' }); $btn.prop('disabled', false); }
+  });
+});
+//fetch data of p.a.r and i.c.s general fund property subject for unserviceable
+$(document).on('click','.stockItems', function(e){
+  var stockItems = $(this).data("value");
+  $.ajax({
+    type: 'GET',
+    url:'../auth/auth.php?stockItems='+stockItems,
+    success:function(response){
+
+      var res = jQuery.parseJSON(response);
+
+      if(res.status==422){
+        alert(res.message);
+      }else if(res.status == 200){
+        $('#parnum').val(res.data.par_number);
+        $('#cat').val(res.data.category);
+        $('#deptid').val(res.data.dept_id);
+        $('#unserviceableItemModal').modal('show');
+      }
+    }
+  });
+});
+$(document).on('submit','#unserviceableItems',function(e){//to declare items as unserviceable
+  e.preventDefault();
+  var fd = new FormData(this);
+  fd.append("unserviceable",true);
+
+  $.ajax({
+    type: "POST",
+    url: "../auth/auth.php",
+    data: fd,
+    processData: false,
+    contentType: false,
+    success: function(response){
+      var res = jQuery.parseJSON(response);
+
+      if(res.status == 200){
+        Swal.fire({
+            position: 'center',
+            icon: 'success',
+            title: 'Successfully added to Userviceable',
+            showConfirmButton: false,
+            timer: 2000
+          }).then(()=>{
+            $('#unserviceableItems').modal('hide');
+            location.reload();
+        });  
+      }
+    }
+  }); 
+});
+});
+
+  // Add Return (admin/add-return.php)
+  // Keeps page JS centralized (per project convention).
+  (function(){
+    function hasAddReturnUI(){
+      return $('#addReturnItemModal').length && $('#addReturnItemForm').length;
+    }
+
+    function valTrim(sel){
+      return String($(sel).val() || '').trim();
+    }
+
+    function initRecentReturnItemsTable(){
+      if (!$.fn.DataTable) { return; }
+      var $t = $('#recentReturnItemsTable');
+      if (!$t.length) { return; }
+      if ($.fn.DataTable.isDataTable($t)) { return; }
+
+      var table = $t.DataTable({
+        responsive: true,
+        processing: true,
+        serverSide: false,
+        stateSave: true,
+        paging: true,
+        info: true,
+        lengthChange: true,
+        pageLength: 10,
+        lengthMenu: [10, 25, 50, 100, 500],
+        order: [[0, 'desc']],
+        ajax: {
+          url: '../auth/fetch_recent_return_items_dataTable.php',
+          type: 'post'
+        },
+        columns: [
+          { data: 'created_at' },
+          { data: 'return_type' },
+          { data: 'fund' },
+          { data: 'category' },
+          { data: 'item' },
+          { data: 'model' },
+          { data: 'serial_number' },
+          { data: 'serial_number_2' },
+          { data: 'par_number' }
+        ]
+      });
+
+      setInterval(function(){
+        if (table && table.ajax && !document.hidden) {
+          table.ajax.reload(null, false);
+        }
+      }, 8000);
+    }
+
+    function initAddReturnModal(){
+      if (!hasAddReturnUI()) { return; }
+      var $form = $('#addReturnItemForm');
+      if (!$form.length) { return; }
+      if ($form.data('gsoAddReturnInit')) { return; }
+      $form.data('gsoAddReturnInit', true);
+
+      function isUnserviceableReturnType(){
+        return String($('#ri_return_type').val() || '').trim().toUpperCase() === 'UNSERVICEABLE';
+      }
+
+      function isUnrepeatedMode(){
+        return isUnserviceableReturnType() && $('#ri_unrepeated').is(':checked');
+      }
+
+      function setUnrepeatedVisible(visible){
+        var $wrap = $('#ri_unrepeated_wrap');
+        if($wrap.length){
+          $wrap.toggle(!!visible);
+        } else {
+          $('#ri_unrepeated').closest('.custom-control').toggle(!!visible);
+        }
+      }
+
+      // Ensure Select2 renders in modal
+      function initAccountCodeSelect2(){
+        if (!$.fn.select2) { return; }
+        var $sel = $('#ri_account_code');
+        if (!$sel.length) { return; }
+        if ($sel.hasClass('select2-hidden-accessible')) { return; }
+        var $parent = $('#addReturnItemModal');
+        $sel.select2({
+          theme: 'bootstrap4',
+          width: '100%',
+          dropdownParent: $parent.length ? $parent : $(document.body),
+          placeholder: 'Select account code',
+          allowClear: true
+        });
+      }
+
+      function setCollapse($el, open){
+        if(!$el || !$el.length){ return; }
+        if(open){
+          $el.addClass('is-open').attr('aria-hidden', 'false');
+          try { $el[0].style.height = Math.min(360, $el[0].scrollHeight || 0) + 'px'; } catch(e) {}
+        } else {
+          $el.removeClass('is-open').attr('aria-hidden', 'true');
+          try { $el[0].style.height = '0px'; } catch(e) {}
+        }
+      }
+
+      // Property number(s) (always required on this page)
+      // Keep a single textarea and use comma+space separation when qty > 1.
+      function splitPropertyNumbers(raw){
+        return String(raw || '')
+          .split(/[\n\r,]+/)
+          .map(function(s){ return String(s || '').trim().toUpperCase(); })
+          .filter(function(s){ return !!s; });
+      }
+
+      function clearPropertyNumberWarning(){
+        $('#ri_property_number_warning').hide().text('');
+      }
+
+      function syncPropertyNumberUI(){
+        normalizeQty();
+        var $ta = $('#ri_property_number');
+        if(!$ta.length){ return; }
+
+        // Always enabled + required.
+        $('#ri_property_number_single_row').show();
+        $ta.prop('disabled', false).prop('required', true).prop('readonly', true);
+
+        // Optional legacy container (no longer used).
+        var $legacyRow = $('#ri_property_numbers_row');
+        if($legacyRow.length){ setCollapse($legacyRow, false); }
+        var $legacyWrap = $('#ri_propertyNumbers');
+        if($legacyWrap.length){ $legacyWrap.empty(); }
+
+        clearPropertyNumberWarning();
+      }
+
+      function hasManualPropertyNumbers(){
+        var v = String($('#ri_property_number').val() || '').trim();
+        var auto = String($('#ri_property_number').attr('data-gso-auto') || '') === '1';
+        return v !== '' && !auto;
+      }
+
+      function clearAutoFlags(){
+        $('#ri_property_number').removeAttr('data-gso-auto');
+      }
+
+      function nextPropNumber(num){
+        var parts = String(num || '').split('-');
+        if(parts.length < 4){ return String(num || ''); }
+        var idx = parts.length - 2; // sequence component (always before dept)
+        var seq = parts[idx] || '';
+        var pad = String(seq).length || 3;
+        var inc = String((parseInt(seq, 10) || 0) + 1).padStart(pad, '0');
+        parts[idx] = inc;
+        return parts.join('-');
+      }
+      var propGenDeb;
+      function scheduleAutoGeneratePropertyNumbers(){
+        clearTimeout(propGenDeb);
+        propGenDeb = setTimeout(autoGeneratePropertyNumbers, 250);
+      }
+      function autoGeneratePropertyNumbers(){
+        if(hasManualPropertyNumbers()){ return; }
+        var unrepeated = isUnrepeatedMode();
+        var qty = unrepeated ? 1 : normalizeQty();
+        var category = valTrim('#ri_category');
+        var year = valTrim('#ri_date_aquired');
+        var accountCode = valTrim('#ri_account_code');
+        var dept = valTrim('#ri_end_user_dept');
+        if(!category || !year || !accountCode || !dept){ return; }
+
+        $.ajax({
+          url: '../auth/auth.php',
+          type: 'POST',
+          dataType: 'json',
+          data: {
+            generate_return_property_number: 1,
+            category: category,
+            year: year,
+            account_code: accountCode,
+            dept: dept
+          },
+          success: function(res){
+            if(!res || res.status !== 200 || !res.data || !res.data.property_number){
+              return;
+            }
+            var first = String(res.data.property_number || '').trim();
+            if(!first){ return; }
+
+            // Unrepeated (UNSERVICEABLE only): always generate a single property number.
+            // Otherwise, generate a comma-separated list when qty > 1.
+            if(unrepeated || qty <= 1){
+              $('#ri_property_number').val(first).attr('data-gso-auto', '1');
+            } else {
+              var list = [];
+              var cur = first;
+              for(var i=1;i<=qty;i++){
+                list.push(cur);
+                cur = nextPropNumber(cur);
+              }
+              $('#ri_property_number').val(list.join(', ')).attr('data-gso-auto', '1');
+            }
+
+            scheduleUpdateSaveState();
+          }
+        });
+      }
+
+      // Qty + serial rows
+      var serialCache = {};
+      function rowKey(idx){
+        var n = parseInt(idx, 10);
+        if(!n || n < 1){ return null; }
+        return String(n);
+      }
+
+      function snapshotSerialCache(){
+        $('#ri_serialRows input').each(function(){
+          var name = $(this).attr('name') || '';
+          var m = name.match(/^(serial2?|serial)\[(\d+)\]$/i);
+          if(!m){ return; }
+          var field = m[1].toLowerCase();
+          var k = rowKey(m[2]);
+          if(!k){ return; }
+          if(!serialCache[k]){ serialCache[k] = { serial1: '', serial2: '' }; }
+          if(field === 'serial2'){ serialCache[k].serial2 = String($(this).val() || ''); }
+          else { serialCache[k].serial1 = String($(this).val() || ''); }
+        });
+      }
+
+      function normalizeQty(){
+        var $q = $('#ri_qty');
+        var qty = parseInt($q.val(), 10);
+        if(!qty || qty < 1){ qty = 1; $q.val(1); }
+        if(qty > 50){ qty = 50; $q.val(50); }
+        return qty;
+      }
+
+      function renderSerialRows(){
+        if(isUnrepeatedMode()){
+          $('#ri_add_serial').prop('checked', false);
+          $('#ri_serialRows').empty();
+          setCollapse($('#ri_serial_fields_row'), false);
+          return;
+        }
+
+        snapshotSerialCache();
+        var on = $('#ri_add_serial').is(':checked');
+        var qty = normalizeQty();
+        var $wrap = $('#ri_serialRows');
+        if(!on){
+          $wrap.empty();
+          setCollapse($('#ri_serial_fields_row'), false);
+          return;
+        }
+
+        var html = '';
+        for(var i=1;i<=qty;i++){
+          var k = rowKey(i);
+          var v1 = (serialCache[k] && serialCache[k].serial1) ? serialCache[k].serial1 : '';
+          var v2 = (serialCache[k] && serialCache[k].serial2) ? serialCache[k].serial2 : '';
+          html +=
+            '<div class="form-row mb-2">' +
+              '<div class="form-group col-md-6 mb-0">' +
+                '<label class="small text-muted mb-1">Serial Number 1 - ' + i + '</label>' +
+                '<input type="text" class="form-control text-uppercase" name="serial[' + i + ']" value="' + $('<div>').text(v1).html() + '" placeholder="Enter serial number">' +
+              '</div>' +
+              '<div class="form-group col-md-6 mb-0">' +
+                '<label class="small text-muted mb-1">Serial Number 2 - ' + i + '</label>' +
+                '<input type="text" class="form-control text-uppercase" name="serial2[' + i + ']" value="' + $('<div>').text(v2).html() + '" placeholder="Enter serial number 2">' +
+              '</div>' +
+            '</div>';
+        }
+        $wrap.html(html);
+        setCollapse($('#ri_serial_fields_row'), true);
+      }
+
+      function syncSerialToggle(){
+        renderSerialRows();
+      }
+
+      function syncNoBrandModel(){
+        var $cb = $('#ri_no_model');
+        var $model = $('#ri_model');
+        if(!$cb.length || !$model.length){ return; }
+
+        var checked = $cb.is(':checked');
+        var DEFAULT_VAL = 'NO BRAND/MODEL';
+        if(checked){
+          $model.val(DEFAULT_VAL).prop('readonly', true);
+        } else {
+          if(String($model.val() || '').trim().toUpperCase() === DEFAULT_VAL){
+            $model.val('');
+          }
+          $model.prop('readonly', false);
+        }
+
+        scheduleUpdateSaveState();
+      }
+
+      function validateRequired(){
+        var missing = [];
+        if(!valTrim('#ri_qty')) missing.push('Qty');
+        if(!valTrim('#ri_fund')) missing.push('Fund');
+        if(!valTrim('#ri_category')) missing.push('Category');
+        if(!valTrim('#ri_account_code')) missing.push('Account Code');
+        if(!valTrim('#ri_item')) missing.push('Asset Class');
+        if(!valTrim('#ri_model')) missing.push('Model');
+        if(!valTrim('#ri_description')) missing.push('Description');
+        if(!valTrim('#ri_date_aquired')) missing.push('Date Acquired');
+        if(!valTrim('#ri_return_type')) missing.push('Return Type');
+        if(!valTrim('#ri_end_user_dept')) missing.push('Department');
+        if(!valTrim('#ri_end_user_emp')) missing.push('Employee');
+        var q = normalizeQty();
+        var unrepeated = isUnrepeatedMode();
+        var rawProp = valTrim('#ri_property_number');
+        var list = splitPropertyNumbers(rawProp);
+        if(unrepeated || q <= 1){
+          if(!rawProp) missing.push('Property Number');
+        } else {
+          if(list.length !== q) missing.push('Property Numbers');
+        }
+        if(missing.length){
+          if(window.Swal){ Swal.fire('Required', 'Please complete: ' + missing.join(', ') + '.', 'warning'); }
+          return false;
+        }
+        return true;
+      }
+
+      function setSaveDisabled(disabled){
+        var $btn = $('#btnRiSaveReturn');
+        if(!$btn.length){
+          $btn = $form.find('button[type="submit"], input[type="submit"]').first();
+        }
+        if($btn && $btn.length){
+          $btn.prop('disabled', !!disabled);
+        }
+      }
+
+      function isFormCompleteSilent(){
+        if(!valTrim('#ri_qty')) return false;
+        if(!valTrim('#ri_fund')) return false;
+        if(!valTrim('#ri_category')) return false;
+        if(!valTrim('#ri_account_code')) return false;
+        if(!valTrim('#ri_item')) return false;
+        if(!valTrim('#ri_model')) return false;
+        if(!valTrim('#ri_description')) return false;
+        if(!valTrim('#ri_date_aquired')) return false;
+        if(!valTrim('#ri_return_type')) return false;
+        if(!valTrim('#ri_end_user_dept')) return false;
+        if(!valTrim('#ri_end_user_emp')) return false;
+
+        // Additional required fields when adding a new employee.
+        if(isAddNewEmployee()){
+          if(!valTrim('#ri_new_emp')) return false;
+          if(!valTrim('#ri_position')) return false;
+          if(!String($('#ri_emp_id').val() || '').trim()) return false;
+          var msg = String($('#ri-name-validation-msg').text() || '').toLowerCase();
+          if(msg.indexOf('validating') !== -1) return false;
+          if(msg.indexOf('already exists') !== -1) return false;
+        }
+
+        var q = normalizeQty();
+        var unrepeated = isUnrepeatedMode();
+        var rawProp = valTrim('#ri_property_number');
+        var list = splitPropertyNumbers(rawProp);
+        if(unrepeated || q <= 1){
+          if(!rawProp) return false;
+        } else {
+          if(list.length !== q) return false;
+        }
+        return true;
+      }
+
+      function syncUnrepeatedBehavior(){
+        var show = isUnserviceableReturnType();
+        setUnrepeatedVisible(show);
+        if(!show){
+          $('#ri_unrepeated').prop('checked', false);
+        }
+
+        var unrepeated = isUnrepeatedMode();
+        var $serialToggle = $('#ri_add_serial');
+        if($serialToggle.length){
+          $serialToggle.prop('disabled', unrepeated);
+          if(unrepeated){ $serialToggle.prop('checked', false); }
+        }
+        renderSerialRows();
+
+        // If unrepeated is active, keep a single property number even when qty > 1.
+        var $pn = $('#ri_property_number');
+        if(unrepeated && $pn.length){
+          var first = splitPropertyNumbers($pn.val())[0] || '';
+          $pn.val(first);
+        }
+
+        scheduleAutoGeneratePropertyNumbers();
+        scheduleUpdateSaveState();
+      }
+
+      var saveStateDeb;
+      function scheduleUpdateSaveState(){
+        clearTimeout(saveStateDeb);
+        saveStateDeb = setTimeout(function(){
+          setSaveDisabled(!isFormCompleteSilent());
+        }, 80);
+      }
+
+      function lockForm(locked){
+        $form.find('button, input, select, textarea').prop('disabled', !!locked);
+        $('#addReturnItemModal [data-dismiss="modal"]').prop('disabled', false);
+
+        if(locked){
+          setSaveDisabled(true);
+        } else {
+          scheduleUpdateSaveState();
+        }
+      }
+
+      function updateEmployeeSelectState(){
+        var hasDept = !!valTrim('#ri_end_user_dept');
+        var $emp = $('#ri_end_user_emp');
+        $emp.val('');
+        if(!hasDept){
+          $emp.prop('disabled', true).html('<option value="">SELECT A DEPARTMENT FIRST</option>');
+        } else {
+          $emp.prop('disabled', false);
+          if($emp.find('option').length === 0){ $emp.html('<option value="">-SELECT-</option>'); }
+        }
+
+        scheduleUpdateSaveState();
+      }
+
+      function loadEmployeesForDept(deptCode){
+        var dept = String(deptCode || '').trim();
+        var $emp = $('#ri_end_user_emp');
+        updateEmployeeSelectState();
+        if(!dept){ return; }
+        // Keep enabled so it never appears "stuck" disabled.
+        $emp.prop('disabled', false).html('<option value="">Loading...</option>');
+        $.ajax({
+          url: '../auth/auth.php',
+          type: 'POST',
+          data: { departmentid: dept },
+          success: function(html){
+            $emp.html(html);
+            updateEmployeeSelectState();
+          },
+          error: function(){
+            $emp.html('<option value="">Failed to load employees</option>').prop('disabled', false);
+          }
+        });
+      }
+
+      function resetDeptAndEmp(){
+        var $dept = $('#ri_end_user_dept');
+        if($dept.length){
+          $dept.val('');
+        }
+        updateEmployeeSelectState();
+        toggleAddNewEmployeeSection();
+
+        scheduleUpdateSaveState();
+      }
+
+      function loadDepartmentsForFund(fundVal){
+        var fund = String(fundVal || '').trim();
+        var $dept = $('#ri_end_user_dept');
+        if(!$dept.length){ return; }
+
+        resetDeptAndEmp();
+
+        if(!fund){
+          $dept.prop('disabled', true).html('<option value="">SELECT FUND FIRST</option>');
+          return;
+        }
+
+        $dept.prop('disabled', true).html('<option value="">Loading...</option>');
+        $.ajax({
+          url: '../auth/auth.php',
+          type: 'POST',
+          data: { fund_for_departments: fund },
+          success: function(html){
+            $dept.html(html).prop('disabled', false);
+          },
+          error: function(){
+            $dept.html('<option value="">Failed to load departments</option>').prop('disabled', false);
+          }
+        });
+      }
+
+      function isAddNewEmployee(){
+        return (String($('#ri_end_user_emp').val() || '').trim().toLowerCase() === 'add_new_emp');
+      }
+
+      function toggleAddNewEmployeeSection(){
+        var show = isAddNewEmployee();
+        var $sec = $('#ri_add_new_employee');
+        if(show){
+          $sec.stop(true,true).slideDown(200);
+          $('#ri_new_emp, #ri_position').prop('required', true);
+        } else {
+          $sec.stop(true,true).slideUp(200);
+          $('#ri_new_emp, #ri_position').prop('required', false);
+          $('#ri_new_emp, #ri_position').val('');
+          $('#ri-name-validation-msg').hide().text('');
+        }
+
+        scheduleUpdateSaveState();
+      }
+
+      // Populate year select once
+      (function initYears(){
+        var $year = $('#ri_date_aquired');
+        if(!$year.length || $year.data('gsoYearsInit')){ return; }
+        $year.data('gsoYearsInit', true);
+        var currentYear = new Date().getFullYear();
+        for(var y=currentYear; y>=2000; y--){
+          $year.append($('<option>', { value: String(y), text: String(y) }));
+        }
+      })();
+
+      // Events
+      $('#addReturnItemModal').on('shown.bs.modal.gsoAddReturn', function(){
+        initAccountCodeSelect2();
+      });
+
+      $(document).on('change.gsoAddReturn', '#ri_fund', function(){
+        var $sel = $('#ri_account_code');
+        if($sel.length){ $sel.val('').trigger('change'); }
+
+        loadDepartmentsForFund($(this).val() || '');
+      });
+
+      $('#btnAddReturnItem').off('click.gsoAddReturn').on('click.gsoAddReturn', function(){
+        $form.trigger('reset');
+        serialCache = {};
+        clearAutoFlags();
+        normalizeQty();
+        renderSerialRows();
+        syncPropertyNumberUI();
+        loadDepartmentsForFund('');
+        toggleAddNewEmployeeSection();
+        setUnrepeatedVisible(false);
+        $('#ri_unrepeated').prop('checked', false);
+        // Ensure model checkbox behavior is applied after reset.
+        syncNoBrandModel();
+        $('#addReturnItemModal').modal('show');
+
+        // Default: disabled until all required fields are filled.
+        scheduleUpdateSaveState();
+      });
+
+      // Delegated binding (more resilient if the modal DOM is re-rendered)
+      $(document).off('change.gsoAddReturn', '#ri_end_user_dept').on('change.gsoAddReturn', '#ri_end_user_dept', function(){
+        loadEmployeesForDept($(this).val() || '');
+      });
+      $(document).off('change.gsoAddReturn', '#ri_end_user_emp').on('change.gsoAddReturn', '#ri_end_user_emp', function(){
+        toggleAddNewEmployeeSection();
+      });
+
+      $(document).off('change.gsoAddReturn', '#ri_no_model').on('change.gsoAddReturn', '#ri_no_model', function(){
+        syncNoBrandModel();
+      });
+
+      // Validate employee name
+      var nameDebounce;
+      $(document).off('input.gsoAddReturn', '#ri_new_emp').on('input.gsoAddReturn', '#ri_new_emp', function(){
+        var name = String($(this).val() || '').trim();
+        var $msg = $('#ri-name-validation-msg');
+        clearTimeout(nameDebounce);
+        if(!name){ $msg.hide().text(''); return; }
+        $msg.show().text('Validating...').css('color','red');
+
+        scheduleUpdateSaveState();
+        nameDebounce = setTimeout(function(){
+          $.ajax({
+            url: '../auth/auth.php',
+            type: 'POST',
+            dataType: 'json',
+            data: { validate_employee_name: 1, emp_name: name },
+            success: function(res){
+              if(res && res.exists){ $msg.text('Employee name already exists!').css('color','red'); }
+              else { $msg.text('Employee name is available.').css('color','green'); }
+
+              scheduleUpdateSaveState();
+            },
+            error: function(){ $msg.text('Validation error.').css('color','red'); }
+          });
+        }, 600);
+      });
+
+      function submitManualReturn(){
+        $form.trigger('submit.gsoManualReturn');
+      }
+      window.gsoSubmitManualReturnItem = submitManualReturn;
+
+      // Keep Save button disabled until required fields are complete.
+      $form
+        .off('input.gsoAddReturnSaveState change.gsoAddReturnSaveState')
+        .on('input.gsoAddReturnSaveState change.gsoAddReturnSaveState', 'input, select, textarea', function(){
+          scheduleUpdateSaveState();
+        });
+
+      // Save new employee (when selected)
+      $form.off('submit.gsoAddNewEmp').on('submit.gsoAddNewEmp', function(e){
+        if(!isAddNewEmployee()) { return true; }
+        e.preventDefault();
+
+        var dept = valTrim('#ri_end_user_dept');
+        var name = valTrim('#ri_new_emp');
+        var pos = valTrim('#ri_position');
+        if(!dept || !name || !pos){
+          if(window.Swal){ Swal.fire('Required', 'Please complete the new employee fields.', 'warning'); }
+          return false;
+        }
+        var msg = String($('#ri-name-validation-msg').text() || '').toLowerCase();
+        if(msg.indexOf('already exists') !== -1){
+          if(window.Swal){ Swal.fire('Duplicate', 'Employee name already exists.', 'error'); }
+          return false;
+        }
+
+        lockForm(true);
+        $.ajax({
+          url: '../auth/auth.php',
+          type: 'POST',
+          dataType: 'json',
+          data: {
+            save_employee_info: 1,
+            fname: name,
+            department: dept,
+            position: pos,
+            pcustodian: 0
+          },
+          success: function(res){
+            lockForm(false);
+            if(res && res.status === 200){
+              var newEmpId = (res && res.data && res.data.emp_id) ? String(res.data.emp_id) : '';
+              loadEmployeesForDept(dept);
+              setTimeout(function(){
+                if (newEmpId) { $('#ri_end_user_emp').val(newEmpId).trigger('change'); }
+                submitManualReturn();
+              }, 350);
+              $('#ri_new_emp, #ri_position').val('');
+              $('#ri-name-validation-msg').hide().text('');
+            } else {
+              if(window.Swal){ Swal.fire('Error', (res && res.message) ? res.message : 'Failed to add employee.', 'error'); }
+            }
+          },
+          error: function(xhr){
+            lockForm(false);
+            if(window.Swal){ Swal.fire('Error', 'Failed to add employee.', 'error'); }
+            console.error('Add employee error:', xhr && xhr.responseText);
+          }
+        });
+        return false;
+      });
+
+      // Main submit (manual_return_item)
+      $form.off('submit.gsoManualReturn').on('submit.gsoManualReturn', function(e){
+        e.preventDefault();
+        if(!validateRequired()){ return false; }
+        if(isAddNewEmployee()){
+          $form.trigger('submit.gsoAddNewEmp');
+          return false;
+        }
+
+        var fd = new FormData(this);
+        fd.append('manual_return_item', '1');
+
+        lockForm(true);
+        $.ajax({
+          url: '../auth/auth.php',
+          type: 'POST',
+          data: fd,
+          processData: false,
+          contentType: false,
+          dataType: 'json',
+          success: function(res){
+            lockForm(false);
+            if(res && res.status === 200){
+              var ref = res.data && res.data.reference_number ? String(res.data.reference_number) : '';
+              if(window.Swal){ Swal.fire('Success', res.message || 'Saved.', 'success'); }
+              $('#addReturnItemModal').modal('hide');
+              try {
+                if($.fn.DataTable && $('#recentReturnItemsTable').length){
+                  $('#recentReturnItemsTable').DataTable().ajax.reload(null, false);
+                }
+              } catch (e) {}
+              if(ref){
+                // Print immediately
+                window.open('property_return_slip.php?reference_number=' + encodeURIComponent(ref), '_blank');
+              }
+            } else {
+              if(window.Swal){ Swal.fire('Error', (res && res.message) ? res.message : 'Unable to save item.', 'error'); }
+            }
+          },
+          error: function(xhr){
+            lockForm(false);
+            if(window.Swal){ Swal.fire('Error', 'Unable to save item.', 'error'); }
+            console.error('manual_return_item error:', xhr && xhr.responseText);
+          }
+        });
+        return false;
+      });
+
+      $('#ri_qty').off('input.gsoAddReturn change.gsoAddReturn blur.gsoAddReturn')
+        .on('input.gsoAddReturn change.gsoAddReturn blur.gsoAddReturn', function(){
+          normalizeQty();
+          if($('#ri_add_serial').is(':checked')){ renderSerialRows(); }
+          else { $('#ri_qty_warning').hide().text(''); }
+          syncPropertyNumberUI();
+          scheduleAutoGeneratePropertyNumbers();
+          scheduleUpdateSaveState();
+        });
+
+      $(document).off('input.gsoAddReturn change.gsoAddReturn', '#ri_serialRows input')
+        .on('input.gsoAddReturn change.gsoAddReturn', '#ri_serialRows input', function(){
+          snapshotSerialCache();
+        });
+
+      $(document)
+        .off('input.gsoAddReturn change.gsoAddReturn', '#ri_property_number')
+        .on('input.gsoAddReturn change.gsoAddReturn', '#ri_property_number', function(){
+          clearPropertyNumberWarning();
+          $(this).removeAttr('data-gso-auto');
+          scheduleUpdateSaveState();
+        });
+
+      // Normalize separators on blur for readability (no constant rewriting while typing).
+      $(document)
+        .off('blur.gsoAddReturn', '#ri_property_number')
+        .on('blur.gsoAddReturn', '#ri_property_number', function(){
+          var qty = normalizeQty();
+          if(isUnrepeatedMode()){
+            var first = splitPropertyNumbers($(this).val())[0] || '';
+            $(this).val(first);
+            return;
+          }
+          var list = splitPropertyNumbers($(this).val());
+          if(!list.length){ return; }
+          if(qty > 1){ $(this).val(list.join(', ')); }
+          else { $(this).val(list[0]); }
+        });
+
+      $('#ri_category, #ri_account_code, #ri_date_aquired, #ri_end_user_dept')
+        .off('change.gsoAddReturn input.gsoAddReturn')
+        .on('change.gsoAddReturn input.gsoAddReturn', function(){
+          scheduleAutoGeneratePropertyNumbers();
+          scheduleUpdateSaveState();
+        });
+
+      $('#ri_add_serial').off('change.gsoAddReturn').on('change.gsoAddReturn', syncSerialToggle);
+
+      $(document)
+        .off('change.gsoAddReturn', '#ri_return_type')
+        .on('change.gsoAddReturn', '#ri_return_type', function(){
+          syncUnrepeatedBehavior();
+        });
+
+      $(document)
+        .off('change.gsoAddReturn', '#ri_unrepeated')
+        .on('change.gsoAddReturn', '#ri_unrepeated', function(){
+          syncUnrepeatedBehavior();
+        });
+
+      // Default state on load
+      syncSerialToggle();
+      syncNoBrandModel();
+      syncPropertyNumberUI();
+      updateEmployeeSelectState();
+      toggleAddNewEmployeeSection();
+      syncUnrepeatedBehavior();
+      scheduleAutoGeneratePropertyNumbers();
+      scheduleUpdateSaveState();
+    }
+
+    $(function(){
+      if(!hasAddReturnUI()){
+        return;
+      }
+      initRecentReturnItemsTable();
+      initAddReturnModal();
+    });
+  })();
+
+  // General Fund - Account Code (PAR / ICS) tabbed DataTable
+  window.GSO = window.GSO || {};
+  window.GSO.GfAccountCodes = window.GSO.GfAccountCodes || (function(){
+    var table = null;
+    var currentCategory = 'PAR';
+
+    function normCat(v){
+      var s = String(v || '').trim().toUpperCase();
+      return (s === 'ICS') ? 'ICS' : 'PAR';
+    }
+
+    function esc(v){
+      return $('<div>').text(String(v == null ? '' : v)).html();
+    }
+
+    function money(v){
+      var n = Number(v || 0);
+      if (!isFinite(n)) { n = 0; }
+      try {
+        return '₱ ' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      } catch (e) {
+        return '₱ ' + String(n.toFixed(2));
+      }
+    }
+
+    function setTotal(v){
+      $('#gfAcctCategoryTotal').text(money(v));
+    }
+
+    function setReportTitle(){
+      var base = 'General Fund Account Code';
+      $('#reportTitle').text(base + ' (' + currentCategory + ')');
+    }
+
+    function reload(){
+      if (table && table.ajax && typeof table.ajax.reload === 'function') {
+        table.ajax.reload(null, false);
+      }
+    }
+
+    function setActiveTab(){
+      var $links = $('#gfAcctCategoryTabs [data-category]');
+      if (!$links.length) { return; }
+      $links.removeClass('active');
+      $links.filter('[data-category="' + currentCategory + '"]').addClass('active');
+    }
+
+    function bindTabs(){
+      var $links = $('#gfAcctCategoryTabs [data-category]');
+      if (!$links.length) { return; }
+      $links.off('click.gsoGfAcctTabs').on('click.gsoGfAcctTabs', function(e){
+        e.preventDefault();
+        var cat = normCat($(this).data('category'));
+        if (cat === currentCategory) { return; }
+        currentCategory = cat;
+        setActiveTab();
+        setReportTitle();
+        reload();
+      });
+    }
+
+    function initTable(){
+      if (!$('#dataTable').length || !$.fn.dataTable) { return; }
+      if ($.fn.dataTable.isDataTable('#dataTable')) {
+        table = $('#dataTable').DataTable();
+        return;
+      }
+
+      table = $('#dataTable').DataTable({
+        responsive: true,
+        lengthChange: false,
+        autoWidth: false,
+        stateSave: true,
+        processing: true,
+        serverSide: true,
+        ajax: {
+          url: '../auth/auth.php',
+          type: 'POST',
+          data: function(d){
+            d.gf_account_codes_dt = 1;
+            d.category = currentCategory;
+          }
+        },
+        columns: [
+          {
+            data: 'account_code',
+            render: function(data, type, row){
+              var id = row && row.id ? String(row.id) : '';
+              var code = esc(data);
+              var href = 'general-fund-account-inventory.php?acct=' + encodeURIComponent(id) + '&cat=' + encodeURIComponent(currentCategory);
+              return '<a href="' + href + '">' + code + '</a>';
+            }
+          },
+          { data: 'account_name', render: function(d){ return esc(d); } },
+          {
+            data: 'total_value',
+            className: 'text-right',
+            render: function(d){ return money(d); }
+          },
+          {
+            data: null,
+            orderable: false,
+            searchable: false,
+            className: 'text-center',
+            render: function(_d, _t, row){
+              var id = row && row.id ? String(row.id) : '';
+              return (
+                '<button type="button" value="' + esc(id) + '" class="editacct btn btn-sm btn-success" title="Edit"><i class="fas fa-edit"></i></button> ' +
+                '<button type="button" value="' + esc(id) + '" class="delacct btn btn-sm btn-danger" title="Delete"><i class="fas fa-trash"></i></button>'
+              );
+            }
+          }
+        ],
+        order: [[0, 'asc']],
+        dom: "<'row'<'col-sm-12 col-md-6'B><'col-sm-12 col-md-6'f>>" +
+             "<'row'<'col-sm-12'tr>>" +
+             "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
+        buttons: [
+          {
+            extend: 'excel',
+            orientation: 'landscape',
+            pageSize: 'LEGAL',
+            title: function(){ return $('#reportTitle').text() || 'General Fund Account Code'; },
+            exportOptions: { columns: [0,1,2] }
+          },
+          {
+            extend: 'print',
+            orientation: 'landscape',
+            pageSize: 'LEGAL',
+            title: function(){ return $('#reportTitle').text() || 'General Fund Account Code'; },
+            exportOptions: { columns: [0,1,2] }
+          }
+        ]
+      });
+
+      $('#dataTable').off('xhr.dt.gsoGfAcct').on('xhr.dt.gsoGfAcct', function(_e, _settings, json){
+        if (json && typeof json.total_amount !== 'undefined') {
+          setTotal(json.total_amount);
+        }
+      });
+    }
+
+    function init(){
+      if (!$('#gfAccountCodePage').length) { return; }
+      currentCategory = normCat($('#gfAccountCodePage').data('defaultCategory') || 'PAR');
+      setActiveTab();
+      bindTabs();
+      setReportTitle();
+      initTable();
+    }
+
+    return { init: init, reload: reload };
+  })();
+
+  // SEF - Account Code (PAR / ICS) tabbed DataTable
+  window.GSO.SefAccountCodes = window.GSO.SefAccountCodes || (function(){
+    var table = null;
+    var currentCategory = 'PAR';
+
+    function normCat(v){
+      var s = String(v || '').trim().toUpperCase();
+      return (s === 'ICS') ? 'ICS' : 'PAR';
+    }
+
+    function esc(v){
+      return $('<div>').text(String(v == null ? '' : v)).html();
+    }
+
+    function money(v){
+      var n = Number(v || 0);
+      if (!isFinite(n)) { n = 0; }
+      try {
+        return '₱ ' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      } catch (e) {
+        return '₱ ' + String(n.toFixed(2));
+      }
+    }
+
+    function setTotal(v){
+      $('#sefAcctCategoryTotal').text(money(v));
+    }
+
+    function setReportTitle(){
+      var base = 'SEF Account Code';
+      $('#reportTitle').text(base + ' (' + currentCategory + ')');
+    }
+
+    function reload(){
+      if (table && table.ajax && typeof table.ajax.reload === 'function') {
+        table.ajax.reload(null, false);
+      }
+    }
+
+    function setActiveTab(){
+      var $links = $('#sefAcctCategoryTabs [data-category]');
+      if (!$links.length) { return; }
+      $links.removeClass('active');
+      $links.filter('[data-category="' + currentCategory + '"]').addClass('active');
+    }
+
+    function bindTabs(){
+      var $links = $('#sefAcctCategoryTabs [data-category]');
+      if (!$links.length) { return; }
+      $links.off('click.gsoSefAcctTabs').on('click.gsoSefAcctTabs', function(e){
+        e.preventDefault();
+        var cat = normCat($(this).data('category'));
+        if (cat === currentCategory) { return; }
+        currentCategory = cat;
+        setActiveTab();
+        setReportTitle();
+        reload();
+      });
+    }
+
+    function initTable(){
+      if (!$('#dataTable').length || !$.fn.dataTable) { return; }
+      if ($.fn.dataTable.isDataTable('#dataTable')) {
+        table = $('#dataTable').DataTable();
+        return;
+      }
+
+      table = $('#dataTable').DataTable({
+        responsive: true,
+        lengthChange: false,
+        autoWidth: false,
+        stateSave: true,
+        processing: true,
+        serverSide: true,
+        ajax: {
+          url: '../auth/auth.php',
+          type: 'POST',
+          data: function(d){
+            d.sef_account_codes_dt = 1;
+            d.category = currentCategory;
+          }
+        },
+        columns: [
+          {
+            data: 'account_code',
+            render: function(data, type, row){
+              var id = row && row.id ? String(row.id) : '';
+              var code = esc(data);
+              var href = 'sef-account-inventory.php?acct=' + encodeURIComponent(id) + '&cat=' + encodeURIComponent(currentCategory);
+              return '<a href="' + href + '">' + code + '</a>';
+            }
+          },
+          { data: 'account_name', render: function(d){ return esc(d); } },
+          {
+            data: 'total_value',
+            className: 'text-right',
+            render: function(d){ return money(d); }
+          },
+          {
+            data: null,
+            orderable: false,
+            searchable: false,
+            className: 'text-center',
+            render: function(_d, _t, row){
+              var id = row && row.id ? String(row.id) : '';
+              return (
+                '<button type="button" value="' + esc(id) + '" class="editacct btn btn-sm btn-success" title="Edit"><i class="fas fa-edit"></i></button> ' +
+                '<button type="button" value="' + esc(id) + '" class="delacct btn btn-sm btn-danger" title="Delete"><i class="fas fa-trash"></i></button>'
+              );
+            }
+          }
+        ],
+        order: [[0, 'asc']],
+        dom: "<'row'<'col-sm-12 col-md-6'B><'col-sm-12 col-md-6'f>>" +
+             "<'row'<'col-sm-12'tr>>" +
+             "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
+        buttons: [
+          {
+            extend: 'excel',
+            orientation: 'landscape',
+            pageSize: 'LEGAL',
+            title: function(){ return $('#reportTitle').text() || 'SEF Account Code'; },
+            exportOptions: { columns: [0,1,2] }
+          },
+          {
+            extend: 'print',
+            orientation: 'landscape',
+            pageSize: 'LEGAL',
+            title: function(){ return $('#reportTitle').text() || 'SEF Account Code'; },
+            exportOptions: { columns: [0,1,2] }
+          }
+        ]
+      });
+
+      $('#dataTable').off('xhr.dt.gsoSefAcct').on('xhr.dt.gsoSefAcct', function(_e, _settings, json){
+        if (json && typeof json.total_amount !== 'undefined') {
+          setTotal(json.total_amount);
+        }
+      });
+    }
+
+    function init(){
+      if (!$('#sefAccountCodePage').length) { return; }
+      currentCategory = normCat($('#sefAccountCodePage').data('defaultCategory') || 'PAR');
+      setActiveTab();
+      bindTabs();
+      setReportTitle();
+      initTable();
+    }
+
+    return { init: init, reload: reload };
+  })();
+
+  $(function(){
+    try {
+      if (window.GSO && window.GSO.GfAccountCodes) { window.GSO.GfAccountCodes.init(); }
+      if (window.GSO && window.GSO.SefAccountCodes) { window.GSO.SefAccountCodes.init(); }
+    } catch (e) {}
+  });
+
+// Global init
+$(function(){
+  try {
+    if (window.GSO && window.GSO.SessionGuard) { window.GSO.SessionGuard.init(); }
+    if (window.GSO && window.GSO.AdminPresencePanel) { window.GSO.AdminPresencePanel.start(); }
+  } catch (e) {}
+});

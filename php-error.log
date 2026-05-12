@@ -1,0 +1,2 @@
+[24-Dec-2025 07:52:42 Europe/Berlin] PHP Warning:  mysqli_connect(): (HY000/2002): No connection could be made because the target machine actively refused it.
+ in C:\xampp\htdocs\gso-master\database\databaseConnection.php on line 9

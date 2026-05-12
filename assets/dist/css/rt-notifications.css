@@ -1,0 +1,33 @@
+/* Realtime navbar notifications (bell + badge animation) */
+
+@keyframes gsoNotifBellRing {
+  0%, 100% { transform: rotate(0); }
+  10% { transform: rotate(18deg); }
+  20% { transform: rotate(-18deg); }
+  30% { transform: rotate(12deg); }
+  40% { transform: rotate(-12deg); }
+  50% { transform: rotate(6deg); }
+  60% { transform: rotate(-6deg); }
+  70% { transform: rotate(0); }
+}
+
+@keyframes gsoNotifBadgePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
+
+#rtNotifBellLink.gso-has-unread i {
+  transform-origin: 50% 10%;
+  animation: gsoNotifBellRing 1.15s ease-in-out infinite;
+}
+
+#rtNotifBellLink.gso-has-unread #rtNotifBadge {
+  animation: gsoNotifBadgePulse 1.15s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #rtNotifBellLink.gso-has-unread i,
+  #rtNotifBellLink.gso-has-unread #rtNotifBadge {
+    animation: none !important;
+  }
+}

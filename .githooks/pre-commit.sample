@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Sample pre-commit hook for optional version bump guidance.
+# Copy to .git/hooks/pre-commit and make executable to use.
+
+CHANGED_SOURCE=$(git diff --cached --name-only | grep -E '\.(php|js|css)$' | wc -l | tr -d ' ')
+CHANGED_VERSION=$(git diff --cached --name-only | grep -E '^VERSION$' | wc -l | tr -d ' ')
+
+if [ "$CHANGED_SOURCE" -gt 0 ] && [ "$CHANGED_VERSION" -eq 0 ]; then
+  echo "[pre-commit] Notice: You modified application code but did not bump VERSION." >&2
+  echo "             Run: php tools/bump-version.php patch --commit (or minor/major)" >&2
+fi
+
+exit 0
