@@ -2590,6 +2590,14 @@ if (!function_exists('gso_propnum_table_col')) {
     }
 }
 
+if (!function_exists('gso_propnum_table_col_for_fund')) {
+    function gso_propnum_table_col_for_fund($fundRaw) {
+        $fund = strtoupper(trim((string)$fundRaw));
+        if ($fund === 'DONATION') { return ['donation', 'property_number']; }
+        return gso_propnum_table_col(gso_propnum_is_sef($fund));
+    }
+}
+
 if (!function_exists('gso_propnum_exists')) {
     function gso_propnum_exists($conn, $table, $col, $candidate) {
         $cand = mysqli_real_escape_string($conn, (string)$candidate);
@@ -2616,8 +2624,7 @@ if (!function_exists('gso_generate_one_property_number')) {
         [$parSub, $icsSub, $deptMap] = gso_propnum_maps();
         $deptCode = $deptMap[$dept] ?? $dept;
 
-        $isSef = gso_propnum_is_sef($fund);
-        [$table, $col] = gso_propnum_table_col($isSef);
+        [$table, $col] = gso_propnum_table_col_for_fund($fund);
 
         $yearShort = substr($year, -2);
         $sub = '';
@@ -5365,7 +5372,11 @@ if (isset($_POST['save_item'])) {
         $gf = mysqli_query($conn, "SELECT 1 FROM par_gen_fund WHERE par_number='$n' LIMIT 1");
         if ($gf && mysqli_num_rows($gf) > 0) return true;
         $sf = mysqli_query($conn, "SELECT 1 FROM property_sef WHERE property_number='$n' LIMIT 1");
-        return ($sf && mysqli_num_rows($sf) > 0);
+        if ($sf && mysqli_num_rows($sf) > 0) return true;
+        $tf = mysqli_query($conn, "SELECT 1 FROM trust_fund WHERE property_number='$n' LIMIT 1");
+        if ($tf && mysqli_num_rows($tf) > 0) return true;
+        $dn = mysqli_query($conn, "SELECT 1 FROM donation WHERE property_number='$n' LIMIT 1");
+        return ($dn && mysqli_num_rows($dn) > 0);
     };
     $nextParNumber = function($current){
         $parts = explode('-', $current);
@@ -5379,10 +5390,11 @@ if (isset($_POST['save_item'])) {
     };
 
     $fundUpper = strtoupper($fund);
-    $isGF = in_array($fundUpper, ['GF','GENERAL FUND']);
-    $isSEF = in_array($fundUpper, ['SEF','SF','SPECIAL EDUCATION FUND']);
-    if(in_array($fundUpper, ['TRUST FUND','DONATION'], true)){ echo json_encode(['status'=>422,'message'=>'Trust Fund and Donation are supported for NEW purchases only.']); return false; }
-    if(!$isGF && !$isSEF){ echo json_encode(['status'=>422,'message'=>'Invalid fund selected.']); return false; }
+    $isGF = in_array($fundUpper, ['GF','GENERAL FUND'], true);
+    $isSEF = in_array($fundUpper, ['SEF','SF','SPECIAL EDUCATION FUND'], true);
+    $isTrustFund = ($fundUpper === 'TRUST FUND');
+    $isDonation = ($fundUpper === 'DONATION');
+    if(!$isGF && !$isSEF && !$isTrustFund && !$isDonation){ echo json_encode(['status'=>422,'message'=>'Invalid fund selected.']); return false; }
 
     // Safety limits for very large submissions (server-side)
     if ($quantity > 5000) {
@@ -5431,6 +5443,14 @@ if (isset($_POST['save_item'])) {
             $row = mysqli_fetch_assoc($resSef);
             if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
         }
+        foreach (['trust_fund', 'donation'] as $fundTable) {
+            $sqlFund = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM {$fundTable} WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
+            $resFund = mysqli_query($conn, $sqlFund);
+            if ($resFund && mysqli_num_rows($resFund) === 1) {
+                $row = mysqli_fetch_assoc($resFund);
+                if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
+            }
+        }
         $parIcsNext = $max + 1;
     }
     $nextParIcs = function() use (&$parIcsNext, $parIcsPrefix) {
@@ -5456,6 +5476,19 @@ if (isset($_POST['save_item'])) {
     };
 
     mysqli_begin_transaction($conn);
+    $nextManualFundId = function($mainTable, $historyTable) use ($conn) {
+        $mainTable = preg_replace('/[^A-Za-z0-9_]/', '', (string)$mainTable);
+        $historyTable = preg_replace('/[^A-Za-z0-9_]/', '', (string)$historyTable);
+        $sql = "SELECT LEAST(COALESCE((SELECT MIN(id) FROM {$mainTable}), 0), COALESCE((SELECT MIN(id) FROM {$historyTable}), 0), 0) - 1 AS next_id";
+        $res = mysqli_query($conn, $sql);
+        if ($res && mysqli_num_rows($res) === 1) {
+            $row = mysqli_fetch_assoc($res);
+            return (int)($row['next_id'] ?? -1);
+        }
+        return -1;
+    };
+    $nextTrustFundId = $isTrustFund ? $nextManualFundId('trust_fund', 'trust_fund_history') : null;
+    $nextDonationId = $isDonation ? $nextManualFundId('donation', 'donation_history') : null;
     $insertedCount = 0;
     for ($i=1; $i <= $quantity; $i++) {
         // per-row employee: handle add_new_emp with inline name/position
@@ -5533,16 +5566,25 @@ if (isset($_POST['save_item'])) {
             echo json_encode(['status'=>422,'message'=>'Account code is required for row '.$i.'.']);
             return false;
         }
+        if (($isTrustFund || $isDonation) && !preg_match('/^[0-9-]{1,20}$/', $accountCodeForRow)) {
+            mysqli_rollback($conn);
+            echo json_encode(['status'=>422,'message'=>'Account code for Trust Fund and Donation must contain numbers and hyphen only, up to 20 characters (row '.$i.').']);
+            return false;
+        }
 
         $parNumberForSet = strtoupper(trim($resolveRowInput($itemPropertyNumberRows, $i, ($i === 1 ? $par_number_raw : ''))));
-        if ($parNumberForSet === '') {
+        if (!$isTrustFund && $parNumberForSet === '') {
             mysqli_rollback($conn);
             echo json_encode(['status'=>422,'message'=>'Property number is required for row '.$i.'.']);
             return false;
         }
-        $par_number = mysqli_real_escape_string($conn, $parNumberForSet);
-        $guardSet = 0;
-        while ($existsParNumber($par_number) && $guardSet < 20000) { $par_number = $nextParNumber($par_number); $guardSet++; }
+        if ($isTrustFund) {
+            $par_number = null;
+        } else {
+            $par_number = mysqli_real_escape_string($conn, $parNumberForSet);
+            $guardSet = 0;
+            while ($existsParNumber($par_number) && $guardSet < 20000) { $par_number = $nextParNumber($par_number); $guardSet++; }
+        }
 
         $itemForRow = $resolveRowUpper($itemAssetRows, $i, $assetInput);
         $brandForRow = $resolveRowUpper($itemBrandRows, $i, $brandInput);
@@ -5566,7 +5608,7 @@ if (isset($_POST['save_item'])) {
         $remarksSql = ($remarksForRow === null) ? 'NULL' : "'" . mysqli_real_escape_string($conn, $remarksForRow) . "'";
 
         for ($copyIndex = 1; $copyIndex <= $itemQuantityForRow; $copyIndex++) {
-            if (!($i === 1 && $copyIndex === 1)) {
+            if (!$isTrustFund && !($i === 1 && $copyIndex === 1)) {
                 $guard2 = 0;
                 do { $par_number = $nextParNumber($par_number); $guard2++; } while ($existsParNumber($par_number) && $guard2 < 20000);
             }
@@ -5587,9 +5629,20 @@ if (isset($_POST['save_item'])) {
             if ($isGF) {
                 $multi .= "INSERT INTO par_gen_fund(category,item,model,description,serial_number,serial_number_2,par_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$category."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
                 $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,status,category) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".$status."','".$category."');";
-            } else {
+            } elseif ($isSEF) {
                 $multi .= "INSERT INTO property_sef(category,item,model,description,serial_number,serial_number_2,property_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$category."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
                 $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,status,category) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".$status."','".$category."');";
+            } elseif ($isTrustFund) {
+                $fundRecordId = $nextTrustFundId;
+                $nextTrustFundId--;
+                $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
+                $multi .= "INSERT INTO trust_fund(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','TRUST FUND','".$category."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
+                $multi .= "INSERT INTO trust_fund_history(id,emp_id,dept_id,par_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".$status."','".$category."','".$today."');";
+            } else {
+                $fundRecordId = $nextDonationId;
+                $nextDonationId--;
+                $multi .= "INSERT INTO donation(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','DONATION','".$category."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."','".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
+                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$par_number."','".$status."','".$category."','".$today."');";
             }
 
             $batchItems++;
@@ -9700,9 +9753,14 @@ if (isset($_POST['validate_par_ics_unique'])) {
             $poMatch = ($po !== '' && strtoupper(trim($row['purchase_order'])) === $po);
         }
     } else {
-        $tables = ['par_gen_fund', 'property_sef'];
+        $tables = [
+            ['table' => 'par_gen_fund', 'po' => 'purchase_order'],
+            ['table' => 'property_sef', 'po' => 'purchase_order'],
+            ['table' => 'trust_fund', 'po' => 'purchase_order'],
+            ['table' => 'donation', 'po' => 'purchase_order'],
+        ];
         foreach ($tables as $tbl) {
-            $res = mysqli_query($conn, "SELECT purchase_order FROM {$tbl} WHERE par_ics_number='{$safe}' LIMIT 1");
+            $res = mysqli_query($conn, "SELECT {$tbl['po']} AS purchase_order FROM {$tbl['table']} WHERE par_ics_number='{$safe}' LIMIT 1");
             if ($res && mysqli_num_rows($res) > 0) {
                 $exists = true;
                 $row = mysqli_fetch_assoc($res);
