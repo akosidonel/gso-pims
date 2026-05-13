@@ -585,6 +585,7 @@ $refNumber = generateReferenceNumber($conn,'general_fund_property_history', 'ref
                 <th class="d-none">MODEL</th>
                 <th class="d-none">DESCRIPTION</th>
                 <th class="d-none">YEAR ACQUIRED</th>
+                <th class="d-none">UNIT</th>
             </tr>
         </thead>
                   <tbody>
@@ -662,12 +663,136 @@ $refNumber = generateReferenceNumber($conn,'general_fund_property_history', 'ref
     $('#bulkTransferBtn').prop('disabled', getSelectedInventoryRows().length === 0);
   }
 
+  function cleanExportValue(value) {
+    return $('<div>').html(value == null ? '' : value).text().trim();
+  }
+
+  function hasNoSerial(value) {
+    var serial = cleanExportValue(value).toUpperCase();
+    return serial === '' || serial === 'NULL' || serial === 'N/A' || serial === 'NA' || serial === 'NONE';
+  }
+
+  function displayUnit(value) {
+    var unit = cleanExportValue(value);
+    return unit !== '' ? unit : 'pcs';
+  }
+
+  function collapseExportPropertyNumbers(propertyNumbers) {
+    var seen = {};
+    var grouped = {};
+    var unparsed = [];
+
+    propertyNumbers.forEach(function (value) {
+      var propertyNumber = cleanExportValue(value);
+      if (!propertyNumber || seen[propertyNumber]) return;
+      seen[propertyNumber] = true;
+
+      var parts = propertyNumber.split('-');
+      if (parts.length < 3) {
+        unparsed.push(propertyNumber);
+        return;
+      }
+
+      var suffix = parts[parts.length - 1];
+      var serialPart = parts[parts.length - 2];
+      var prefix = parts.slice(0, parts.length - 2).join('-');
+      if (!prefix || !suffix || !/^\d+$/.test(serialPart)) {
+        unparsed.push(propertyNumber);
+        return;
+      }
+
+      var key = prefix + '|' + suffix + '|' + serialPart.length;
+      if (!grouped[key]) {
+        grouped[key] = { prefix: prefix, suffix: suffix, width: serialPart.length, serials: [] };
+      }
+      grouped[key].serials.push(parseInt(serialPart, 10));
+    });
+
+    var ranges = unparsed.slice();
+    Object.keys(grouped).sort().forEach(function (key) {
+      var group = grouped[key];
+      var serials = group.serials.sort(function (a, b) { return a - b; });
+      if (!serials.length) return;
+
+      function formatSerial(serial) {
+        var serialText = String(serial);
+        while (serialText.length < group.width) serialText = '0' + serialText;
+        return group.prefix + '-' + serialText + '-' + group.suffix;
+      }
+
+      var start = serials[0];
+      var previous = serials[0];
+      for (var index = 1; index < serials.length; index++) {
+        var current = serials[index];
+        if (current === previous + 1) {
+          previous = current;
+          continue;
+        }
+        ranges.push(start === previous ? formatSerial(start) : formatSerial(start) + ' to ' + formatSerial(previous));
+        start = current;
+        previous = current;
+      }
+      ranges.push(start === previous ? formatSerial(start) : formatSerial(start) + ' to ' + formatSerial(previous));
+    });
+
+    return ranges.join('\n');
+  }
+
+  function summarizeExcelInventoryRows(exportData) {
+    var grouped = {};
+    var output = [];
+
+    exportData.header.splice(3, 0, 'QTY');
+
+    exportData.body.forEach(function (row) {
+      var item = cleanExportValue(row[0]);
+      var model = cleanExportValue(row[1]);
+      var description = cleanExportValue(row[2]);
+      var unit = displayUnit(row[3]);
+      var serialPrimary = cleanExportValue(row[4]);
+      var serialSecondary = cleanExportValue(row[5]);
+      var propertyNumber = cleanExportValue(row[6]);
+      var yearAcquired = cleanExportValue(row[7]);
+      var endUser = cleanExportValue(row[8]);
+
+      if (!hasNoSerial(serialPrimary) || !hasNoSerial(serialSecondary)) {
+        output.push([item, model, description, 1, unit, serialPrimary, serialSecondary, propertyNumber, yearAcquired, endUser]);
+        return;
+      }
+
+      var key = [item, model, description, unit, yearAcquired, endUser].join('|').toUpperCase();
+      if (!grouped[key]) {
+        grouped[key] = {
+          row: [item, model, description, 0, unit, '', '', '', yearAcquired, endUser],
+          propertyNumbers: []
+        };
+        output.push(grouped[key].row);
+      }
+
+      grouped[key].row[3] += 1;
+      grouped[key].propertyNumbers.push(propertyNumber);
+    });
+
+    Object.keys(grouped).forEach(function (key) {
+      grouped[key].row[7] = collapseExportPropertyNumbers(grouped[key].propertyNumbers);
+    });
+
+    exportData.body = output;
+  }
+
+  function hasFocusedExportFilter(dt) {
+    return (selectedAssetClass || '').trim() !== '' ||
+      (selectedEndUser || '').trim() !== '' ||
+      (selectedParIcs || '').trim() !== '' ||
+      (dt.search() || '').trim() !== '';
+  }
+
   // Inventory DataTable with export buttons and filters section
   var table = $("#InventoryTable").DataTable({
       responsive: true,
       lengthChange: true,
       pageLength: 25,
-      lengthMenu: [[10, 25, 50, 100, 500], [10, 25, 50, 100, 500]],
+      lengthMenu: [[10, 25, 50, 100, 500, 1500], [10, 25, 50, 100, 500, 1500]],
       autoWidth: false,
       stateSave: false,
       // Ensure the Buttons toolbar (B) has a dedicated slot (matches sef-inventory.php)
@@ -755,25 +880,27 @@ $refNumber = generateReferenceNumber($conn,'general_fund_property_history', 'ref
         { data: 'emp_name', render: function (data) { return escHtml(data); } },
         { data: 'model', visible: false, render: function (data) { return escHtml(data); } },
         { data: 'description', visible: false, render: function (data) { return escHtml(data); } },
-        { data: 'date_aquired', visible: false, render: function (data) { return escHtml(data); } }
+        { data: 'date_aquired', visible: false, render: function (data) { return escHtml(data); } },
+        { data: 'unit', visible: false, render: function (data) { return escHtml(data); } }
       ],
       columnDefs: [
         { targets: 0, orderable: false, searchable: false, className: 'select-checkbox-column' },
         { targets: 1, orderable: false },
-        { targets: [8, 9, 10], visible: false, searchable: false }
+        { targets: [8, 9, 10, 11], visible: false, searchable: false }
       ],
       order: [[2, 'asc']], // default sort by Asset Class (updated index due to checkbox column)
       buttons: [
         { extend: "excel", orientation:"landscape", pageSize:"LEGAL", title: function() { 
             return $('#reportTitle').text() || "Default Title";
           }, exportOptions: {
-            columns: [2, 8, 9, 4, 5, 6, 10, 7],
+            columns: [2, 8, 9, 11, 4, 5, 6, 10, 7],
             format: {
               header: function (data, columnIdx) {
                 var headers = {
                   2: 'ITEM',
                   8: 'MODEL',
                   9: 'DESCRIPTION',
+                  11: 'UNIT',
                   4: 'SERIAL NUMBER PRIMARY',
                   5: 'SERIAL NUMBER SECONDARY',
                   6: 'PROPERTY NUMBER',
@@ -785,7 +912,8 @@ $refNumber = generateReferenceNumber($conn,'general_fund_property_history', 'ref
               body: function (data) {
                 return $('<div>').html(data).text();
               }
-            }
+            },
+            customizeData: summarizeExcelInventoryRows
           },
           action: function (e, dt, button, config) {
             var doDefaultExport = function(){
@@ -798,8 +926,7 @@ $refNumber = generateReferenceNumber($conn,'general_fund_property_history', 'ref
               if (act) return act.call(this, e, dt, button, config);
             }.bind(this);
 
-            var endUserSelected = (selectedEndUser || '').trim() !== '';
-            if (!endUserSelected) {
+            if (!hasFocusedExportFilter(dt)) {
               return doDefaultExport();
             }
 

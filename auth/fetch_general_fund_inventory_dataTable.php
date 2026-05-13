@@ -9,9 +9,8 @@ header('Content-Type: application/json; charset=utf-8');
 $deptCode = isset($_POST['dept']) ? (int)$_POST['dept'] : 0;
 $status = 1;
 
-// Active inventory is keyed by the employee's department_code.
-// Some legacy history rows stored department.dept_id in g.dept_id, so we still allow that
-// as a secondary match, but only after anchoring the result set to the canonical employee department.
+// Department values are mixed in legacy data: some rows store department_code,
+// some store department.dept_id, and some are only reliable through employee.
 $deptPk = 0;
 if ($deptCode > 0) {
     if ($st = mysqli_prepare($conn, 'SELECT dept_id FROM department WHERE department_code = ? LIMIT 1')) {
@@ -27,12 +26,19 @@ if ($deptCode > 0) {
 
 $where = "WHERE g.status = $status";
 if ($deptCode > 0) {
-    $where .= " AND e.department_code = $deptCode";
+    $deptMatches = array("e.department_code = $deptCode", "g.dept_id = $deptCode");
     if ($deptPk > 0 && $deptPk !== $deptCode) {
-        $where .= " AND g.dept_id IN ($deptCode, $deptPk)";
-    } else {
-        $where .= " AND g.dept_id = $deptCode";
+        $deptMatches[] = "g.dept_id = $deptPk";
     }
+    $where .= ' AND (' . implode(' OR ', $deptMatches) . ')';
+}
+
+$unitSelect = "'' AS unit";
+if ($unitColRes = mysqli_query($conn, "SHOW COLUMNS FROM par_gen_fund LIKE 'unit'")) {
+    if (mysqli_num_rows($unitColRes) > 0) {
+        $unitSelect = 'p.unit';
+    }
+    mysqli_free_result($unitColRes);
 }
 
 // Total records for the scoped department.
@@ -58,6 +64,7 @@ $tableSql = "SELECT
                 p.serial_number,
                 p.serial_number_2,
                 p.par_number,
+                $unitSelect,
                 p.date_aquired,
                 p.category,
                 e.emp_name
@@ -171,6 +178,7 @@ if ($runQuery) {
             'serial_number' => $row['serial_number'],
             'serial_number_2' => $row['serial_number_2'],
             'par_number' => $row['par_number'],
+            'unit' => $row['unit'],
             'date_aquired' => $row['date_aquired'],
             'category' => $row['category'],
             'emp_name' => $row['emp_name'],

@@ -15,7 +15,7 @@ if ($deptId <= 0) {
 }
 
 // Cache filter lists in-session for a short time.
-$cacheKey = 'gf_inventory_filters_' . $deptId;
+$cacheKey = 'gf_inventory_filters_v2_' . $deptId;
 $cacheTtlSeconds = 300;
 if (isset($_SESSION[$cacheKey]) && is_array($_SESSION[$cacheKey])) {
     $cached = $_SESSION[$cacheKey];
@@ -29,9 +29,8 @@ if (isset($_SESSION[$cacheKey]) && is_array($_SESSION[$cacheKey])) {
     }
 }
 
-// Active inventory is keyed by the employee's department_code.
-// Some legacy history rows stored department.dept_id in g.dept_id, so we still allow that
-// as a secondary match, but only after anchoring the result set to the canonical employee department.
+// Department values are mixed in legacy data: some rows store department_code,
+// some store department.dept_id, and some are only reliable through employee.
 $deptPk = 0;
 if ($deptId > 0) {
     if ($st = mysqli_prepare($conn, 'SELECT dept_id FROM department WHERE department_code = ? LIMIT 1')) {
@@ -47,12 +46,11 @@ if ($deptId > 0) {
 
 $where = "WHERE g.status = $status";
 if ($deptId > 0) {
-    $where .= " AND e.department_code = $deptId";
+    $deptMatches = array("e.department_code = $deptId", "g.dept_id = $deptId");
     if ($deptPk > 0 && $deptPk !== $deptId) {
-        $where .= " AND g.dept_id IN ($deptId, $deptPk)";
-    } else {
-        $where .= " AND g.dept_id = $deptId";
+        $deptMatches[] = "g.dept_id = $deptPk";
     }
+    $where .= ' AND (' . implode(' OR ', $deptMatches) . ')';
 }
 
 $assetClasses = array();
