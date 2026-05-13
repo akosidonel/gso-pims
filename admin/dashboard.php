@@ -204,6 +204,8 @@ if (!isset($_SESSION['alogin'])) {
                 echo renderInfoBox('add-infrastructure.php', 'fa-city', 'Infrastructure', 'infrastructure_gf_currency', 'General Fund', 'secondary');
                 echo renderInfoBox('sef-institution.php', 'fa-boxes', 'Property Inventory', 'seftotal_currency', 'Special Education Fund', 'secondary');
                 echo renderInfoBox('add-infrastructure.php', 'fa-university', 'Infrastructure', 'infrastructure_sef_currency', 'Special Education Fund', 'secondary'); 
+                echo renderInfoBox('trust-fund-inventory.php', 'fa-hand-holding-dollar', 'Trust Fund', 'trust_fund_total_currency', 'Total Amount', 'secondary');
+                echo renderInfoBox('donation-inventory.php', 'fa-gift', 'Donations', 'donation_total_currency', 'Total Amount', 'secondary');
                 echo renderInfoBox('add-item.php', 'fa-file-invoice-dollar', 'New Purchase', 'new_purchase_total_currency', 'Total Amount', 'secondary');
                 //Render Administrator and Land info-box for SYSTEM-ADMIN only
                 if (hasRole(['SYSTEM-ADMIN'])):
@@ -372,6 +374,8 @@ if (!isset($_SESSION['alogin'])) {
                 if (!resp) return;
                 setMetric('gftotal_currency', resp.gftotal ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
                 setMetric('seftotal_currency', resp.seftotal ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+                setMetric('trust_fund_total_currency', resp.trust_fund_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+                setMetric('donation_total_currency', resp.donation_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
                 setMetric('new_purchase_total_currency', resp.new_purchase_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
 
                 setMetric('admin_count', resp.admin_count ?? 0, { duration: 1800 });

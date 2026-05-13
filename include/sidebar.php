@@ -33,7 +33,7 @@
             <ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu" data-accordion="false">
                 <?php if (hasRole(['SYSTEM-ADMIN','GF/SEF-ADMIN','DISPOSAL-ADMIN'])): ?>
                     <li class="nav-item">
-                        <a href="../admin/dashboard.php" class="nav-link <?= isActivePage(['dashboard.php', 'property-inventory.php', 'general-fund-ics-property.php', 'general-fund-department.php', 'general-fund-ics-department.php', 'return-item.php', 'general-fund-inventory.php', 'general-fund-par-transfer.php','sef-institution.php','sef-inventory.php']) ?>">
+                        <a href="../admin/dashboard.php" class="nav-link <?= isActivePage(['dashboard.php', 'property-inventory.php', 'general-fund-ics-property.php', 'general-fund-department.php', 'general-fund-ics-department.php', 'return-item.php', 'general-fund-inventory.php', 'general-fund-par-transfer.php','sef-institution.php','sef-inventory.php','trust-fund-inventory.php','donation-inventory.php']) ?>">
                             <i class="nav-icon fa-solid fa-layer-group text-white"></i>
                             <p>Dashboard</p>
                         </a>

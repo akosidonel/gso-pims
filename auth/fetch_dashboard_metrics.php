@@ -5,7 +5,7 @@ include __DIR__ . '/../database/databaseConnection.php';
 header('Content-Type: application/json; charset=utf-8');
 
 // Lightweight server-side cache (reduces dashboard login delay)
-$cacheKey = 'dashboard_metrics_cache_v7';
+$cacheKey = 'dashboard_metrics_cache_v8';
 $cacheTtlSeconds = 60;
 
 if (isset($_SESSION[$cacheKey]) && is_array($_SESSION[$cacheKey])) {
@@ -51,6 +51,8 @@ function dashboard_count(mysqli $conn, $table) {
 
 $gftotal = dashboard_sum($conn, 'par_gen_fund', 'unit_value');
 $seftotal = dashboard_sum($conn, 'property_sef', 'unit_value');
+$trustFundTotal = dashboard_sum($conn, 'trust_fund', 'unit_value');
+$donationTotal = dashboard_sum($conn, 'donation', 'unit_value');
 $landTotal = dashboard_sum($conn, 'land_properties', 'total_amount');
 $newPurchaseTotal = dashboard_sum($conn, 'new_purchase', 'unit_value');
 $infraGfTotal = dashboard_sum($conn, 'general_fund_infrastructure', 'amount', "WHERE record_status = 'ACTIVE'");
@@ -122,6 +124,8 @@ if ($res) {
 $data = array_merge(array(
     'gftotal' => $gftotal,
     'seftotal' => $seftotal,
+    'trust_fund_total' => $trustFundTotal,
+    'donation_total' => $donationTotal,
     'land_total' => $landTotal,
     'new_purchase_total' => $newPurchaseTotal,
     'infrastructure_gf_total' => $infraGfTotal,
