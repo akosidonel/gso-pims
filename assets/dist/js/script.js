@@ -3063,6 +3063,17 @@ $(function(){
     syncAddItemNpSelectAll();
   }
 
+  $(document)
+    .off('click.addItemNpOpenRow', '#addItemNewPurchaseTable tbody tr.add-item-np-row')
+    .on('click.addItemNpOpenRow', '#addItemNewPurchaseTable tbody tr.add-item-np-row', function (e) {
+      if ($(e.target).closest('a, button, input, label, .dropdown-menu').length) { return; }
+
+      var href = String($(this).data('href') || '').trim();
+      if (href) { window.location.href = href; }
+    });
+
+  $('#addItemNewPurchaseTable tbody tr.add-item-np-row').css('cursor', 'pointer');
+
   // ============================================================
   // New Purchase: edit P.O. modal
   // ============================================================

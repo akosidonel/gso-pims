@@ -1,6 +1,7 @@
 <?php
 include_once('../config/session.php');
 include('../config/check_session.php');
+require_once('../auth/auth.php');
 
 if (!isset($_SESSION['alogin'])) {
     header('Location:../index.php');
@@ -8,46 +9,14 @@ if (!isset($_SESSION['alogin'])) {
 }
 
 $po = trim((string)($_GET['po'] ?? ''));
-if ($po === '') {
+$newPurchaseId = (int)($_GET['id'] ?? 0);
+if ($po === '' && $newPurchaseId <= 0) {
     header('Location: add-item.php');
     exit();
 }
 
-// Fetch items for this P.O.
-$sql = "
-    SELECT
-      np.id,
-        np.item, np.model, np.description,
-        np.serial_number, np.serial_number_2, np.property_number,
-        np.fund, np.category, np.unit_value, np.date_aquired,
-        np.account_code, np.supplier, np.par_ics_number,
-        np.purchase_request, np.obr_number, np.jev_number, np.remarks,
-        COALESCE(d_by_id.department_name, d_by_code.department_name) AS department_name,
-        COALESCE(d_by_id.department_code, d_by_code.department_code) AS department_code,
-        h.dept_id, e.emp_name,
-        h.category AS doc_type, h.reference_number
-    FROM new_purchase AS np
-    LEFT JOIN new_purchase_history AS h
-      ON (h.par_number = np.property_number OR h.par_number = CONCAT('NPID:', np.id)) AND h.status = 1
-    LEFT JOIN department AS d_by_id ON d_by_id.dept_id = h.dept_id
-    LEFT JOIN department AS d_by_code ON d_by_code.department_code = h.dept_id
-    LEFT JOIN employee   AS e ON e.emp_id  = h.emp_id
-    WHERE np.purchase_order = ?
-      AND (
-        np.property_number IS NULL
-        OR np.property_number = ''
-        OR np.id = (
-          SELECT MIN(np2.id)
-          FROM new_purchase AS np2
-          WHERE np2.property_number = np.property_number
-        )
-      )
-    ORDER BY np.id ASC
-";
-$stmt = $conn->prepare($sql);
-$stmt->bind_param('s', $po);
-$stmt->execute();
-$items = $stmt->get_result();
+$items = gso_new_purchase_items($conn, $po, $newPurchaseId);
+$pageRef = $po !== '' ? $po : 'NULL';
 
 $accountCodeOptions = [];
 $accountCodeSql = "SELECT account_code, account_name FROM account_code ORDER BY account_code ASC";
@@ -99,7 +68,7 @@ if ($accountCodeResult) {
     <div class="card">
       <div class="card-header">
         <h3 class="card-title">
-          <i class="fas fa-clipboard"></i>&nbsp; Items for P.O.: <strong><?= htmlspecialchars($po) ?></strong>
+          <i class="fas fa-clipboard"></i>&nbsp; Items for P.O.: <strong><?= htmlspecialchars($pageRef) ?></strong>
         </h3>
         <div class="card-tools">
           <a href="add-item.php" class="btn btn-sm btn-outline-secondary">
@@ -124,7 +93,7 @@ if ($accountCodeResult) {
               </tr>
             </thead>
             <tbody>
-              <?php while ($row = $items->fetch_assoc()):
+              <?php while ($items && ($row = $items->fetch_assoc())):
                 $model       = trim((string)($row['model']       ?? ''));
                 $description = trim((string)($row['description'] ?? ''));
                 $particulars = ($model !== '' && $description !== '')

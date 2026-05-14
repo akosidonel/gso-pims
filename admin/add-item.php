@@ -1,6 +1,7 @@
 <?php 
 include_once('../config/session.php');
 include('../config/check_session.php');
+require_once('../auth/auth.php');
 
 if(!isset($_SESSION['alogin'])){
   header('Location:../index.php');
@@ -424,45 +425,30 @@ if(!isset($_SESSION['alogin'])){
               </thead>
               <tbody>
                 <?php
-                  $recentNewPurchaseSql = "
-                    SELECT
-                      np.purchase_order,
-                      MAX(np.fund) AS fund,
-                      MAX(np.purchase_request) AS purchase_request,
-                      MAX(np.obr_number) AS obr_number,
-                      MAX(np.supplier) AS supplier,
-                      MAX(np.par_ics_number) AS par_ics_number,
-                      MAX(COALESCE(d_by_id.department_code, d_by_code.department_code, h.dept_id)) AS department_code,
-                      MAX(COALESCE(d_by_id.department_name, d_by_code.department_name)) AS department_name,
-                      SUM(COALESCE(np.unit_value, 0)) AS total_amount,
-                      MAX(np.created_at) AS created_at
-                    FROM new_purchase AS np
-                    LEFT JOIN new_purchase_history AS h
-                      ON (h.par_number = np.property_number OR h.par_number = CONCAT('NPID:', np.id)) AND h.status = 1
-                    LEFT JOIN department AS d_by_code
-                      ON d_by_code.department_code = h.dept_id
-                    LEFT JOIN department AS d_by_id
-                      ON d_by_id.dept_id = h.dept_id
-                    GROUP BY np.purchase_order
-                    ORDER BY MAX(np.created_at) DESC
-                  ";
-                  $stmtNp = $conn->prepare($recentNewPurchaseSql);
-                  $stmtNp->execute();
-                  $resultsNp = $stmtNp->get_result();
+                  $showText = function ($value) {
+                    $text = trim((string)($value ?? ''));
+                    return $text !== '' ? htmlspecialchars($text, ENT_QUOTES, 'UTF-8') : '<span class="text-dark">NULL</span>';
+                  };
+                  $resultsNp = gso_new_purchase_summary_rows($conn);
 
                   if ($resultsNp && $resultsNp->num_rows > 0):
                     while ($row = $resultsNp->fetch_assoc()):
-                      $po = htmlspecialchars((string)($row['purchase_order'] ?? ''), ENT_QUOTES, 'UTF-8');
+                      $poRaw = trim((string)($row['purchase_order'] ?? ''));
+                      $po = htmlspecialchars($poRaw, ENT_QUOTES, 'UTF-8');
+                      $rowId = (int)($row['row_id'] ?? 0);
+                      $itemsUrl = $poRaw !== ''
+                        ? 'new-purchase-items.php?po=' . urlencode($poRaw)
+                        : 'new-purchase-items.php?id=' . urlencode((string)$rowId);
                 ?>
-                  <tr>
+                  <tr class="add-item-np-row" data-href="<?= htmlspecialchars($itemsUrl, ENT_QUOTES, 'UTF-8') ?>">
                     <td class="text-center">
                       <input type="checkbox" class="add-item-np-checkbox"
                         value="<?= $po ?>"
-                        aria-label="Select P.O. <?= $po ?>">
+                        aria-label="Select P.O. <?= $poRaw !== '' ? $po : 'NULL' ?>">
                     </td>
-                    <td><?= $po !== '' ? '<a href="new-purchase-items.php?po=' . urlencode((string)($row['purchase_order'] ?? '')) . '" class="font-weight-bold">' . $po . '</a>' : "<span class='text-muted'>&mdash;</span>" ?></td>
-                    <td><?= !empty($row['purchase_request']) ? htmlspecialchars((string)$row['purchase_request']) : "<span class='text-muted'>â</span>" ?></td>
-                    <td><?= !empty($row['obr_number'])       ? htmlspecialchars((string)$row['obr_number'])       : "<span class='text-muted'>â</span>" ?></td>
+                    <td class="font-weight-bold"><?= $showText($row['purchase_order'] ?? '') ?></td>
+                    <td><?= $showText($row['purchase_request'] ?? '') ?></td>
+                    <td><?= $showText($row['obr_number'] ?? '') ?></td>
                     <td><?= !empty($row['supplier'])         ? htmlspecialchars((string)$row['supplier'])         : "<span class='text-muted'>â</span>" ?></td>
                     <td><?= !empty($row['department_name'])  ? htmlspecialchars((string)$row['department_name'])  : "<span class='text-muted'>â</span>" ?></td>
                     <td><?= '₱ ' . number_format((float)($row['total_amount'] ?? 0), 2, '.', ',') ?></td>

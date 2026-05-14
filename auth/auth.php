@@ -10604,4 +10604,91 @@ if (isset($_POST['update_new_purchase_item'])) {
     echo json_encode(['status' => 200, 'message' => 'Item updated successfully.']);
     return;
 }
+
+if (!function_exists('gso_new_purchase_summary_rows')) {
+    function gso_new_purchase_summary_rows($conn) {
+        $sql = "
+            SELECT
+                MIN(np.id) AS row_id,
+                NULLIF(TRIM(np.purchase_order), '') AS purchase_order,
+                MAX(np.fund) AS fund,
+                MAX(np.purchase_request) AS purchase_request,
+                MAX(np.obr_number) AS obr_number,
+                MAX(np.supplier) AS supplier,
+                MAX(np.par_ics_number) AS par_ics_number,
+                MAX(COALESCE(d_by_id.department_code, d_by_code.department_code, h.dept_id)) AS department_code,
+                MAX(COALESCE(d_by_id.department_name, d_by_code.department_name)) AS department_name,
+                SUM(COALESCE(np.unit_value, 0)) AS total_amount,
+                MAX(np.created_at) AS created_at
+            FROM new_purchase AS np
+            LEFT JOIN new_purchase_history AS h
+                ON (h.par_number = np.property_number OR h.par_number = CONCAT('NPID:', np.id)) AND h.status = 1
+            LEFT JOIN department AS d_by_code ON d_by_code.department_code = h.dept_id
+            LEFT JOIN department AS d_by_id ON d_by_id.dept_id = h.dept_id
+            GROUP BY
+                CASE
+                    WHEN TRIM(COALESCE(np.purchase_order, '')) = '' THEN CONCAT('ID:', np.id)
+                    ELSE CONCAT('PO:', UPPER(TRIM(np.purchase_order)))
+                END
+            ORDER BY MAX(np.created_at) DESC
+        ";
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) { return false; }
+        $stmt->execute();
+        return $stmt->get_result();
+    }
+}
+
+if (!function_exists('gso_new_purchase_items')) {
+    function gso_new_purchase_items($conn, $po = '', $id = 0) {
+        $id = (int)$id;
+        $po = trim((string)$po);
+
+        if ($po === '' && $id <= 0) { return false; }
+
+        $where = $id > 0 ? 'np.id = ?' : 'np.purchase_order = ?';
+        $sql = "
+            SELECT
+                np.id,
+                np.item, np.model, np.description,
+                np.serial_number, np.serial_number_2, np.property_number,
+                np.fund, np.category, np.unit_value, np.date_aquired,
+                np.account_code, np.supplier, np.par_ics_number,
+                np.purchase_order, np.purchase_request, np.obr_number,
+                np.jev_number, np.remarks,
+                COALESCE(d_by_id.department_name, d_by_code.department_name) AS department_name,
+                COALESCE(d_by_id.department_code, d_by_code.department_code) AS department_code,
+                h.dept_id, e.emp_name,
+                h.category AS doc_type, h.reference_number
+            FROM new_purchase AS np
+            LEFT JOIN new_purchase_history AS h
+                ON (h.par_number = np.property_number OR h.par_number = CONCAT('NPID:', np.id)) AND h.status = 1
+            LEFT JOIN department AS d_by_id ON d_by_id.dept_id = h.dept_id
+            LEFT JOIN department AS d_by_code ON d_by_code.department_code = h.dept_id
+            LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+            WHERE {$where}
+              AND (
+                np.property_number IS NULL
+                OR np.property_number = ''
+                OR np.id = (
+                    SELECT MIN(np2.id)
+                    FROM new_purchase AS np2
+                    WHERE np2.property_number = np.property_number
+                )
+              )
+            ORDER BY np.id ASC
+        ";
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) { return false; }
+        if ($id > 0) {
+            $stmt->bind_param('i', $id);
+        } else {
+            $stmt->bind_param('s', $po);
+        }
+        $stmt->execute();
+        return $stmt->get_result();
+    }
+}
 ?>
