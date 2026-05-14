@@ -3411,9 +3411,9 @@ $(function(){
       var fund = npNormalizeFund($('#edit_fund').val());
       var dept = String(npEditOriginal.dept || '').trim() || npGetDeptFromPropertyNumber(oldPropertyNumber);
 
-      if (fund === 'TRUST FUND') {
+      if (fund === 'TRUST FUND' || fund === 'DONATION') {
         $('#show_property_number').val('');
-        npSetPropertyHelp('Property number is not generated for TRUST FUND.', 'info');
+        npSetPropertyHelp('Property number is not generated for ' + fund + '.', 'info');
         npEditPropertyGenerating = false;
         npEditPropertyValid = true;
         $('#npEditSaveBtn').prop('disabled', false);
@@ -5439,7 +5439,8 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     if (!hasUI()) { return; }
     if (!bundleRowEls().length) { return; }
 
-    if (String($('#fund').val() || '').trim().toUpperCase() === 'TRUST FUND') {
+    var fund = String($('#fund').val() || '').trim().toUpperCase();
+    if (fund === 'TRUST FUND' || fund === 'DONATION') {
       $('input[name="bundle_property_number[]"]').val('');
       setBundleHelp('');
       return;
@@ -5865,6 +5866,11 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     return fund === 'TRUST FUND' || fund === 'DONATION';
   }
 
+  function propertyNumberOptionalFund(){
+    var fund = String($('#fund').val() || '').trim().toUpperCase();
+    return fund === 'TRUST FUND' || fund === 'DONATION';
+  }
+
   function sanitizeManualAccountCode(value){
     return String(value || '').replace(/[^0-9-]/g, '').slice(0, 18);
   }
@@ -6137,6 +6143,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     if(!$cb.length || !$account.length) return;
 
     var allowOptional = isNewCondition();
+    var skipPropertyNumber = propertyNumberOptionalFund();
     $wrap.toggle(allowOptional);
     $cb.prop('disabled', !allowOptional);
     if(!allowOptional && $cb.is(':checked')){
@@ -6149,7 +6156,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       $propertyValue.val('');
     } else {
       $account.prop('disabled', false).prop('required', true);
-      $propertyPreview.attr('placeholder', '');
+      if (skipPropertyNumber) {
+        $propertyPreview.val('').attr('placeholder', 'No property number');
+        $propertyValue.val('');
+      } else {
+        $propertyPreview.attr('placeholder', '');
+      }
     }
   }
 
@@ -6573,7 +6585,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     var fund = $('#fund').val();
     var rows = $('#itemSetRows .item-set-card').toArray();
 
-    if (String(fund || '').trim().toUpperCase() === 'TRUST FUND') {
+    if (propertyNumberOptionalFund()) {
       applyPropertyNumberPreview([]);
       return;
     }
@@ -7291,7 +7303,8 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
   // This guarantees the backend receives bundle_* arrays even if the bundle UI
   // container is rendered outside the <form> subtree by the browser.
   var bundleRows = $('#bundleRows .bundle-row');
-  var isTrustFund = String($('#fund').val() || '').trim().toUpperCase() === 'TRUST FUND';
+  var selectedFund = String($('#fund').val() || '').trim().toUpperCase();
+  var isPropertyNumberOptionalFund = selectedFund === 'TRUST FUND' || selectedFund === 'DONATION';
   if(bundleRows.length){
     var bundleMissing = [];
     bundleRows.each(function(i){
@@ -7318,13 +7331,13 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
       // Basic validation: if a row exists, require at least category/asset/property number
       var rowNum = i + 1;
       var hasAny = (parentIdx || cat || asset || model || desc || s1 || s2 || par);
-      if(hasAny && (!parentIdx || !cat || !asset || (!isTrustFund && !par))){
+      if(hasAny && (!parentIdx || !cat || !asset || (!isPropertyNumberOptionalFund && !par))){
         bundleMissing.push(rowNum);
       }
     });
 
     if(bundleMissing.length){
-      var bundleMessage = isTrustFund
+      var bundleMessage = isPropertyNumberOptionalFund
         ? 'Bundle equipment requires Bundle Set, Category, and Asset Class for row(s): '
         : 'Bundle equipment requires Bundle Set, Category, Asset Class, and Property Number for row(s): ';
       Swal.fire({ icon:'warning', title:'Validation error', text: bundleMessage + bundleMissing.join(', ') + '.' });

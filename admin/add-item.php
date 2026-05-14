@@ -317,6 +317,7 @@ if(!isset($_SESSION['alogin'])){
                     'OTHER MACHINERY AND EQUIPMENT',
                     'COMMUNICATION EQUIPMENT',
                     'MEDICAL EQUIPMENT',
+                    'TECHNICAL & SCIENTIFIC EQUIPMENT',
                     'OTHER SUPPLY',
                     'MILLITARY AND POLICE EQUIPMENT',
                     'BOOKS',

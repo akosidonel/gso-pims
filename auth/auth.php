@@ -2617,8 +2617,8 @@ if (!function_exists('gso_generate_one_property_number')) {
         if ($category === '' || $year === '' || $accountCode === '' || $dept === '' || $fund === '') {
             return ['ok' => false, 'error' => 'Missing required inputs.'];
         }
-        if (strtoupper($fund) === 'TRUST FUND') {
-            return ['ok' => false, 'error' => 'Property number is not generated for TRUST FUND.'];
+        if (in_array(strtoupper($fund), ['TRUST FUND', 'DONATION'], true)) {
+            return ['ok' => false, 'error' => 'Property number is not generated for TRUST FUND or DONATION.'];
         }
 
         [$parSub, $icsSub, $deptMap] = gso_propnum_maps();
@@ -2792,8 +2792,8 @@ if (isset($_POST['generate_property_number'])) {
             if ($category === '' || $year === '' || $accountCode === '' || $dept === '' || $fund === '') {
                 return ['ok' => false, 'error' => 'Missing required inputs.'];
             }
-            if (strtoupper($fund) === 'TRUST FUND') {
-                return ['ok' => false, 'error' => 'Property number is not generated for TRUST FUND.'];
+            if (in_array(strtoupper($fund), ['TRUST FUND', 'DONATION'], true)) {
+                return ['ok' => false, 'error' => 'Property number is not generated for TRUST FUND or DONATION.'];
             }
 
             [$parSub, $icsSub, $deptMap] = gso_propnum_maps();
@@ -4954,6 +4954,8 @@ if (isset($_POST['save_item'])) {
             return false;
         }
         $isTrustFund = ($fundNorm === 'TRUST FUND');
+        $isDonation = ($fundNorm === 'DONATION');
+        $propertyNumberOptionalFund = ($isTrustFund || $isDonation);
 
         $existsParNumber = function($num) use ($conn){
             if (trim((string)$num) === '') { return false; }
@@ -5139,13 +5141,13 @@ if (isset($_POST['save_item'])) {
                 }
 
                 $omitAccountPropertyForRow = $resolveRowBool($itemNoAccountPropertyRows, $i, false);
-                $skipPropertyNumberForRow = $isTrustFund || $omitAccountPropertyForRow;
+                $skipPropertyNumberForRow = $propertyNumberOptionalFund || $omitAccountPropertyForRow;
                 $accountCodeForRow = $resolveRowUpper($itemAccountCodeRows, $i, $accountCodeInput);
                 if ($accountCodeForRow === '' && !$omitAccountPropertyForRow) {
                     throw new Exception('Account code is required for row ' . $i . '.');
                 }
-                if ($isTrustFund && $accountCodeForRow !== '' && !preg_match('/^[0-9-]{1,20}$/', $accountCodeForRow)) {
-                    throw new Exception('Account code for TRUST FUND must contain numbers and hyphen only, up to 20 characters (row ' . $i . ').');
+                if ($propertyNumberOptionalFund && $accountCodeForRow !== '' && !preg_match('/^[0-9-]{1,20}$/', $accountCodeForRow)) {
+                    throw new Exception('Account code for TRUST FUND and DONATION must contain numbers and hyphen only, up to 20 characters (row ' . $i . ').');
                 }
 
                 $parNumberForSet = strtoupper(trim($resolveRowInput($itemPropertyNumberRows, $i, ($i === 1 ? $par_number_raw : ''))));
@@ -5155,7 +5157,7 @@ if (isset($_POST['save_item'])) {
                 if ($omitAccountPropertyForRow) {
                     $accountCodeForRow = null;
                     $par_number = null;
-                } elseif ($isTrustFund) {
+                } elseif ($propertyNumberOptionalFund) {
                     $par_number = null;
                 } else {
                     $par_number = mysqli_real_escape_string($conn, $parNumberForSet);
@@ -5296,10 +5298,10 @@ if (isset($_POST['save_item'])) {
                     if ($parentIdx < 1 || $parentIdx > $quantity) {
                         throw new Exception('Bundle set is out of range (row '.($j+1).').');
                     }
-                    if (!$isTrustFund && (!isset($parentPropertyNumbers[$parentIdx]) || trim((string)$parentPropertyNumbers[$parentIdx]) === '')) {
+                    if (!$propertyNumberOptionalFund && (!isset($parentPropertyNumbers[$parentIdx]) || trim((string)$parentPropertyNumbers[$parentIdx]) === '')) {
                         throw new Exception('Unable to resolve parent item for bundle row '.($j+1).'.');
                     }
-                    $bundleWithNumber = $isTrustFund ? null : (string)$parentPropertyNumbers[$parentIdx];
+                    $bundleWithNumber = $propertyNumberOptionalFund ? null : (string)$parentPropertyNumbers[$parentIdx];
 
                     // Bundle uses the same property number as its parent
                     $bPar = $bundleWithNumber;
@@ -5394,6 +5396,7 @@ if (isset($_POST['save_item'])) {
     $isSEF = in_array($fundUpper, ['SEF','SF','SPECIAL EDUCATION FUND'], true);
     $isTrustFund = ($fundUpper === 'TRUST FUND');
     $isDonation = ($fundUpper === 'DONATION');
+    $propertyNumberOptionalFund = ($isTrustFund || $isDonation);
     if(!$isGF && !$isSEF && !$isTrustFund && !$isDonation){ echo json_encode(['status'=>422,'message'=>'Invalid fund selected.']); return false; }
 
     // Safety limits for very large submissions (server-side)
@@ -5573,12 +5576,12 @@ if (isset($_POST['save_item'])) {
         }
 
         $parNumberForSet = strtoupper(trim($resolveRowInput($itemPropertyNumberRows, $i, ($i === 1 ? $par_number_raw : ''))));
-        if (!$isTrustFund && $parNumberForSet === '') {
+        if (!$propertyNumberOptionalFund && $parNumberForSet === '') {
             mysqli_rollback($conn);
             echo json_encode(['status'=>422,'message'=>'Property number is required for row '.$i.'.']);
             return false;
         }
-        if ($isTrustFund) {
+        if ($propertyNumberOptionalFund) {
             $par_number = null;
         } else {
             $par_number = mysqli_real_escape_string($conn, $parNumberForSet);
@@ -5608,7 +5611,7 @@ if (isset($_POST['save_item'])) {
         $remarksSql = ($remarksForRow === null) ? 'NULL' : "'" . mysqli_real_escape_string($conn, $remarksForRow) . "'";
 
         for ($copyIndex = 1; $copyIndex <= $itemQuantityForRow; $copyIndex++) {
-            if (!$isTrustFund && !($i === 1 && $copyIndex === 1)) {
+            if (!$propertyNumberOptionalFund && !($i === 1 && $copyIndex === 1)) {
                 $guard2 = 0;
                 do { $par_number = $nextParNumber($par_number); $guard2++; } while ($existsParNumber($par_number) && $guard2 < 20000);
             }
@@ -5641,8 +5644,9 @@ if (isset($_POST['save_item'])) {
             } else {
                 $fundRecordId = $nextDonationId;
                 $nextDonationId--;
-                $multi .= "INSERT INTO donation(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','DONATION','".$category."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."','".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
-                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$par_number."','".$status."','".$category."','".$today."');";
+                $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
+                $multi .= "INSERT INTO donation(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','DONATION','".$category."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
+                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".$status."','".$category."','".$today."');";
             }
 
             $batchItems++;
@@ -10499,6 +10503,10 @@ if (isset($_POST['update_new_purchase_item'])) {
     $remarks     = strtoupper(trim((string)($_POST['remarks']          ?? '')));
     $fund        = strtoupper(trim((string)($_POST['fund']             ?? '')));
     $category    = strtoupper(trim((string)($_POST['category']         ?? '')));
+    $propertyNumberOptionalFundForUpdate = in_array($fund, ['TRUST FUND', 'DONATION'], true);
+    if ($propertyNumberOptionalFundForUpdate) {
+        $newPropNum = '';
+    }
 
     $stmtCurrent = $conn->prepare('SELECT property_number, category FROM new_purchase WHERE id = ? LIMIT 1');
     if (!$stmtCurrent) {
@@ -10575,7 +10583,30 @@ if (isset($_POST['update_new_purchase_item'])) {
         return;
     }
 
-    if ($newPropNum !== '' && $newPropNum !== $oldPropNum) {
+    if ($propertyNumberOptionalFundForUpdate) {
+        $historyLink = 'NPID:' . $newPurchaseId;
+        if ($oldPropNum !== '') {
+            $stmtHist = $conn->prepare('UPDATE new_purchase_history SET par_number = ?, category = ? WHERE par_number = ?');
+            if ($stmtHist) {
+                $stmtHist->bind_param('sss', $historyLink, $category, $oldPropNum);
+                $stmtHist->execute();
+                $stmtHist->close();
+            }
+            $stmtBundle = $conn->prepare('UPDATE new_bundle_purchase SET property_number = CASE WHEN property_number = ? THEN NULL ELSE property_number END, bundle_with = CASE WHEN bundle_with = ? THEN NULL ELSE bundle_with END WHERE property_number = ? OR bundle_with = ?');
+            if ($stmtBundle) {
+                $stmtBundle->bind_param('ssss', $oldPropNum, $oldPropNum, $oldPropNum, $oldPropNum);
+                $stmtBundle->execute();
+                $stmtBundle->close();
+            }
+        } else {
+            $stmtHist = $conn->prepare('UPDATE new_purchase_history SET par_number = ?, category = ? WHERE (par_number = ? OR par_number IS NULL OR par_number = \'\') AND status = 1 ORDER BY (par_number = ?) DESC, id ASC LIMIT 1');
+            if ($stmtHist) {
+                $stmtHist->bind_param('ssss', $historyLink, $category, $historyLink, $historyLink);
+                $stmtHist->execute();
+                $stmtHist->close();
+            }
+        }
+    } elseif ($newPropNum !== '' && $newPropNum !== $oldPropNum) {
         if ($oldPropNum !== '') {
             $stmtHist = $conn->prepare('UPDATE new_purchase_history SET par_number = ?, category = ? WHERE par_number = ?');
             if ($stmtHist) {
