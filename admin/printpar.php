@@ -774,7 +774,7 @@ class PDF extends TCPDF
       $this->SetY(-102);
       $this->SetFont('dejavusans','',8);
       $this->SetX(130);
-      $this->Cell(62,5,$this->supplier,0,1);
+      $this->MultiCell(62, 5, $this->supplier, 0, 'L', false, 1);
       $this->SetX(130);
       $this->Cell(62,5,$this->po,0,1);//po
       $this->SetX(130);

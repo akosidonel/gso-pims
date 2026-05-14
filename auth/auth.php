@@ -7037,7 +7037,7 @@ if(isset($_POST['departmentid'])){
     exit;
 }
 // fetch departments filtered by fund selection (AJAX)
-// Business rule: GF -> agencies = 'CITY DEPARTMENT'; SEF -> agencies = 'INSTITUTION'
+// Business rule: GF/TRUST FUND -> agencies = 'CITY DEPARTMENT'; SEF -> agencies = 'INSTITUTION'
 // restore fund-based department filtering endpoint
 if(isset($_POST['fund_for_departments'])) {
     // Input guard: fund must be a short known token
@@ -7045,7 +7045,7 @@ if(isset($_POST['fund_for_departments'])) {
     if ($fundVal === '' || strlen($fundVal) > 64) { echo '<option value="">-SELECT-</option>'; exit; }
     // Simple session cache to reduce DB hits across quick repeated requests
     if (!isset($_SESSION['cache'])) { $_SESSION['cache'] = []; }
-    $cacheKey = 'departments_for_fund_' . md5($fundVal);
+    $cacheKey = 'departments_for_fund_v2_' . md5($fundVal);
     if (isset($_SESSION['cache'][$cacheKey])) {
         $cached = $_SESSION['cache'][$cacheKey];
         if (is_array($cached) && isset($cached['html']) && isset($cached['ts']) && (time() - $cached['ts'] < 120)) {
@@ -7053,14 +7053,14 @@ if(isset($_POST['fund_for_departments'])) {
         }
     }
     // Accept multiple possible representations stored in department.agencies
-    // For GENERAL FUND (GF): may be stored as 'CITY DEPARTMENT', '1', 'GF', 'GENERAL FUND'
+    // For GENERAL FUND/TRUST FUND: may be stored as 'CITY DEPARTMENT', '1', 'GF', 'GENERAL FUND'
     // For SEF: may be stored as 'INSTITUTION', '2', 'SEF', 'SPECIAL EDUCATION FUND'
     $agencyCandidates = [];
-        if (in_array($fundVal, ['GF','GENERAL FUND'])) {
+        if (in_array($fundVal, ['GF','GENERAL FUND','TRUST FUND'], true)) {
             $agencyCandidates = ['CITY DEPARTMENT','1','GF','GENERAL FUND'];
         } elseif (in_array($fundVal, ['SEF','SF','SPECIAL EDUCATION FUND'])) {
             $agencyCandidates = ['INSTITUTION','2','SEF','SPECIAL EDUCATION FUND'];
-        } elseif (in_array($fundVal, ['TRUST FUND','DONATION'], true)) {
+        } elseif ($fundVal === 'DONATION') {
             $agencyCandidates = ['CITY DEPARTMENT','INSTITUTION','1','2','GF','GENERAL FUND','SEF','SF','SPECIAL EDUCATION FUND','TRUST FUND','DONATION'];
         }
     if (!count($agencyCandidates)) { echo '<option value="">-SELECT-</option>'; exit; }

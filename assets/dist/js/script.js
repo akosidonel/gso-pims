@@ -3077,25 +3077,56 @@ $(function(){
   // ============================================================
   // New Purchase: edit P.O. modal
   // ============================================================
+  function loadEditNpDepartments(fund, selectedDept) {
+    var $deptSelect = $('#edit_np_dept');
+    var deptValue = String(selectedDept || '').trim();
+
+    if (!$deptSelect.length) { return; }
+
+    $deptSelect.prop('disabled', true).html('<option value="">Loading...</option>');
+
+    $.ajax({
+      url: '../auth/auth.php',
+      type: 'POST',
+      data: { fund_for_departments: fund },
+      success: function (html) {
+        $deptSelect.html(html);
+        if (deptValue && $deptSelect.find('option').filter(function () { return this.value === deptValue; }).length) {
+          $deptSelect.val(deptValue);
+        } else {
+          $deptSelect.val('');
+        }
+      },
+      error: function () {
+        $deptSelect.html('<option value="">Failed to load departments</option>');
+      },
+      complete: function () {
+        $deptSelect.prop('disabled', false);
+      }
+    });
+  }
+
   $(document)
     .off('click.npEditBtn', '.np-edit-btn')
     .on('click.npEditBtn', '.np-edit-btn', function () {
       var $b = $(this);
       var deptValue = String($b.data('dept') || '').trim();
-      var $deptSelect = $('#edit_np_dept');
+      var fundValue = String($b.data('fund') || '').trim();
       $('#edit_np_original_po').val($b.data('po'));
-      $('#edit_np_fund').val($b.data('fund'));
-      $deptSelect.find('option[data-current-dept="1"]').remove();
-      if (deptValue && !$deptSelect.find('option').filter(function () { return this.value === deptValue; }).length) {
-        $('<option>', { value: deptValue, text: deptValue }).attr('data-current-dept', '1').insertAfter($deptSelect.find('option:first'));
-      }
-      $deptSelect.val(deptValue);
+      $('#edit_np_fund').val(fundValue);
+      loadEditNpDepartments(fundValue, deptValue);
       $('#edit_np_po').val($b.data('po'));
       $('#edit_np_pr').val($b.data('pr'));
       $('#edit_np_obr').val($b.data('obr'));
       $('#edit_np_supplier').val($b.data('supplier'));
       $('#edit_np_paricsno').val($b.data('paricsno'));
       $('#editNpPoModal').modal('show');
+    });
+
+  $(document)
+    .off('change.editNpFund', '#edit_np_fund')
+    .on('change.editNpFund', '#edit_np_fund', function () {
+      loadEditNpDepartments(String($(this).val() || '').trim(), '');
     });
 
   $(document)
