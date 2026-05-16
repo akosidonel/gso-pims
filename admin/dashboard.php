@@ -176,13 +176,14 @@ if (!isset($_SESSION['alogin'])) {
                         </div>";
         }
         // Reusable function to render small-box components
-        function renderSmallBox($icon, $title, $metricKey, $item, $color) {
+        function renderSmallBox($icon, $title, $metricKey, $item, $color, $link = '') {
           $safeKey = htmlspecialchars($metricKey, ENT_QUOTES);
                     $safeTitle = htmlspecialchars($title);
                     $safeItem = urlencode($item);
+                    $safeLink = htmlspecialchars($link !== '' ? $link : "property-inventory.php?item={$safeItem}");
                     return "
                         <div class='col-lg-3 col-sm-6 mb-3'>
-                            <a href='property-inventory.php?item={$safeItem}' class='gso-stat-link' aria-label='More information about {$safeTitle}'>
+                            <a href='{$safeLink}' class='gso-stat-link' aria-label='More information about {$safeTitle}'>
                                 <div class='gso-stat-card'>
                                     <div class='gso-stat-icon'><i class='fa-solid {$icon}'></i></div>
                                     <div>
@@ -226,7 +227,7 @@ if (!isset($_SESSION['alogin'])) {
             echo renderSmallBox('fa-computer', 'Desktop Computer', 'desktop_count', 'DESKTOP COMPUTER', 'info');
             echo renderSmallBox('fa-laptop', 'Laptop', 'laptop_count', 'LAPTOP', 'maroon');
             echo renderSmallBox('fa-fan', 'Airconditioner', 'aircon_count', 'AIRCONDITIONER', 'warning');
-            echo renderSmallBox('fa-truck-front', 'Motor Vehicle', 'vehicle_count', 'MOTOR VEHICLE', 'danger');
+            echo renderSmallBox('fa-truck-front', 'Motor Vehicle', 'vehicle_count', 'MOTOR VEHICLE', 'danger', 'motor-vehicle-dashboard.php');
             echo renderSmallBox('fa-print', 'Printer', 'printer_count', 'PRINTER', 'primary');
             echo renderSmallBox('fa-server', 'Server', 'server_count', 'SERVER', 'orange');
             echo renderSmallBox('fa-gears', 'Other Machinery and Equipment', 'machinery_count', 'OTHER MACHINERY AND EQUIPMENT', 'lightblue');

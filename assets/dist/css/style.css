@@ -267,6 +267,105 @@
   animation: gsoCountPulse 1600ms cubic-bezier(0.16, 1, 0.3, 1) 0ms 1 both;
 }
 
+#motorVehicleDashboardTable_wrapper .gso-mv-dt-toolbar {
+  row-gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+#motorVehicleDashboardTable_wrapper .gso-mv-dt-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
+#motorVehicleDashboardTable_wrapper .dt-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0;
+}
+
+#motorVehicleDashboardTable_wrapper .dt-buttons .btn {
+  margin-right: 0;
+}
+
+#motorVehicleDashboardTable_wrapper .dataTables_length,
+#motorVehicleDashboardTable_wrapper .dataTables_filter {
+  margin-bottom: 0;
+}
+
+#motorVehicleDashboardTable_wrapper .dataTables_length label,
+#motorVehicleDashboardTable_wrapper .dataTables_filter label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
+#motorVehicleDashboardTable_wrapper .gso-mv-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+#motorVehicleDashboardTable_wrapper .gso-mv-filter-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
+#motorVehicleDashboardTable_wrapper .gso-mv-filter-label select {
+  width: auto;
+  min-width: 110px;
+}
+
+#motorVehicleDashboardTable_wrapper .gso-mv-filter-dept select {
+  min-width: 180px;
+  max-width: 260px;
+}
+
+#motorVehicleDashboardTable_wrapper .dataTables_filter {
+  display: flex;
+  justify-content: flex-end;
+}
+
+#motorVehicleDashboardTable_wrapper .dataTables_filter input {
+  max-width: 240px;
+}
+
+@media (max-width: 991.98px) {
+  #motorVehicleDashboardTable_wrapper .gso-mv-dt-search,
+  #motorVehicleDashboardTable_wrapper .gso-mv-dt-length,
+  #motorVehicleDashboardTable_wrapper .gso-mv-filters,
+  #motorVehicleDashboardTable_wrapper .dataTables_length,
+  #motorVehicleDashboardTable_wrapper .dataTables_filter {
+    justify-content: flex-start;
+  }
+
+  #motorVehicleDashboardTable_wrapper .dataTables_filter label {
+    width: 100%;
+  }
+
+  #motorVehicleDashboardTable_wrapper .dataTables_filter input {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+
+  #motorVehicleDashboardTable_wrapper .gso-mv-filter-label,
+  #motorVehicleDashboardTable_wrapper .gso-mv-filter-label select {
+    width: 100%;
+  }
+
+  #motorVehicleDashboardTable_wrapper .gso-mv-filter-dept select {
+    max-width: none;
+  }
+}
+
 @keyframes gsoCountPulse {
   0% {
     transform: translateY(0);

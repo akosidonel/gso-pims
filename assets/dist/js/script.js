@@ -9651,6 +9651,438 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
     } catch (e) {}
   });
 
+  window.GSO.MotorVehicleDashboard = window.GSO.MotorVehicleDashboard || (function(){
+    var table = null;
+
+    function esc(value) {
+      return $('<div>').text(String(value == null ? '' : value)).html();
+    }
+
+    function displayValue(value) {
+      var text = String(value == null ? '' : value).trim();
+      return text !== '' ? esc(text) : '<span class="text-muted">N/A</span>';
+    }
+
+    function cleanAmount(value) {
+      var raw = String(value || '').replace(/,/g, '').replace(/[^0-9.]/g, '');
+      var parts = raw.split('.');
+      if (parts.length > 2) {
+        raw = parts.shift() + '.' + parts.join('');
+      }
+      return raw;
+    }
+
+    function formatAmount(value, fixedDecimals) {
+      var clean = cleanAmount(value);
+      if (!clean) { return ''; }
+
+      var parts = clean.split('.');
+      var whole = parts[0] || '';
+      var decimals = parts.length > 1 ? parts[1].slice(0, 2) : '';
+
+      whole = whole.replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      if (!whole && decimals) { whole = '0'; }
+
+      if (fixedDecimals) {
+        decimals = (decimals + '00').slice(0, 2);
+        return (whole || '0') + '.' + decimals;
+      }
+
+      return parts.length > 1 ? whole + '.' + decimals : whole;
+    }
+
+    function notify(icon, title, text) {
+      if (window.Swal && Swal.fire) {
+        Swal.fire({ icon: icon, title: title, text: text || '' });
+        return;
+      }
+      alert((title || '') + (text ? '\n' + text : ''));
+    }
+
+    function setMetric(key, value) {
+      var number = Number(value || 0);
+      if (!isFinite(number)) { number = 0; }
+      $('[data-mv-metric="' + key + '"]').text(number.toLocaleString('en-US'));
+    }
+
+    function loadMetrics() {
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'GET',
+        dataType: 'json',
+        data: { motor_vehicle_dashboard: 'metrics' },
+        success: function(resp) {
+          resp = resp || {};
+          setMetric('total_vehicles', resp.total_vehicles);
+          setMetric('registered_vehicles', resp.registered_vehicles);
+          setMetric('for_registration', resp.for_registration);
+          setMetric('fund_sources', resp.fund_sources);
+        },
+        error: function() {
+          setMetric('total_vehicles', 0);
+          setMetric('registered_vehicles', 0);
+          setMetric('for_registration', 0);
+          setMetric('fund_sources', 0);
+        }
+      });
+    }
+
+    function renderFilterOptions(payload) {
+      payload = payload || {};
+      var years = Array.isArray(payload.years) ? payload.years : [];
+      var departments = Array.isArray(payload.departments) ? payload.departments : [];
+      var $actions = $('#motorVehicleDashboardTable_wrapper .gso-mv-dt-actions');
+      if (!$actions.length || $('#mvVehicleFilters').length) { return; }
+
+      var $filters = $('<div class="gso-mv-filters" id="mvVehicleFilters"></div>');
+      var $yearSelect = $('<select class="form-control form-control-sm" id="mvYearAcquiredFilter" aria-label="Filter by year acquired"></select>');
+      var $departmentSelect = $('<select class="form-control form-control-sm" id="mvDepartmentFilter" aria-label="Filter by department"></select>');
+
+      $yearSelect.append($('<option>').val('').text('All Years'));
+      years.forEach(function(year) {
+        $yearSelect.append($('<option>').val(year).text(year));
+      });
+
+      $departmentSelect.append($('<option>').val('').text('All Departments'));
+      departments.forEach(function(department) {
+        $departmentSelect.append($('<option>').val(department).text(department));
+      });
+
+      $filters
+        .append($('<label class="gso-mv-filter-label"></label>').append('<span>Year</span>').append($yearSelect))
+        .append($('<label class="gso-mv-filter-label gso-mv-filter-dept"></label>').append('<span>Department</span>').append($departmentSelect));
+
+      var $length = $actions.find('.dataTables_length');
+      if ($length.length) {
+        $filters.insertAfter($length);
+      } else {
+        $actions.append($filters);
+      }
+
+      $yearSelect.add($departmentSelect).on('change.mvDashboardFilters', function() {
+        if (table) { table.ajax.reload(); }
+      });
+    }
+
+    function loadFilterOptions() {
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'GET',
+        dataType: 'json',
+        cache: false,
+        data: { motor_vehicle_dashboard: 'filters', _ts: Date.now() },
+        success: function(resp) {
+          if (!resp || resp.status !== 200 || !resp.data) { return; }
+          renderFilterOptions(resp.data);
+        }
+      });
+    }
+
+    function initDatePicker() {
+      var $input = $('#mv_date_acquired');
+      if (!$input.length || !$.fn.datepicker || $input.data('mvDatePickerInit')) { return; }
+
+      $input.data('mvDatePickerInit', true);
+      $input.datepicker({
+        autoclose: true,
+        format: 'yyyy-mm-dd',
+        todayHighlight: true,
+        orientation: 'bottom auto',
+        container: '#motorVehicleModal'
+      });
+
+      $('#mv_date_acquired_picker .input-group-text')
+        .off('click.mvDashboardDate')
+        .on('click.mvDashboardDate', function() {
+          $input.datepicker('show');
+        });
+
+      $input
+        .off('changeDate.mvDashboardDate input.mvDashboardDate change.mvDashboardDate')
+        .on('changeDate.mvDashboardDate input.mvDashboardDate change.mvDashboardDate', syncYearModelFromDate);
+    }
+
+    function yearFromDateAcquired(value) {
+      var match = String(value || '').trim().match(/^(\d{4})/);
+      return match ? match[1] : '';
+    }
+
+    function syncYearModelFromDate() {
+      $('#mv_year_model').val(yearFromDateAcquired($('#mv_date_acquired').val()));
+    }
+
+    function setDateAcquired(value) {
+      var text = String(value == null ? '' : value).trim();
+      var $input = $('#mv_date_acquired');
+
+      if ($.fn.datepicker && $input.data('datepicker')) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+          $input.datepicker('update', text);
+        } else {
+          $input.datepicker('clearDates');
+          $input.val(text);
+        }
+        syncYearModelFromDate();
+        return;
+      }
+
+      $input.val(text);
+      syncYearModelFromDate();
+    }
+
+    function initTable() {
+      if (!$('#motorVehicleDashboardTable').length || !$.fn.DataTable) { return; }
+      if ($.fn.DataTable.isDataTable('#motorVehicleDashboardTable')) {
+        table = $('#motorVehicleDashboardTable').DataTable();
+        return;
+      }
+
+      table = $('#motorVehicleDashboardTable').DataTable({
+        responsive: true,
+        lengthChange: true,
+        lengthMenu: [10, 25, 50, 100],
+        pageLength: 25,
+        autoWidth: false,
+        processing: true,
+        serverSide: true,
+        ajax: {
+          url: '../auth/auth.php',
+          type: 'POST',
+          data: function(data) {
+            data.motor_vehicle_dashboard = 'table';
+            data.mv_year_acquired = $('#mvYearAcquiredFilter').val() || '';
+            data.mv_department = $('#mvDepartmentFilter').val() || '';
+          }
+        },
+        columns: [
+          { data: 'brand_model', render: function(data) { return displayValue(data); } },
+          { data: 'year_acquired', render: function(data) { return displayValue(data); } },
+          { data: 'chassis_no', render: function(data) { return displayValue(data); } },
+          { data: 'engine_no', render: function(data) { return displayValue(data); } },
+          { data: 'plate_no', render: function(data) { return displayValue(data); } },
+          { data: 'department_name', render: function(data) { return displayValue(data); } },
+          { data: 'end_user', render: function(data) { return displayValue(data); } },
+          {
+            data: null,
+            orderable: false,
+            searchable: false,
+            className: 'text-center',
+            render: function(data, type, row) {
+              var sourceTable = esc(row && row.source_table ? row.source_table : '');
+              var sourceId = Number(row && row.source_id ? row.source_id : 0) || 0;
+              return '<button type="button" class="btn btn-xs btn-outline-primary mv-edit-btn" ' +
+                'data-source-table="' + sourceTable + '" data-source-id="' + sourceId + '" title="View / Edit">' +
+                '<i class="fas fa-edit"></i>' +
+                '</button>';
+            }
+          }
+        ],
+        order: [[5, 'asc'], [6, 'asc']],
+        dom: "<'row gso-mv-dt-toolbar align-items-center mb-2'<'col-sm-12 col-lg-8 gso-mv-dt-actions'B l><'col-sm-12 col-lg-4 gso-mv-dt-search'f>>" +
+             "<'row'<'col-sm-12'tr>>" +
+             "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
+        initComplete: function() {
+          loadFilterOptions();
+        },
+        buttons: [
+          {
+            extend: 'excel',
+            orientation: 'landscape',
+            pageSize: 'LEGAL',
+            title: 'Motor Vehicle Dashboard',
+            exportOptions: {
+              columns: [0, 1, 2, 3, 4, 5, 6],
+              format: {
+                body: function(data) { return $('<div>').html(data).text().replace(/\s+/g, ' ').trim(); }
+              }
+            }
+          },
+          {
+            extend: 'print',
+            orientation: 'landscape',
+            pageSize: 'LEGAL',
+            title: 'Motor Vehicle Dashboard',
+            exportOptions: { columns: [0, 1, 2, 3, 4, 5, 6] }
+          }
+        ]
+      });
+    }
+
+    function field(id, value) {
+      $(id).val(value == null ? '' : String(value));
+    }
+
+    function fillForm(data) {
+      data = data || {};
+      field('#mv_source_table', data.source_table);
+      field('#mv_source_id', data.source_id);
+      field('#mv_brand_model', data.brand_model);
+      field('#mv_description', data.description);
+      field('#mv_property_number', data.property_number);
+      setDateAcquired(data.date_acquired);
+      field('#mv_chassis_no', data.chassis_no);
+      field('#mv_engine_no', data.engine_no);
+      field('#mv_plate_no', data.plate_no);
+      field('#mv_color', data.color);
+      field('#mv_file', data.mv_file);
+      field('#mv_vehicle_usage', data.vehicle_usage);
+      field('#mv_capacity', data.capacity);
+      if (!$('#mv_year_model').val()) { field('#mv_year_model', data.year_model); }
+      field('#mv_cr_number', data.cr_number);
+      field('#mv_or_number', data.or_number);
+      field('#mv_supplier', data.supplier);
+      field('#mv_amount', formatAmount(data.amount, true));
+      field('#mv_po', data.po);
+      field('#mv_obr', data.obr);
+      field('#mv_pr', data.pr);
+      field('#mv_jev', data.jev);
+      $('#mv_coverage').val(data.coverage || 'None');
+    }
+
+    function openVehicleModal(sourceTable, sourceId, button) {
+      sourceTable = String(sourceTable || '').trim();
+      sourceId = Number(sourceId || 0) || 0;
+      if (!sourceTable || sourceId <= 0) {
+        notify('warning', 'Missing vehicle reference', 'Please reload the table and try again.');
+        return;
+      }
+
+      var $btn = button ? $(button) : $();
+      var originalHtml = $btn.length ? $btn.html() : '';
+      if ($btn.length) {
+        $btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i>');
+      }
+
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'GET',
+        dataType: 'json',
+        cache: false,
+        data: {
+          motor_vehicle_dashboard: 'detail',
+          source_table: sourceTable,
+          source_id: sourceId,
+          _ts: Date.now()
+        },
+        success: function(resp) {
+          if (!resp || resp.status !== 200 || !resp.data) {
+            notify('error', 'Unable to load vehicle', (resp && resp.message) ? resp.message : 'Please try again.');
+            return;
+          }
+          $('#motorVehicleForm').get(0).reset();
+          fillForm(resp.data);
+          $('#motorVehicleModal').modal('show');
+        },
+        error: function() {
+          notify('error', 'Server error', 'Unable to load motor vehicle details.');
+        },
+        complete: function() {
+          if ($btn.length) {
+            $btn.prop('disabled', false).html(originalHtml);
+          }
+        }
+      });
+    }
+
+    function saveVehicle() {
+      var form = $('#motorVehicleForm').get(0);
+      if (!form) { return; }
+      if (form.checkValidity && !form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+
+      var $btn = $('#motorVehicleSaveBtn');
+      var originalHtml = $btn.html();
+      syncYearModelFromDate();
+      var data = $('#motorVehicleForm').serializeArray();
+      data.push({ name: 'motor_vehicle_dashboard', value: 'save' });
+
+      $btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i>&nbsp;<span class="btn-text">Updating...</span>');
+
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        dataType: 'json',
+        data: data,
+        success: function(resp) {
+          if (!resp || resp.status !== 200) {
+            notify('error', 'Unable to update', (resp && resp.message) ? resp.message : 'Please review the form and try again.');
+            return;
+          }
+
+          $('#motorVehicleModal').modal('hide');
+          loadMetrics();
+          if (table) { table.ajax.reload(null, false); }
+
+          if (window.Swal && Swal.fire) {
+            Swal.fire({ position: 'center', icon: 'success', title: resp.message || 'Updated successfully.', showConfirmButton: false, timer: 1500 });
+          } else {
+            alert(resp.message || 'Updated successfully.');
+          }
+        },
+        error: function(xhr) {
+          var message = 'Unable to update motor vehicle details.';
+          if (xhr && xhr.responseText) {
+            try {
+              var parsed = JSON.parse(xhr.responseText);
+              if (parsed && parsed.message) { message = parsed.message; }
+            } catch (e) {}
+          }
+          notify('error', 'Server error', message);
+        },
+        complete: function() {
+          $btn.prop('disabled', false).html(originalHtml);
+        }
+      });
+    }
+
+    function bindEvents() {
+      $(document)
+        .off('click.mvDashboard', '.mv-edit-btn')
+        .on('click.mvDashboard', '.mv-edit-btn', function() {
+          openVehicleModal($(this).attr('data-source-table'), $(this).attr('data-source-id'), this);
+        });
+
+      $('#motorVehicleForm')
+        .off('submit.mvDashboard')
+        .on('submit.mvDashboard', function(e) {
+          e.preventDefault();
+          saveVehicle();
+        });
+
+      $(document)
+        .off('input.mvDashboardAmount', '#mv_amount')
+        .on('input.mvDashboardAmount', '#mv_amount', function() {
+          var cursorAtEnd = this.selectionStart === this.value.length;
+          this.value = formatAmount(this.value);
+          if (cursorAtEnd) {
+            this.setSelectionRange(this.value.length, this.value.length);
+          }
+        })
+        .off('blur.mvDashboardAmount', '#mv_amount')
+        .on('blur.mvDashboardAmount', '#mv_amount', function() {
+          this.value = formatAmount(this.value, true);
+        });
+    }
+
+    function init() {
+      if (!$('#motorVehicleDashboard').length) { return; }
+      initDatePicker();
+      bindEvents();
+      loadMetrics();
+      initTable();
+    }
+
+    return { init: init };
+  })();
+
+  $(function(){
+    try {
+      if (window.GSO && window.GSO.MotorVehicleDashboard) { window.GSO.MotorVehicleDashboard.init(); }
+    } catch (e) {}
+  });
+
 // Global init
 $(function(){
   try {

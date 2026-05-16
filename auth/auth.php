@@ -108,6 +108,741 @@ if(!function_exists('gso_resolve_history_department')){
     }
 }
 
+if (!function_exists('gso_motor_vehicle_account_codes')) {
+    function gso_motor_vehicle_account_codes() {
+        return ['1-07-06-010', '1-07-05-080'];
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_inventory_sql')) {
+    function gso_motor_vehicle_inventory_sql(mysqli $conn) {
+        $codes = array_map(function ($code) use ($conn) {
+            return "'" . mysqli_real_escape_string($conn, $code) . "'";
+        }, gso_motor_vehicle_account_codes());
+        $accountCodes = implode(',', $codes);
+
+        return "
+            SELECT *
+            FROM (
+                SELECT
+                    'par_gen_fund' AS source_table,
+                    p.pargf_id AS source_id,
+                    'General Fund' AS fund_name,
+                    p.account_code,
+                    p.item AS asset_class,
+                    p.model AS brand_model,
+                    p.description,
+                    p.serial_number AS primary_serial,
+                    p.serial_number_2 AS secondary_serial,
+                    p.par_number AS property_number,
+                    p.unit_value,
+                    p.date_aquired,
+                    p.supplier,
+                    p.purchase_order,
+                    p.purchase_request,
+                    p.obr_number,
+                    p.jev_number,
+                    COALESCE(ed.department_name, hd.department_name, hdp.department_name, '') AS department_name,
+                    COALESCE(e.emp_name, '') AS end_user
+                FROM par_gen_fund AS p
+                LEFT JOIN (
+                    SELECT par_number, MAX(emp_id) AS emp_id, MAX(dept_id) AS dept_id
+                    FROM general_fund_property_history
+                    WHERE status = 1
+                    GROUP BY par_number
+                ) AS h ON h.par_number = p.par_number
+                LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+                LEFT JOIN department AS ed ON ed.department_code = e.department_code
+                LEFT JOIN department AS hd ON hd.department_code = h.dept_id
+                LEFT JOIN department AS hdp ON hdp.dept_id = h.dept_id
+                WHERE p.account_code IN ({$accountCodes})
+
+                UNION ALL
+
+                SELECT
+                    'property_sef' AS source_table,
+                    s.sef_id AS source_id,
+                    'SEF' AS fund_name,
+                    s.account_code,
+                    s.item AS asset_class,
+                    s.model AS brand_model,
+                    s.description,
+                    s.serial_number AS primary_serial,
+                    s.serial_number_2 AS secondary_serial,
+                    s.property_number,
+                    s.unit_value,
+                    s.date_aquired,
+                    s.supplier,
+                    s.purchase_order,
+                    s.purchase_request,
+                    s.obr_number,
+                    s.jev_number,
+                    COALESCE(ed.department_name, sd.department_name, sdp.department_name, '') AS department_name,
+                    COALESCE(e.emp_name, '') AS end_user
+                FROM property_sef AS s
+                LEFT JOIN (
+                    SELECT property_number, MAX(emp_id) AS emp_id, MAX(sch_id) AS sch_id
+                    FROM sef_property_history
+                    WHERE status = 1
+                    GROUP BY property_number
+                ) AS h ON h.property_number = s.property_number
+                LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+                LEFT JOIN department AS ed ON ed.department_code = e.department_code
+                LEFT JOIN department AS sd ON sd.department_code = h.sch_id
+                LEFT JOIN department AS sdp ON sdp.dept_id = h.sch_id
+                WHERE s.account_code IN ({$accountCodes})
+
+                UNION ALL
+
+                SELECT
+                    'trust_fund' AS source_table,
+                    t.id AS source_id,
+                    'Trust Fund' AS fund_name,
+                    t.account_code,
+                    t.item AS asset_class,
+                    t.model AS brand_model,
+                    t.description,
+                    t.serial_number AS primary_serial,
+                    t.serial_number_2 AS secondary_serial,
+                    COALESCE(NULLIF(t.property_number, ''), h.par_number, '') AS property_number,
+                    t.unit_value,
+                    t.date_aquired,
+                    t.supplier,
+                    t.purchase_order,
+                    t.purchase_request,
+                    t.obr_number,
+                    t.jev_number,
+                    COALESCE(ed.department_name, hd.department_name, hdp.department_name, '') AS department_name,
+                    COALESCE(e.emp_name, '') AS end_user
+                FROM trust_fund AS t
+                LEFT JOIN (
+                    SELECT id, MAX(emp_id) AS emp_id, MAX(dept_id) AS dept_id, MAX(par_number) AS par_number
+                    FROM trust_fund_history
+                    WHERE status = 1
+                    GROUP BY id
+                ) AS h ON h.id = t.id
+                LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+                LEFT JOIN department AS ed ON ed.department_code = e.department_code
+                LEFT JOIN department AS hd ON hd.department_code = h.dept_id
+                LEFT JOIN department AS hdp ON hdp.dept_id = h.dept_id
+                WHERE t.account_code IN ({$accountCodes})
+
+                UNION ALL
+
+                SELECT
+                    'donation' AS source_table,
+                    d.id AS source_id,
+                    'Donation' AS fund_name,
+                    d.account_code,
+                    d.item AS asset_class,
+                    d.model AS brand_model,
+                    d.description,
+                    d.serial_number AS primary_serial,
+                    d.serial_number_2 AS secondary_serial,
+                    COALESCE(NULLIF(d.property_number, ''), h.par_number, '') AS property_number,
+                    d.unit_value,
+                    d.date_aquired,
+                    d.supplier,
+                    d.purchase_order,
+                    d.purchase_request,
+                    d.obr_number,
+                    d.jev_number,
+                    COALESCE(ed.department_name, hd.department_name, hdp.department_name, '') AS department_name,
+                    COALESCE(e.emp_name, '') AS end_user
+                FROM donation AS d
+                LEFT JOIN (
+                    SELECT id, MAX(emp_id) AS emp_id, MAX(dept_id) AS dept_id, MAX(par_number) AS par_number
+                    FROM donation_history
+                    WHERE status = 1
+                    GROUP BY id
+                ) AS h ON h.id = d.id
+                LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+                LEFT JOIN department AS ed ON ed.department_code = e.department_code
+                LEFT JOIN department AS hd ON hd.department_code = h.dept_id
+                LEFT JOIN department AS hdp ON hdp.dept_id = h.dept_id
+                WHERE d.account_code IN ({$accountCodes})
+            ) AS vehicle_inventory
+        ";
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_source_map')) {
+    function gso_motor_vehicle_source_map() {
+        return [
+            'par_gen_fund' => ['id' => 'pargf_id'],
+            'property_sef' => ['id' => 'sef_id'],
+            'trust_fund' => ['id' => 'id'],
+            'donation' => ['id' => 'id'],
+        ];
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_date_column')) {
+    function gso_motor_vehicle_date_column(mysqli $conn) {
+        static $dateColumn = null;
+        if ($dateColumn !== null) { return $dateColumn; }
+
+        foreach (['mv_date_acquired', 'date_acquired'] as $column) {
+            $res = mysqli_query($conn, "SHOW COLUMNS FROM motor_vehicle LIKE '{$column}'");
+            if ($res && mysqli_num_rows($res) > 0) {
+                mysqli_free_result($res);
+                $dateColumn = $column;
+                return $dateColumn;
+            }
+            if ($res) { mysqli_free_result($res); }
+        }
+
+        $dateColumn = 'mv_date_acquired';
+        return $dateColumn;
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_fetch_record')) {
+    function gso_motor_vehicle_fetch_record(mysqli $conn, $sourceTable, $sourceId) {
+        $sourceTable = trim((string)$sourceTable);
+        $sourceId = (int)$sourceId;
+        if ($sourceTable === '' || $sourceId <= 0 || !isset(gso_motor_vehicle_source_map()[$sourceTable])) {
+            return null;
+        }
+
+        $inventorySql = gso_motor_vehicle_inventory_sql($conn);
+        $vehicleDateColumn = gso_motor_vehicle_date_column($conn);
+        $sql = "
+            SELECT
+                v.*,
+                mv.motor_vehicle_id,
+                mv.{$vehicleDateColumn} AS mv_date_acquired,
+                mv.chassis_no,
+                mv.engine_no,
+                mv.plate_no,
+                mv.color,
+                mv.mv_file,
+                mv.vehicle_usage,
+                mv.capacity,
+                mv.year_model,
+                mv.cr_number,
+                mv.or_number,
+                mv.coverage
+            FROM ({$inventorySql}) AS v
+            LEFT JOIN motor_vehicle AS mv
+                ON CONVERT(mv.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                 = CONVERT(v.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+            WHERE v.source_table = ? AND v.source_id = ?
+            LIMIT 1
+        ";
+
+        $stmt = mysqli_prepare($conn, $sql);
+        if (!$stmt) { return null; }
+        mysqli_stmt_bind_param($stmt, 'si', $sourceTable, $sourceId);
+        mysqli_stmt_execute($stmt);
+        $res = mysqli_stmt_get_result($stmt);
+        $row = ($res && ($data = mysqli_fetch_assoc($res))) ? $data : null;
+        mysqli_stmt_close($stmt);
+        return $row;
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_response_record')) {
+    function gso_motor_vehicle_response_record($row) {
+        $pick = function ($preferred, $fallback = '') use ($row) {
+            $value = trim((string)($row[$preferred] ?? ''));
+            if ($value !== '') { return $value; }
+            return trim((string)($row[$fallback] ?? ''));
+        };
+
+        return [
+            'source_table' => (string)($row['source_table'] ?? ''),
+            'source_id' => (int)($row['source_id'] ?? 0),
+            'fund_name' => (string)($row['fund_name'] ?? ''),
+            'brand_model' => (string)($row['brand_model'] ?? ''),
+            'description' => (string)($row['description'] ?? ''),
+            'property_number' => (string)($row['property_number'] ?? ''),
+            'date_acquired' => $pick('mv_date_acquired', 'date_aquired'),
+            'chassis_no' => $pick('chassis_no', 'primary_serial'),
+            'engine_no' => $pick('engine_no', 'secondary_serial'),
+            'plate_no' => (string)($row['plate_no'] ?? ''),
+            'color' => (string)($row['color'] ?? ''),
+            'mv_file' => (string)($row['mv_file'] ?? ''),
+            'vehicle_usage' => (string)($row['vehicle_usage'] ?? ''),
+            'capacity' => (string)($row['capacity'] ?? ''),
+            'year_model' => (string)($row['year_model'] ?? ''),
+            'cr_number' => (string)($row['cr_number'] ?? ''),
+            'or_number' => (string)($row['or_number'] ?? ''),
+            'coverage' => trim((string)($row['coverage'] ?? '')) !== '' ? (string)$row['coverage'] : 'None',
+            'supplier' => (string)($row['supplier'] ?? ''),
+            'amount' => (string)($row['unit_value'] ?? ''),
+            'po' => (string)($row['purchase_order'] ?? ''),
+            'pr' => (string)($row['purchase_request'] ?? ''),
+            'obr' => (string)($row['obr_number'] ?? ''),
+            'jev' => (string)($row['jev_number'] ?? ''),
+            'department_name' => (string)($row['department_name'] ?? ''),
+            'end_user' => (string)($row['end_user'] ?? ''),
+        ];
+    }
+}
+
+if (isset($_REQUEST['motor_vehicle_dashboard'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!isset($_SESSION['alogin']) || trim((string)$_SESSION['alogin']) === '') {
+        http_response_code(401);
+        echo json_encode(['status' => 401, 'message' => 'Unauthorized']);
+        exit();
+    }
+
+    $mode = strtolower(trim((string)$_REQUEST['motor_vehicle_dashboard']));
+    $inventorySql = gso_motor_vehicle_inventory_sql($conn);
+
+    if ($mode === 'metrics') {
+        $sql = "
+            SELECT
+                COUNT(*) AS total_vehicles,
+                SUM(CASE WHEN mv.motor_vehicle_id IS NULL THEN 0 ELSE 1 END) AS registered_vehicles,
+                COUNT(DISTINCT v.fund_name) AS fund_sources
+            FROM ({$inventorySql}) AS v
+            LEFT JOIN motor_vehicle AS mv
+                ON CONVERT(mv.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                 = CONVERT(v.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+        ";
+        $res = mysqli_query($conn, $sql);
+        $row = $res ? mysqli_fetch_assoc($res) : [];
+        $total = (int)($row['total_vehicles'] ?? 0);
+        $registered = (int)($row['registered_vehicles'] ?? 0);
+
+        echo json_encode([
+            'total_vehicles' => $total,
+            'registered_vehicles' => $registered,
+            'for_registration' => max(0, $total - $registered),
+            'fund_sources' => (int)($row['fund_sources'] ?? 0),
+            'account_codes' => gso_motor_vehicle_account_codes(),
+        ]);
+        exit();
+    }
+
+    if ($mode === 'filters') {
+        $years = [];
+        $departments = [];
+
+        $yearSql = "
+            SELECT DISTINCT TRIM(v.date_aquired) AS year_acquired
+            FROM ({$inventorySql}) AS v
+            WHERE TRIM(COALESCE(v.date_aquired, '')) <> ''
+            ORDER BY CAST(TRIM(v.date_aquired) AS UNSIGNED) DESC, TRIM(v.date_aquired) DESC
+        ";
+        $yearRes = mysqli_query($conn, $yearSql);
+        if ($yearRes) {
+            while ($row = mysqli_fetch_assoc($yearRes)) {
+                $year = trim((string)($row['year_acquired'] ?? ''));
+                if ($year !== '') { $years[] = $year; }
+            }
+        }
+
+        $departmentSql = "
+            SELECT DISTINCT TRIM(v.department_name) AS department_name
+            FROM ({$inventorySql}) AS v
+            WHERE TRIM(COALESCE(v.department_name, '')) <> ''
+            ORDER BY TRIM(v.department_name) ASC
+        ";
+        $departmentRes = mysqli_query($conn, $departmentSql);
+        if ($departmentRes) {
+            while ($row = mysqli_fetch_assoc($departmentRes)) {
+                $department = trim((string)($row['department_name'] ?? ''));
+                if ($department !== '') { $departments[] = $department; }
+            }
+        }
+
+        echo json_encode([
+            'status' => 200,
+            'message' => 'OK',
+            'data' => [
+                'years' => $years,
+                'departments' => $departments,
+            ],
+        ]);
+        exit();
+    }
+
+    if ($mode === 'table') {
+        $draw = isset($_POST['draw']) ? (int)$_POST['draw'] : 0;
+        $searchValue = trim((string)($_POST['search']['value'] ?? ''));
+        $yearFilter = trim((string)($_POST['mv_year_acquired'] ?? ''));
+        $departmentFilter = trim((string)($_POST['mv_department'] ?? ''));
+        $whereParts = [];
+
+        if ($searchValue !== '') {
+            $safe = mysqli_real_escape_string($conn, $searchValue);
+            $whereParts[] = "(
+                v.brand_model LIKE '%{$safe}%'
+                OR v.date_aquired LIKE '%{$safe}%'
+                OR v.property_number LIKE '%{$safe}%'
+                OR v.primary_serial LIKE '%{$safe}%'
+                OR v.secondary_serial LIKE '%{$safe}%'
+                OR mv.chassis_no LIKE '%{$safe}%'
+                OR mv.engine_no LIKE '%{$safe}%'
+                OR mv.plate_no LIKE '%{$safe}%'
+                OR v.department_name LIKE '%{$safe}%'
+                OR v.end_user LIKE '%{$safe}%'
+            )";
+        }
+
+        if ($yearFilter !== '') {
+            $safeYear = mysqli_real_escape_string($conn, $yearFilter);
+            $whereParts[] = "TRIM(v.date_aquired) = '{$safeYear}'";
+        }
+
+        if ($departmentFilter !== '') {
+            $safeDepartment = mysqli_real_escape_string($conn, $departmentFilter);
+            $whereParts[] = "TRIM(v.department_name) = '{$safeDepartment}'";
+        }
+
+        $whereSql = !empty($whereParts) ? ' WHERE ' . implode(' AND ', $whereParts) : '';
+
+        $totalRes = mysqli_query($conn, "SELECT COUNT(*) AS cnt FROM ({$inventorySql}) AS v");
+        $totalRow = $totalRes ? mysqli_fetch_assoc($totalRes) : [];
+        $total = (int)($totalRow['cnt'] ?? 0);
+
+        $tableFromSql = "
+            FROM ({$inventorySql}) AS v
+            LEFT JOIN motor_vehicle AS mv
+                ON CONVERT(mv.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                 = CONVERT(v.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+        ";
+
+        $filteredRes = mysqli_query($conn, "SELECT COUNT(*) AS cnt {$tableFromSql} {$whereSql}");
+        $filteredRow = $filteredRes ? mysqli_fetch_assoc($filteredRes) : [];
+        $filtered = (int)($filteredRow['cnt'] ?? 0);
+
+        $columns = [
+            0 => 'v.brand_model',
+            1 => 'v.date_aquired',
+            2 => "COALESCE(NULLIF(mv.chassis_no, ''), v.primary_serial)",
+            3 => "COALESCE(NULLIF(mv.engine_no, ''), v.secondary_serial)",
+            4 => 'mv.plate_no',
+            5 => 'v.department_name',
+            6 => 'v.end_user',
+        ];
+        $orderSql = ' ORDER BY v.department_name ASC, v.end_user ASC, v.brand_model ASC';
+        if (isset($_POST['order'][0]['column'])) {
+            $idx = (int)$_POST['order'][0]['column'];
+            $dir = (isset($_POST['order'][0]['dir']) && $_POST['order'][0]['dir'] === 'desc') ? 'DESC' : 'ASC';
+            if (isset($columns[$idx])) {
+                $orderSql = ' ORDER BY ' . $columns[$idx] . ' ' . $dir;
+            }
+        }
+
+        $start = isset($_POST['start']) ? max(0, (int)$_POST['start']) : 0;
+        $length = isset($_POST['length']) ? (int)$_POST['length'] : 10;
+        $limitSql = $length !== -1 ? ' LIMIT ' . $start . ',' . max(0, $length) : '';
+
+        $dataSql = "
+            SELECT
+                v.source_table,
+                v.source_id,
+                v.brand_model,
+                v.date_aquired AS year_acquired,
+                v.property_number,
+                COALESCE(NULLIF(mv.chassis_no, ''), v.primary_serial) AS chassis_no,
+                COALESCE(NULLIF(mv.engine_no, ''), v.secondary_serial) AS engine_no,
+                COALESCE(mv.plate_no, '') AS plate_no,
+                v.department_name,
+                v.end_user
+            {$tableFromSql}
+            {$whereSql}
+            {$orderSql}
+            {$limitSql}
+        ";
+        $res = mysqli_query($conn, $dataSql);
+        $data = [];
+        if ($res) {
+            while ($row = mysqli_fetch_assoc($res)) {
+                $data[] = [
+                    'source_table' => (string)($row['source_table'] ?? ''),
+                    'source_id' => (int)($row['source_id'] ?? 0),
+                    'brand_model' => (string)($row['brand_model'] ?? ''),
+                    'year_acquired' => (string)($row['year_acquired'] ?? ''),
+                    'property_number' => (string)($row['property_number'] ?? ''),
+                    'chassis_no' => (string)($row['chassis_no'] ?? ''),
+                    'engine_no' => (string)($row['engine_no'] ?? ''),
+                    'plate_no' => (string)($row['plate_no'] ?? ''),
+                    'department_name' => (string)($row['department_name'] ?? ''),
+                    'end_user' => (string)($row['end_user'] ?? ''),
+                ];
+            }
+        }
+
+        echo json_encode([
+            'draw' => $draw,
+            'recordsTotal' => $total,
+            'recordsFiltered' => $filtered,
+            'data' => $data,
+        ]);
+        exit();
+    }
+
+    if ($mode === 'detail') {
+        $sourceTable = trim((string)($_REQUEST['source_table'] ?? ''));
+        $sourceId = (int)($_REQUEST['source_id'] ?? 0);
+        $row = gso_motor_vehicle_fetch_record($conn, $sourceTable, $sourceId);
+
+        if (!$row) {
+            echo json_encode(['status' => 404, 'message' => 'Motor vehicle record not found.']);
+            exit();
+        }
+
+        echo json_encode([
+            'status' => 200,
+            'message' => 'OK',
+            'data' => gso_motor_vehicle_response_record($row),
+        ]);
+        exit();
+    }
+
+    if ($mode === 'save') {
+        $sourceTable = trim((string)($_POST['source_table'] ?? ''));
+        $sourceId = (int)($_POST['source_id'] ?? 0);
+        $sourceMap = gso_motor_vehicle_source_map();
+
+        if (!isset($sourceMap[$sourceTable]) || $sourceId <= 0) {
+            echo json_encode(['status' => 422, 'message' => 'Invalid source record.']);
+            exit();
+        }
+
+        $row = gso_motor_vehicle_fetch_record($conn, $sourceTable, $sourceId);
+        if (!$row) {
+            echo json_encode(['status' => 404, 'message' => 'Motor vehicle record not found.']);
+            exit();
+        }
+
+        $propertyNumber = trim((string)($row['property_number'] ?? ''));
+        if ($propertyNumber === '') {
+            echo json_encode(['status' => 422, 'message' => 'Property number is required before saving vehicle details.']);
+            exit();
+        }
+
+        $text = function ($key) {
+            return strtoupper(trim((string)($_POST[$key] ?? '')));
+        };
+
+        $brandModel = $text('brand_model');
+        $description = $text('description');
+        $dateAcquired = $text('date_acquired');
+        $chassisNo = $text('chassis_no');
+        $engineNo = $text('engine_no');
+        $plateNo = $text('plate_no');
+        $color = $text('color');
+        $mvFile = $text('mv_file');
+        $vehicleUsage = $text('vehicle_usage');
+        $capacity = $text('capacity');
+        $yearModel = (int)($_POST['year_model'] ?? 0);
+        if ($yearModel <= 0 && preg_match('/^(\d{4})/', $dateAcquired, $yearMatch)) {
+            $yearModel = (int)$yearMatch[1];
+        }
+        $crNumber = $text('cr_number');
+        $orNumber = $text('or_number');
+        $supplier = $text('supplier');
+        $po = $text('po');
+        $pr = $text('pr');
+        $obr = $text('obr');
+        $jev = $text('jev');
+
+        $amountRaw = preg_replace('/[^0-9.]/', '', (string)($_POST['amount'] ?? ''));
+        $amount = $amountRaw === '' ? 0.0 : (float)$amountRaw;
+
+        $coverageInput = strtoupper(preg_replace('/\s+/', '', trim((string)($_POST['coverage'] ?? 'None'))));
+        $coverage = 'None';
+        if ($coverageInput === 'TPL') {
+            $coverage = 'TPL';
+        } elseif (in_array($coverageInput, ['COMPREHENSIVE', 'COMPHRENSIVE'], true)) {
+            $coverage = 'Comprehensive';
+        }
+
+        $missing = [];
+        if ($brandModel === '') { $missing[] = 'Brand/Model'; }
+        if ($description === '') { $missing[] = 'Description'; }
+        if ($dateAcquired === '') { $missing[] = 'Date Acquired'; }
+        if ($chassisNo === '') { $missing[] = 'Chassis Number'; }
+        if ($engineNo === '') { $missing[] = 'Engine Number'; }
+        if ($plateNo === '') { $missing[] = 'Plate Number'; }
+        if ($color === '') { $missing[] = 'Color'; }
+        if ($mvFile === '') { $missing[] = 'MV File'; }
+        if ($vehicleUsage === '') { $missing[] = 'Vehicle Usage'; }
+        if ($capacity === '') { $missing[] = 'Capacity'; }
+        if ($yearModel <= 0) { $missing[] = 'Valid Date Acquired'; }
+
+        $maxYear = (int)date('Y') + 2;
+        if ($yearModel > 0 && ($yearModel < 1900 || $yearModel > $maxYear)) {
+            $missing[] = 'Valid Year Model';
+        }
+
+        if (!empty($missing)) {
+            echo json_encode(['status' => 422, 'message' => 'Please complete: ' . implode(', ', $missing) . '.']);
+            exit();
+        }
+
+        $table = $sourceTable;
+        $idColumn = $sourceMap[$sourceTable]['id'];
+        $vehicleDateColumn = gso_motor_vehicle_date_column($conn);
+
+        mysqli_begin_transaction($conn);
+        try {
+            $assetSql = "
+                UPDATE {$table}
+                SET model = ?,
+                    description = ?,
+                    serial_number = ?,
+                    serial_number_2 = ?,
+                    unit_value = ?,
+                    date_aquired = ?,
+                    supplier = ?,
+                    purchase_order = ?,
+                    purchase_request = ?,
+                    obr_number = ?,
+                    jev_number = ?
+                WHERE {$idColumn} = ?
+                LIMIT 1
+            ";
+            $assetStmt = mysqli_prepare($conn, $assetSql);
+            if (!$assetStmt) { throw new Exception('Unable to prepare asset update.'); }
+            mysqli_stmt_bind_param(
+                $assetStmt,
+                'ssssdssssssi',
+                $brandModel,
+                $description,
+                $chassisNo,
+                $engineNo,
+                $amount,
+                $dateAcquired,
+                $supplier,
+                $po,
+                $pr,
+                $obr,
+                $jev,
+                $sourceId
+            );
+            if (!mysqli_stmt_execute($assetStmt)) {
+                $assetError = mysqli_stmt_error($assetStmt);
+                mysqli_stmt_close($assetStmt);
+                throw new Exception($assetError !== '' ? $assetError : 'Unable to update asset details.');
+            }
+            mysqli_stmt_close($assetStmt);
+
+            $vehicleId = 0;
+            $findStmt = mysqli_prepare($conn, 'SELECT motor_vehicle_id FROM motor_vehicle WHERE property_number = ? LIMIT 1');
+            if (!$findStmt) { throw new Exception('Unable to prepare vehicle lookup.'); }
+            mysqli_stmt_bind_param($findStmt, 's', $propertyNumber);
+            mysqli_stmt_execute($findStmt);
+            $findRes = mysqli_stmt_get_result($findStmt);
+            if ($findRes && ($found = mysqli_fetch_assoc($findRes))) {
+                $vehicleId = (int)($found['motor_vehicle_id'] ?? 0);
+            }
+            mysqli_stmt_close($findStmt);
+
+            if ($vehicleId > 0) {
+                $vehicleSql = "
+                    UPDATE motor_vehicle
+                    SET {$vehicleDateColumn} = ?,
+                        chassis_no = ?,
+                        engine_no = ?,
+                        plate_no = ?,
+                        color = ?,
+                        mv_file = ?,
+                        vehicle_usage = ?,
+                        capacity = ?,
+                        year_model = ?,
+                        cr_number = ?,
+                        or_number = ?,
+                        coverage = ?
+                    WHERE motor_vehicle_id = ?
+                    LIMIT 1
+                ";
+                $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
+                if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle update.'); }
+                mysqli_stmt_bind_param(
+                    $vehicleStmt,
+                    'ssssssssisssi',
+                    $dateAcquired,
+                    $chassisNo,
+                    $engineNo,
+                    $plateNo,
+                    $color,
+                    $mvFile,
+                    $vehicleUsage,
+                    $capacity,
+                    $yearModel,
+                    $crNumber,
+                    $orNumber,
+                    $coverage,
+                    $vehicleId
+                );
+            } else {
+                $vehicleSql = "
+                    INSERT INTO motor_vehicle (
+                        property_number,
+                        {$vehicleDateColumn},
+                        chassis_no,
+                        engine_no,
+                        plate_no,
+                        color,
+                        mv_file,
+                        vehicle_usage,
+                        capacity,
+                        year_model,
+                        cr_number,
+                        or_number,
+                        coverage
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ";
+                $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
+                if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle registration.'); }
+                mysqli_stmt_bind_param(
+                    $vehicleStmt,
+                    'sssssssssisss',
+                    $propertyNumber,
+                    $dateAcquired,
+                    $chassisNo,
+                    $engineNo,
+                    $plateNo,
+                    $color,
+                    $mvFile,
+                    $vehicleUsage,
+                    $capacity,
+                    $yearModel,
+                    $crNumber,
+                    $orNumber,
+                    $coverage
+                );
+            }
+
+            if (!mysqli_stmt_execute($vehicleStmt)) {
+                $errNo = mysqli_stmt_errno($vehicleStmt);
+                $err = mysqli_stmt_error($vehicleStmt);
+                mysqli_stmt_close($vehicleStmt);
+                if ($errNo === 1062) {
+                    throw new Exception('Chassis number, engine number, or plate number already exists on another vehicle.', 1062);
+                }
+                throw new Exception($err !== '' ? $err : 'Unable to save vehicle details.');
+            }
+            mysqli_stmt_close($vehicleStmt);
+
+            $adminId = (string)($_SESSION['alogin'] ?? '');
+            $ipAddress = function_exists('getUserIpAddr') ? getUserIpAddr() : '';
+            gso_log_activity($conn, $adminId, $ipAddress, 'Updated motor vehicle details for ' . $propertyNumber);
+
+            mysqli_commit($conn);
+            echo json_encode(['status' => 200, 'message' => 'Motor vehicle updated successfully.']);
+            exit();
+        } catch (Exception $e) {
+            mysqli_rollback($conn);
+            $status = ((int)$e->getCode() === 1062) ? 422 : 500;
+            echo json_encode(['status' => $status, 'message' => $e->getMessage()]);
+            exit();
+        }
+    }
+
+    echo json_encode(['status' => 422, 'message' => 'Invalid dashboard request']);
+    exit();
+}
+
 // ==========================================================
 // Exports: General Fund Inventory (PAR / ICS)
 // Output: Excel-readable .xls (HTML table)

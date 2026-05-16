@@ -6,6 +6,8 @@ SET NAMES utf8mb4;
 
 CREATE TABLE IF NOT EXISTS motor_vehicle (
     motor_vehicle_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    property_number VARCHAR(80) NOT NULL,
+    date_acquired VARCHAR(40) NOT NULL,
     chassis_no VARCHAR(120) NOT NULL,
     engine_no VARCHAR(120) NOT NULL,
     plate_no VARCHAR(40) NOT NULL,
@@ -14,10 +16,13 @@ CREATE TABLE IF NOT EXISTS motor_vehicle (
     vehicle_usage VARCHAR(120) NOT NULL,
     capacity VARCHAR(80) NOT NULL,
     year_model SMALLINT UNSIGNED NOT NULL,
+    cr_number VARCHAR(120) NOT NULL,
+    or_number VARCHAR(120) NOT NULL,
     coverage ENUM('None','TPL','Comprehensive') NOT NULL DEFAULT 'None',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (motor_vehicle_id),
+    KEY idx_motor_vehicle_property_number (property_number),
     UNIQUE KEY uq_motor_vehicle_chassis_no (chassis_no),
     UNIQUE KEY uq_motor_vehicle_engine_no (engine_no),
     UNIQUE KEY uq_motor_vehicle_plate_no (plate_no),

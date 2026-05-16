@@ -40,6 +40,15 @@
                     </li>
                 <?php endif; ?>
 
+                <?php if (hasRole(['SYSTEM-ADMIN','GF/SEF-ADMIN','DISPOSAL-ADMIN'])): ?>
+                    <li class="nav-item">
+                        <a href="../admin/motor-vehicle-dashboard.php" class="nav-link <?= isActivePage(['motor-vehicle-dashboard.php']) ?>">
+                            <i class="nav-icon fa-solid fa-truck-front text-white"></i>
+                            <p>Motor Vehicle</p>
+                        </a>
+                    </li>
+                <?php endif; ?>
+
                   <?php if (hasRole(['SYSTEM-ADMIN','GF/SEF-ADMIN','DISPOSAL-ADMIN'])): ?>
                     <li class="nav-item">
                         <a href="#" class="nav-link <?= isActivePage(['add-item.php', 'add-infrastructure.php', 'add-land.php', 'new-purchase-items.php']) ?>">
