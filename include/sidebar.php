@@ -40,9 +40,9 @@
                     </li>
                 <?php endif; ?>
 
-                <?php if (hasRole(['SYSTEM-ADMIN','GF/SEF-ADMIN','DISPOSAL-ADMIN'])): ?>
+                <?php if (hasRole(['SYSTEM-ADMIN','MV-ADMIN'])): ?>
                     <li class="nav-item">
-                        <a href="../admin/motor-vehicle-dashboard.php" class="nav-link <?= isActivePage(['motor-vehicle-dashboard.php']) ?>">
+                        <a href="../admin/motor-vehicle-dashboard.php" class="nav-link <?= isActivePage(['motor-vehicle-dashboard.php', 'motor-vehicle-statistics.php']) ?>">
                             <i class="nav-icon fa-solid fa-truck-front text-white"></i>
                             <p>Motor Vehicle</p>
                         </a>

@@ -24,7 +24,10 @@ function set_admin_online($conn, $adminId){
 }
 
 if(isset($_SESSION['alogin'])){
-  header('Location:admin/dashboard.php');
+  $sessionRole = strtoupper(trim((string)($_SESSION['role'] ?? '')));
+  $landingPage = $sessionRole === 'MV-ADMIN' ? 'admin/motor-vehicle-dashboard.php' : 'admin/dashboard.php';
+  if ($sessionRole === 'CLEARANCE-ADMIN') { $landingPage = 'services/clearance.php'; }
+  header('Location:' . $landingPage);
   exit();
 }else{
   if(isset($_POST['signinbtn'])){
@@ -82,6 +85,19 @@ if(isset($_SESSION['alogin'])){
           header('Location:admin/dashboard.php');
           mysqli_query($conn, "INSERT INTO activity_log(admin_id,ip_address,activity) VALUES('$uid','$uip','$actvty')");
           set_admin_online($conn, $uid);
+        }
+        elseif($row['role'] == 'MV-ADMIN'){
+          $_SESSION['alogin'] = $row['admin_id'];
+          $_SESSION['role'] = $row['role'];
+          $uid = $_SESSION['alogin'];
+          $uip = getUserIpAddr();
+          $actvty = "Logged in the system.";
+          header('Location:admin/motor-vehicle-dashboard.php');
+          mysqli_query($conn, "INSERT INTO activity_log(admin_id,ip_address,activity) VALUES('$uid','$uip','$actvty')");
+          set_admin_online($conn, $uid);
+        }
+        else {
+          $_SESSION['error']="Unauthorized role!";
         }
       }else{
         $_SESSION['error']="Incorrect Password!";

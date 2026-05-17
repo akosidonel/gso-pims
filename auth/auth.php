@@ -381,6 +381,500 @@ if (!function_exists('gso_motor_vehicle_response_record')) {
     }
 }
 
+if (!function_exists('gso_motor_vehicle_dashboard_from_sql')) {
+    function gso_motor_vehicle_dashboard_from_sql($inventorySql) {
+        return "
+            FROM ({$inventorySql}) AS v
+            LEFT JOIN motor_vehicle AS mv
+                ON CONVERT(mv.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                 = CONVERT(v.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+        ";
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_schedule')) {
+    function gso_motor_vehicle_schedule($plateNo) {
+        preg_match_all('/\d/', strtoupper((string)$plateNo), $matches);
+        $digits = implode('', $matches[0] ?? []);
+
+        if (strlen($digits) < 2) {
+            return ['valid' => false, 'label' => 'Invalid plate number'];
+        }
+
+        $lastDigit = (int)substr($digits, -1);
+        $secondLastDigit = (int)substr($digits, -2, 1);
+        $monthNo = $lastDigit === 0 ? 10 : $lastDigit;
+        $monthName = date('F', mktime(0, 0, 0, $monthNo, 1));
+
+        if ($secondLastDigit >= 1 && $secondLastDigit <= 3) {
+            $startDay = 1;
+            $endDay = 7;
+        } elseif ($secondLastDigit >= 4 && $secondLastDigit <= 6) {
+            $startDay = 8;
+            $endDay = 14;
+        } elseif ($secondLastDigit >= 7 && $secondLastDigit <= 8) {
+            $startDay = 15;
+            $endDay = 21;
+        } else {
+            $startDay = 22;
+            $endDay = 31;
+        }
+
+        return [
+            'valid' => true,
+            'month_no' => $monthNo,
+            'month_name' => $monthName,
+            'start_day' => $startDay,
+            'end_day' => $endDay,
+            'label' => $monthName . ' ' . $startDay . '-' . $endDay,
+        ];
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_purchase_date')) {
+    function gso_motor_vehicle_purchase_date($value) {
+        $text = trim((string)$value);
+        if ($text === '') { return ['type' => 'none']; }
+
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $text)) {
+            $date = DateTimeImmutable::createFromFormat('!Y-m-d', $text);
+            if ($date && $date->format('Y-m-d') === $text) {
+                return ['type' => 'date', 'date' => $date];
+            }
+        }
+
+        if (preg_match('/^(\d{4})/', $text, $match)) {
+            return ['type' => 'year', 'year' => (int)$match[1]];
+        }
+
+        return ['type' => 'none'];
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_renewal_start')) {
+    function gso_motor_vehicle_renewal_start($dateAcquired, DateTimeImmutable $today) {
+        $purchase = gso_motor_vehicle_purchase_date($dateAcquired);
+
+        if (($purchase['type'] ?? '') === 'date') {
+            $startDate = $purchase['date']->modify('+3 years');
+            return [
+                'eligible' => $startDate <= $today,
+                'label' => $startDate->format('M j, Y'),
+            ];
+        }
+
+        if (($purchase['type'] ?? '') === 'year') {
+            $startYear = ((int)$purchase['year']) + 3;
+            return [
+                'eligible' => (int)$today->format('Y') >= $startYear,
+                'label' => (string)$startYear,
+            ];
+        }
+
+        return ['eligible' => true, 'label' => ''];
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_registration_info')) {
+    function gso_motor_vehicle_registration_info($row) {
+        $today = new DateTimeImmutable('today');
+        $schedule = gso_motor_vehicle_schedule($row['plate_no'] ?? '');
+        $dateAcquired = trim((string)($row['mv_date_acquired'] ?? ''));
+        if ($dateAcquired === '') {
+            $dateAcquired = trim((string)($row['date_aquired'] ?? $row['year_acquired'] ?? ''));
+        }
+
+        $base = [
+            'registration_schedule' => (string)($schedule['label'] ?? ''),
+            'registration_status' => '',
+            'registration_status_key' => 'scheduled',
+            'is_due_current_month' => false,
+        ];
+
+        if ((int)($row['motor_vehicle_id'] ?? 0) <= 0) {
+            $base['registration_schedule'] = '';
+            $base['registration_status'] = 'Needs vehicle details';
+            $base['registration_status_key'] = 'unregistered';
+            return $base;
+        }
+
+        if (empty($schedule['valid'])) {
+            $base['registration_status'] = 'Invalid plate number';
+            $base['registration_status_key'] = 'invalid';
+            return $base;
+        }
+
+        $renewalStart = gso_motor_vehicle_renewal_start($dateAcquired, $today);
+        if (empty($renewalStart['eligible'])) {
+            $base['registration_status'] = 'Starts ' . $renewalStart['label'];
+            $base['registration_status_key'] = 'new_vehicle';
+            return $base;
+        }
+
+        if ((int)$schedule['month_no'] !== (int)$today->format('n')) {
+            $base['registration_status'] = 'Scheduled for ' . $schedule['month_name'];
+            return $base;
+        }
+
+        $base['is_due_current_month'] = true;
+        $day = (int)$today->format('j');
+
+        if ($day > (int)$schedule['end_day']) {
+            $base['registration_status'] = 'Past deadline';
+            $base['registration_status_key'] = 'past_deadline';
+        } elseif ($day >= (int)$schedule['start_day']) {
+            $base['registration_status'] = 'Due this week';
+            $base['registration_status_key'] = 'due_now';
+        } else {
+            $base['registration_status'] = 'Due this month';
+            $base['registration_status_key'] = 'due_current_month';
+        }
+
+        return $base;
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_dashboard_rows')) {
+    function gso_motor_vehicle_dashboard_rows(mysqli $conn, $fromSql, $vehicleDateColumn, $whereSql = '', $orderSql = '', $limitSql = '') {
+        $sql = "
+            SELECT
+                v.source_table,
+                v.source_id,
+                v.fund_name,
+                v.account_code,
+                v.brand_model,
+                v.date_aquired AS year_acquired,
+                v.date_aquired,
+                v.property_number,
+                mv.motor_vehicle_id,
+                mv.{$vehicleDateColumn} AS mv_date_acquired,
+                COALESCE(NULLIF(mv.chassis_no, ''), v.primary_serial) AS chassis_no,
+                COALESCE(NULLIF(mv.engine_no, ''), v.secondary_serial) AS engine_no,
+                COALESCE(mv.plate_no, '') AS plate_no,
+                COALESCE(mv.coverage, '') AS coverage,
+                v.department_name,
+                v.end_user
+            {$fromSql}
+            {$whereSql}
+            {$orderSql}
+            {$limitSql}
+        ";
+
+        $res = mysqli_query($conn, $sql);
+        $rows = [];
+        if ($res) {
+            while ($row = mysqli_fetch_assoc($res)) {
+                $rows[] = $row;
+            }
+        }
+        return $rows;
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_dashboard_data')) {
+    function gso_motor_vehicle_dashboard_data($row) {
+        $registration = gso_motor_vehicle_registration_info($row);
+        return [
+            'source_table' => (string)($row['source_table'] ?? ''),
+            'source_id' => (int)($row['source_id'] ?? 0),
+            'fund_name' => (string)($row['fund_name'] ?? ''),
+            'account_code' => (string)($row['account_code'] ?? ''),
+            'brand_model' => (string)($row['brand_model'] ?? ''),
+            'year_acquired' => (string)($row['year_acquired'] ?? ''),
+            'property_number' => (string)($row['property_number'] ?? ''),
+            'chassis_no' => (string)($row['chassis_no'] ?? ''),
+            'engine_no' => (string)($row['engine_no'] ?? ''),
+            'plate_no' => (string)($row['plate_no'] ?? ''),
+            'coverage' => (string)($row['coverage'] ?? ''),
+            'department_name' => (string)($row['department_name'] ?? ''),
+            'end_user' => (string)($row['end_user'] ?? ''),
+            'registration_schedule' => (string)$registration['registration_schedule'],
+            'registration_status' => (string)$registration['registration_status'],
+            'registration_status_key' => (string)$registration['registration_status_key'],
+            'is_due_current_month' => !empty($registration['is_due_current_month']) ? 1 : 0,
+        ];
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_due_count')) {
+    function gso_motor_vehicle_due_count(mysqli $conn, $fromSql, $vehicleDateColumn, $whereSql = '') {
+        $rows = gso_motor_vehicle_dashboard_rows($conn, $fromSql, $vehicleDateColumn, $whereSql);
+        $count = 0;
+        foreach ($rows as $row) {
+            $registration = gso_motor_vehicle_registration_info($row);
+            if (!empty($registration['is_due_current_month'])) { $count++; }
+        }
+        return $count;
+    }
+}
+
+if (!function_exists('gso_table_exists')) {
+    function gso_table_exists(mysqli $conn, $table) {
+        $table = preg_replace('/[^a-zA-Z0-9_]/', '', (string)$table);
+        if ($table === '') { return false; }
+        $res = mysqli_query($conn, "SHOW TABLES LIKE '{$table}'");
+        return ($res && mysqli_num_rows($res) > 0);
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_stat_label')) {
+    function gso_motor_vehicle_stat_label($value) {
+        $text = strtoupper(trim((string)$value));
+        if ($text === '') { return 'Unspecified'; }
+        if ($text === 'SEF' || strpos($text, 'SPECIAL EDUCATION') !== false) { return 'SEF'; }
+        if (strpos($text, 'TRUST') !== false) { return 'Trust Fund'; }
+        if (strpos($text, 'DONATION') !== false) { return 'Donation'; }
+        if (strpos($text, 'GENERAL') !== false) { return 'General Fund'; }
+        return ucwords(strtolower($text));
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_is_insured')) {
+    function gso_motor_vehicle_is_insured($coverage) {
+        $text = strtoupper(trim((string)$coverage));
+        return $text !== '' && $text !== 'NONE';
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_is_current_year_purchase')) {
+    function gso_motor_vehicle_is_current_year_purchase($row, $year) {
+        $dateAcquired = trim((string)($row['mv_date_acquired'] ?? ''));
+        if ($dateAcquired === '') {
+            $dateAcquired = trim((string)($row['date_aquired'] ?? $row['year_acquired'] ?? ''));
+        }
+        if (!preg_match('/^(\d{4})/', $dateAcquired, $match)) { return false; }
+        return (int)$match[1] === (int)$year;
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_active_unserviceable_rows')) {
+    function gso_motor_vehicle_active_unserviceable_rows(mysqli $conn, $vehicleDateColumn) {
+        if (!gso_table_exists($conn, 'unserviceable_items')) { return []; }
+
+        $codes = array_map(function ($code) use ($conn) {
+            return "'" . mysqli_real_escape_string($conn, $code) . "'";
+        }, gso_motor_vehicle_account_codes());
+        $accountCodes = implode(',', $codes);
+
+        $historyJoin = '';
+        $statusWhere = '';
+        if (gso_table_exists($conn, 'unserviceable_items_history')) {
+            $historyJoin = "
+                LEFT JOIN (
+                    SELECT h1.*
+                    FROM unserviceable_items_history AS h1
+                    INNER JOIN (
+                        SELECT par_number, MAX(created_at) AS max_created_at
+                        FROM unserviceable_items_history
+                        GROUP BY par_number
+                    ) AS h2
+                        ON h1.par_number = h2.par_number
+                       AND h1.created_at = h2.max_created_at
+                ) AS h ON h.par_number = u.par_number
+            ";
+            $statusWhere = ' AND COALESCE(h.status, 0) = 0';
+        }
+
+        $sql = "
+            SELECT
+                'unserviceable_items' AS source_table,
+                u.id AS source_id,
+                COALESCE(u.fund, '') AS fund_name,
+                u.account_code,
+                u.model AS brand_model,
+                u.date_aquired AS year_acquired,
+                u.date_aquired,
+                u.par_number AS property_number,
+                mv.motor_vehicle_id,
+                mv.{$vehicleDateColumn} AS mv_date_acquired,
+                COALESCE(NULLIF(mv.chassis_no, ''), u.serial_number) AS chassis_no,
+                COALESCE(NULLIF(mv.engine_no, ''), u.serial_number_2) AS engine_no,
+                COALESCE(mv.plate_no, '') AS plate_no,
+                COALESCE(mv.coverage, '') AS coverage
+            FROM unserviceable_items AS u
+            {$historyJoin}
+            LEFT JOIN motor_vehicle AS mv
+                ON CONVERT(mv.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                 = CONVERT(u.par_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+            WHERE u.account_code IN ({$accountCodes})
+            {$statusWhere}
+        ";
+
+        $res = mysqli_query($conn, $sql);
+        $rows = [];
+        if ($res) {
+            while ($row = mysqli_fetch_assoc($res)) {
+                $rows[] = $row;
+            }
+        }
+        return $rows;
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_return_stock_rows')) {
+    function gso_motor_vehicle_return_stock_rows(mysqli $conn, $vehicleDateColumn) {
+        if (!gso_table_exists($conn, 'return_to_stock')) { return []; }
+
+        $codes = array_map(function ($code) use ($conn) {
+            return "'" . mysqli_real_escape_string($conn, $code) . "'";
+        }, gso_motor_vehicle_account_codes());
+        $accountCodes = implode(',', $codes);
+
+        $sql = "
+            SELECT
+                'return_to_stock' AS source_table,
+                r.id AS source_id,
+                COALESCE(r.fund, '') AS fund_name,
+                r.account_code,
+                r.model AS brand_model,
+                r.date_aquired AS year_acquired,
+                r.date_aquired,
+                r.par_number AS property_number,
+                mv.motor_vehicle_id,
+                mv.{$vehicleDateColumn} AS mv_date_acquired,
+                COALESCE(NULLIF(mv.chassis_no, ''), r.serial_number) AS chassis_no,
+                COALESCE(NULLIF(mv.engine_no, ''), r.serial_number_2) AS engine_no,
+                COALESCE(mv.plate_no, '') AS plate_no,
+                COALESCE(mv.coverage, '') AS coverage
+            FROM return_to_stock AS r
+            LEFT JOIN motor_vehicle AS mv
+                ON CONVERT(mv.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                 = CONVERT(r.par_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+            WHERE r.account_code IN ({$accountCodes})
+        ";
+
+        $res = mysqli_query($conn, $sql);
+        $rows = [];
+        if ($res) {
+            while ($row = mysqli_fetch_assoc($res)) {
+                $rows[] = $row;
+            }
+        }
+        return $rows;
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_unique_rows')) {
+    function gso_motor_vehicle_unique_rows($rows) {
+        $unique = [];
+        foreach ($rows as $index => $row) {
+            $propertyNumber = strtoupper(trim((string)($row['property_number'] ?? '')));
+            $key = $propertyNumber !== '' ? $propertyNumber : ('ROW-' . (string)$index);
+            if (isset($unique[$key])) { continue; }
+            $unique[$key] = $row;
+        }
+        return array_values($unique);
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_statistics_data')) {
+    function gso_motor_vehicle_statistics_data(mysqli $conn, $dashboardFromSql, $vehicleDateColumn) {
+        $currentYear = (int)date('Y');
+        $serviceableRows = gso_motor_vehicle_unique_rows(array_merge(
+            gso_motor_vehicle_dashboard_rows($conn, $dashboardFromSql, $vehicleDateColumn),
+            gso_motor_vehicle_return_stock_rows($conn, $vehicleDateColumn)
+        ));
+        $unserviceableRows = gso_motor_vehicle_active_unserviceable_rows($conn, $vehicleDateColumn);
+        $allRows = array_merge($serviceableRows, $unserviceableRows);
+
+        $cards = [
+            'total_vehicles' => count($allRows),
+            'registered_vehicles' => 0,
+            'for_registration' => 0,
+            'insured_vehicles' => 0,
+            'serviceable_vehicles' => count($serviceableRows),
+            'unserviceable_vehicles' => count($unserviceableRows),
+            'new_motor_vehicles' => 0,
+            'needs_details' => 0,
+        ];
+
+        $funds = [];
+        foreach ($serviceableRows as $row) {
+            $fund = gso_motor_vehicle_stat_label($row['fund_name'] ?? '');
+            if (!isset($funds[$fund])) {
+                $funds[$fund] = ['fund_name' => $fund, 'serviceable' => 0, 'unserviceable' => 0, 'total' => 0];
+            }
+            $funds[$fund]['serviceable']++;
+            $funds[$fund]['total']++;
+        }
+
+        foreach ($unserviceableRows as $row) {
+            $fund = gso_motor_vehicle_stat_label($row['fund_name'] ?? '');
+            if (!isset($funds[$fund])) {
+                $funds[$fund] = ['fund_name' => $fund, 'serviceable' => 0, 'unserviceable' => 0, 'total' => 0];
+            }
+            $funds[$fund]['unserviceable']++;
+            $funds[$fund]['total']++;
+        }
+
+        foreach ($allRows as $row) {
+            $registered = (int)($row['motor_vehicle_id'] ?? 0) > 0;
+            if ($registered) {
+                $cards['registered_vehicles']++;
+                if (gso_motor_vehicle_is_insured($row['coverage'] ?? '')) {
+                    $cards['insured_vehicles']++;
+                }
+            } else {
+                $cards['needs_details']++;
+            }
+
+            if (gso_motor_vehicle_is_current_year_purchase($row, $currentYear)) {
+                $cards['new_motor_vehicles']++;
+            }
+        }
+
+        foreach ($serviceableRows as $row) {
+            $registration = gso_motor_vehicle_registration_info($row);
+            if (!empty($registration['is_due_current_month'])) {
+                $cards['for_registration']++;
+            }
+        }
+
+        usort($funds, function ($a, $b) {
+            return strcmp((string)$a['fund_name'], (string)$b['fund_name']);
+        });
+
+        return [
+            'cards' => $cards,
+            'charts' => [
+                'breakdown' => [
+                    'labels' => ['Registered', 'For Registration', 'Insured', 'Serviceable', 'Unserviceable', 'New Motor Vehicles', 'Needs Details'],
+                    'data' => [
+                        $cards['registered_vehicles'],
+                        $cards['for_registration'],
+                        $cards['insured_vehicles'],
+                        $cards['serviceable_vehicles'],
+                        $cards['unserviceable_vehicles'],
+                        $cards['new_motor_vehicles'],
+                        $cards['needs_details'],
+                    ],
+                ],
+                'condition' => [
+                    'labels' => ['Serviceable', 'Unserviceable'],
+                    'data' => [$cards['serviceable_vehicles'], $cards['unserviceable_vehicles']],
+                ],
+                'registration' => [
+                    'labels' => ['Registered', 'Needs Details', 'For Registration'],
+                    'data' => [$cards['registered_vehicles'], $cards['needs_details'], $cards['for_registration']],
+                ],
+                'coverage' => [
+                    'labels' => ['Insured', 'No Coverage / No Details'],
+                    'data' => [$cards['insured_vehicles'], max(0, $cards['total_vehicles'] - $cards['insured_vehicles'])],
+                ],
+            ],
+            'funds' => array_values($funds),
+            'as_of' => date('F j, Y'),
+        ];
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_can_access')) {
+    function gso_motor_vehicle_can_access() {
+        $role = strtoupper(trim((string)($_SESSION['role'] ?? '')));
+        return in_array($role, ['SYSTEM-ADMIN', 'MV-ADMIN'], true);
+    }
+}
+
 if (isset($_REQUEST['motor_vehicle_dashboard'])) {
     header('Content-Type: application/json; charset=utf-8');
 
@@ -390,8 +884,16 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         exit();
     }
 
+    if (!gso_motor_vehicle_can_access()) {
+        http_response_code(403);
+        echo json_encode(['status' => 403, 'message' => 'Unauthorized']);
+        exit();
+    }
+
     $mode = strtolower(trim((string)$_REQUEST['motor_vehicle_dashboard']));
     $inventorySql = gso_motor_vehicle_inventory_sql($conn);
+    $vehicleDateColumn = gso_motor_vehicle_date_column($conn);
+    $dashboardFromSql = gso_motor_vehicle_dashboard_from_sql($inventorySql);
 
     if ($mode === 'metrics') {
         $sql = "
@@ -399,22 +901,31 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
                 COUNT(*) AS total_vehicles,
                 SUM(CASE WHEN mv.motor_vehicle_id IS NULL THEN 0 ELSE 1 END) AS registered_vehicles,
                 COUNT(DISTINCT v.fund_name) AS fund_sources
-            FROM ({$inventorySql}) AS v
-            LEFT JOIN motor_vehicle AS mv
-                ON CONVERT(mv.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                 = CONVERT(v.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
+            {$dashboardFromSql}
         ";
         $res = mysqli_query($conn, $sql);
         $row = $res ? mysqli_fetch_assoc($res) : [];
         $total = (int)($row['total_vehicles'] ?? 0);
         $registered = (int)($row['registered_vehicles'] ?? 0);
+        $dueCount = gso_motor_vehicle_due_count($conn, $dashboardFromSql, $vehicleDateColumn, ' WHERE mv.motor_vehicle_id IS NOT NULL');
 
         echo json_encode([
             'total_vehicles' => $total,
             'registered_vehicles' => $registered,
-            'for_registration' => max(0, $total - $registered),
+            'for_registration' => $dueCount,
+            'unregistered_vehicles' => max(0, $total - $registered),
             'fund_sources' => (int)($row['fund_sources'] ?? 0),
             'account_codes' => gso_motor_vehicle_account_codes(),
+            'current_month' => date('F Y'),
+        ]);
+        exit();
+    }
+
+    if ($mode === 'statistics') {
+        echo json_encode([
+            'status' => 200,
+            'message' => 'OK',
+            'data' => gso_motor_vehicle_statistics_data($conn, $dashboardFromSql, $vehicleDateColumn),
         ]);
         exit();
     }
@@ -467,11 +978,20 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $searchValue = trim((string)($_POST['search']['value'] ?? ''));
         $yearFilter = trim((string)($_POST['mv_year_acquired'] ?? ''));
         $departmentFilter = trim((string)($_POST['mv_department'] ?? ''));
-        $whereParts = [];
+        $scope = strtolower(trim((string)($_POST['mv_scope'] ?? 'all')));
+        $scope = in_array($scope, ['all', 'registered', 'unregistered', 'due_current_month'], true) ? $scope : 'all';
+        $scopeParts = [];
+        $filterParts = [];
+
+        if ($scope === 'registered' || $scope === 'due_current_month') {
+            $scopeParts[] = 'mv.motor_vehicle_id IS NOT NULL';
+        } elseif ($scope === 'unregistered') {
+            $scopeParts[] = 'mv.motor_vehicle_id IS NULL';
+        }
 
         if ($searchValue !== '') {
             $safe = mysqli_real_escape_string($conn, $searchValue);
-            $whereParts[] = "(
+            $filterParts[] = "(
                 v.brand_model LIKE '%{$safe}%'
                 OR v.date_aquired LIKE '%{$safe}%'
                 OR v.property_number LIKE '%{$safe}%'
@@ -487,30 +1007,19 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
 
         if ($yearFilter !== '') {
             $safeYear = mysqli_real_escape_string($conn, $yearFilter);
-            $whereParts[] = "TRIM(v.date_aquired) = '{$safeYear}'";
+            $filterParts[] = "TRIM(v.date_aquired) = '{$safeYear}'";
         }
 
         if ($departmentFilter !== '') {
             $safeDepartment = mysqli_real_escape_string($conn, $departmentFilter);
-            $whereParts[] = "TRIM(v.department_name) = '{$safeDepartment}'";
+            $filterParts[] = "TRIM(v.department_name) = '{$safeDepartment}'";
         }
 
-        $whereSql = !empty($whereParts) ? ' WHERE ' . implode(' AND ', $whereParts) : '';
-
-        $totalRes = mysqli_query($conn, "SELECT COUNT(*) AS cnt FROM ({$inventorySql}) AS v");
-        $totalRow = $totalRes ? mysqli_fetch_assoc($totalRes) : [];
-        $total = (int)($totalRow['cnt'] ?? 0);
-
-        $tableFromSql = "
-            FROM ({$inventorySql}) AS v
-            LEFT JOIN motor_vehicle AS mv
-                ON CONVERT(mv.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                 = CONVERT(v.property_number USING utf8mb4) COLLATE utf8mb4_unicode_ci
-        ";
-
-        $filteredRes = mysqli_query($conn, "SELECT COUNT(*) AS cnt {$tableFromSql} {$whereSql}");
-        $filteredRow = $filteredRes ? mysqli_fetch_assoc($filteredRes) : [];
-        $filtered = (int)($filteredRow['cnt'] ?? 0);
+        $whereSql = function ($parts) {
+            return !empty($parts) ? ' WHERE ' . implode(' AND ', $parts) : '';
+        };
+        $scopeWhereSql = $whereSql($scopeParts);
+        $filteredWhereSql = $whereSql(array_merge($scopeParts, $filterParts));
 
         $columns = [
             0 => 'v.brand_model',
@@ -534,40 +1043,31 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $length = isset($_POST['length']) ? (int)$_POST['length'] : 10;
         $limitSql = $length !== -1 ? ' LIMIT ' . $start . ',' . max(0, $length) : '';
 
-        $dataSql = "
-            SELECT
-                v.source_table,
-                v.source_id,
-                v.brand_model,
-                v.date_aquired AS year_acquired,
-                v.property_number,
-                COALESCE(NULLIF(mv.chassis_no, ''), v.primary_serial) AS chassis_no,
-                COALESCE(NULLIF(mv.engine_no, ''), v.secondary_serial) AS engine_no,
-                COALESCE(mv.plate_no, '') AS plate_no,
-                v.department_name,
-                v.end_user
-            {$tableFromSql}
-            {$whereSql}
-            {$orderSql}
-            {$limitSql}
-        ";
-        $res = mysqli_query($conn, $dataSql);
-        $data = [];
-        if ($res) {
-            while ($row = mysqli_fetch_assoc($res)) {
-                $data[] = [
-                    'source_table' => (string)($row['source_table'] ?? ''),
-                    'source_id' => (int)($row['source_id'] ?? 0),
-                    'brand_model' => (string)($row['brand_model'] ?? ''),
-                    'year_acquired' => (string)($row['year_acquired'] ?? ''),
-                    'property_number' => (string)($row['property_number'] ?? ''),
-                    'chassis_no' => (string)($row['chassis_no'] ?? ''),
-                    'engine_no' => (string)($row['engine_no'] ?? ''),
-                    'plate_no' => (string)($row['plate_no'] ?? ''),
-                    'department_name' => (string)($row['department_name'] ?? ''),
-                    'end_user' => (string)($row['end_user'] ?? ''),
-                ];
+        if ($scope === 'due_current_month') {
+            $total = gso_motor_vehicle_due_count($conn, $dashboardFromSql, $vehicleDateColumn, $scopeWhereSql);
+            $rows = gso_motor_vehicle_dashboard_rows($conn, $dashboardFromSql, $vehicleDateColumn, $filteredWhereSql, $orderSql);
+            $dueRows = [];
+            foreach ($rows as $row) {
+                $registration = gso_motor_vehicle_registration_info($row);
+                if (!empty($registration['is_due_current_month'])) { $dueRows[] = $row; }
             }
+            $filtered = count($dueRows);
+            $rows = $length !== -1 ? array_slice($dueRows, $start, max(0, $length)) : $dueRows;
+        } else {
+            $totalRes = mysqli_query($conn, "SELECT COUNT(*) AS cnt {$dashboardFromSql} {$scopeWhereSql}");
+            $totalRow = $totalRes ? mysqli_fetch_assoc($totalRes) : [];
+            $total = (int)($totalRow['cnt'] ?? 0);
+
+            $filteredRes = mysqli_query($conn, "SELECT COUNT(*) AS cnt {$dashboardFromSql} {$filteredWhereSql}");
+            $filteredRow = $filteredRes ? mysqli_fetch_assoc($filteredRes) : [];
+            $filtered = (int)($filteredRow['cnt'] ?? 0);
+
+            $rows = gso_motor_vehicle_dashboard_rows($conn, $dashboardFromSql, $vehicleDateColumn, $filteredWhereSql, $orderSql, $limitSql);
+        }
+
+        $data = [];
+        foreach ($rows as $row) {
+            $data[] = gso_motor_vehicle_dashboard_data($row);
         }
 
         echo json_encode([
@@ -663,6 +1163,9 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         if ($chassisNo === '') { $missing[] = 'Chassis Number'; }
         if ($engineNo === '') { $missing[] = 'Engine Number'; }
         if ($plateNo === '') { $missing[] = 'Plate Number'; }
+        if ($plateNo !== '' && empty(gso_motor_vehicle_schedule($plateNo)['valid'])) {
+            $missing[] = 'Valid Plate Number';
+        }
         if ($color === '') { $missing[] = 'Color'; }
         if ($mvFile === '') { $missing[] = 'MV File'; }
         if ($vehicleUsage === '') { $missing[] = 'Vehicle Usage'; }
@@ -2867,6 +3370,19 @@ if (isset($_GET['fetch_pc_details'])) {
 
 //contains all sql query statement(select,insert,update,delete)
 
+if (!function_exists('gso_admin_role_allowed')) {
+    function gso_admin_role_allowed($role) {
+        return in_array(strtoupper(trim((string)$role)), [
+            'SYSTEM-ADMIN',
+            'GF/SEF-ADMIN',
+            'DISPOSAL-ADMIN',
+            'CLEARANCE-ADMIN',
+            'MV-ADMIN',
+            'USER',
+        ], true);
+    }
+}
+
 //add administrator
 if (isset($_POST['save_admin_info'])) {
     $fname = escape_up($conn,$_POST['fname']);
@@ -2875,6 +3391,9 @@ if (isset($_POST['save_admin_info'])) {
     $contact = escape_raw($conn,$_POST['contact']);
     $empnumber = escape_up($conn,$_POST['emp_number']);
     $role = escape_up($conn,$_POST['role']);
+    if (!gso_admin_role_allowed($role)) {
+        return json_response(422, 'Invalid administrator role.');
+    }
     $password = password_hash('12345',PASSWORD_DEFAULT);
     $statusAdmin = 0;
     $sql = "INSERT INTO administrator (first_name,last_name,contact_number,email,role,emp_number,password,status) VALUES('$fname','$lname','$contact','$email','$role','$empnumber','$password','$statusAdmin')";
@@ -2899,7 +3418,10 @@ if (isset($_POST['update_admin_info'])) {
     $last_name = escape_raw($conn, $_POST['elname']);
     $email = escape_raw($conn, $_POST['eemail']);
     $contact_number = escape_raw($conn, $_POST['econtact']);
-    $role = escape_raw($conn, $_POST['erole']);
+    $role = escape_up($conn, $_POST['erole']);
+    if (!gso_admin_role_allowed($role)) {
+        return json_response(422, 'Invalid administrator role.');
+    }
     $emp_number = escape_raw($conn, $_POST['empnumber']);
     $sql = "UPDATE administrator SET first_name='$first_name', last_name='$last_name', contact_number='$contact_number', email='$email', role='$role',emp_number='$emp_number'  WHERE admin_id ='$adminid' ";
     if(mysqli_query($conn,$sql)){ return json_response(200,'Updated succesfully!'); }

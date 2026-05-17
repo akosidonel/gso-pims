@@ -3,7 +3,7 @@ include_once('../config/session.php');
 include('../config/check_session.php');
 include_once('../config/auth_helpers.php');
 
-check_admin_role_dynamic_redirect();
+check_admin_role_dynamic_redirect(['SYSTEM-ADMIN', 'MV-ADMIN']);
 
 if (!isset($_SESSION['alogin'])) {
     header('Location:../index.php');
@@ -24,7 +24,6 @@ include('../include/sidebar.php');
                 <div class="card-body">
                     <div class="d-flex align-items-start align-items-md-center justify-content-between flex-wrap">
                         <div class="mb-3 mb-md-0">
-                            <div class="gso-kicker">Vehicle Registry</div>
                             <div class="gso-title">Motor Vehicle Dashboard</div>
                         </div>
 
@@ -40,60 +39,74 @@ include('../include/sidebar.php');
             </div>
 
             <h5 class="gso-section-title">Vehicle Summary</h5>
-            <div class="gso-section-subtitle">Registration status for covered motor vehicle assets</div>
 
             <div class="row">
                 <div class="col-lg-3 col-sm-6 mb-3">
-                    <div class="gso-stat-card">
-                        <div class="gso-stat-icon"><i class="fa-solid fa-car-side"></i></div>
-                        <div>
-                            <div class="gso-stat-title">Total Number of Vehicles</div>
-                            <div class="gso-stat-value" data-mv-metric="total_vehicles">...</div>
-                            <div class="gso-stat-note">Covered assets</div>
+                    <button type="button" class="gso-stat-link gso-stat-button gso-mv-scope is-active" data-scope="all" aria-pressed="true">
+                        <div class="gso-stat-card">
+                            <div class="gso-stat-icon"><i class="fa-solid fa-car-side"></i></div>
+                            <div>
+                                <div class="gso-stat-title">Total Number of Vehicles</div>
+                                <div class="gso-stat-value" data-mv-metric="total_vehicles">...</div>
+                                <div class="gso-stat-note">Covered assets</div>
+                            </div>
+                            <div class="gso-stat-chevron"><i class="fas fa-chevron-right"></i></div>
                         </div>
-                    </div>
+                    </button>
                 </div>
 
                 <div class="col-lg-3 col-sm-6 mb-3">
-                    <div class="gso-stat-card">
-                        <div class="gso-stat-icon"><i class="fa-solid fa-clipboard-check"></i></div>
-                        <div>
-                            <div class="gso-stat-title">Total Registered Vehicles</div>
-                            <div class="gso-stat-value" data-mv-metric="registered_vehicles">...</div>
-                            <div class="gso-stat-note">In vehicle registry</div>
+                    <button type="button" class="gso-stat-link gso-stat-button gso-mv-scope" data-scope="registered" aria-pressed="false">
+                        <div class="gso-stat-card">
+                            <div class="gso-stat-icon"><i class="fa-solid fa-clipboard-check"></i></div>
+                            <div>
+                                <div class="gso-stat-title">Total Registered Vehicles</div>
+                                <div class="gso-stat-value" data-mv-metric="registered_vehicles">...</div>
+                                <div class="gso-stat-note">In vehicle registry</div>
+                            </div>
+                            <div class="gso-stat-chevron"><i class="fas fa-chevron-right"></i></div>
                         </div>
-                    </div>
+                    </button>
                 </div>
 
                 <div class="col-lg-3 col-sm-6 mb-3">
-                    <div class="gso-stat-card">
-                        <div class="gso-stat-icon"><i class="fa-solid fa-file-circle-exclamation"></i></div>
-                        <div>
-                            <div class="gso-stat-title">For Registration</div>
-                            <div class="gso-stat-value" data-mv-metric="for_registration">...</div>
-                            <div class="gso-stat-note">Needs registry record</div>
+                    <button type="button" class="gso-stat-link gso-stat-button gso-mv-scope" data-scope="due_current_month" aria-pressed="false">
+                        <div class="gso-stat-card">
+                            <div class="gso-stat-icon"><i class="fa-solid fa-file-circle-exclamation"></i></div>
+                            <div>
+                                <div class="gso-stat-title">For Registration This Month</div>
+                                <div class="gso-stat-value" data-mv-metric="for_registration">...</div>
+                                <div class="gso-stat-note">Plate renewal schedule</div>
+                            </div>
+                            <div class="gso-stat-chevron"><i class="fas fa-chevron-right"></i></div>
                         </div>
-                    </div>
+                    </button>
                 </div>
 
                 <div class="col-lg-3 col-sm-6 mb-3">
-                    <div class="gso-stat-card">
-                        <div class="gso-stat-icon"><i class="fa-solid fa-layer-group"></i></div>
-                        <div>
-                            <div class="gso-stat-title">Fund Sources</div>
-                            <div class="gso-stat-value" data-mv-metric="fund_sources">...</div>
-                            <div class="gso-stat-note">With covered vehicles</div>
+                    <a href="motor-vehicle-statistics.php" class="gso-stat-link" aria-label="Open motor vehicle statistics">
+                        <div class="gso-stat-card">
+                            <div class="gso-stat-icon"><i class="fa-solid fa-chart-simple"></i></div>
+                            <div>
+                                <div class="gso-stat-title">Statistics</div>
+                                <div class="gso-stat-value"><i class="fas fa-chart-bar"></i></div>
+                                <div class="gso-stat-note">Vehicle counts</div>
+                            </div>
+                            <div class="gso-stat-chevron"><i class="fas fa-chevron-right"></i></div>
                         </div>
-                    </div>
+                    </a>
                 </div>
             </div>
 
             <div class="card gso-card mb-4">
                 <div class="card-header border-0">
                     <div class="d-flex justify-content-between align-items-center flex-wrap">
-                        <h3 class="card-title mb-0">
-                            <i class="fa-solid fa-truck-front mr-1"></i> All Motor Vehicle
-                        </h3>
+                        <div>
+                            <h3 class="card-title mb-0">
+                                <i class="fa-solid fa-truck-front mr-1"></i> <span id="motorVehicleTableTitle">All Motor Vehicles</span>
+                            </h3>
+                            <div class="small text-muted mt-1" id="motorVehicleTableSubtitle"></div>
+                        </div>
                     </div>
                 </div>
 
@@ -108,6 +121,8 @@ include('../include/sidebar.php');
                                 <th>Plate Number</th>
                                 <th>Department</th>
                                 <th>End User</th>
+                                <th>Renewal Schedule</th>
+                                <th>Status</th>
                                 <th>Action</th>
                             </tr>
                         </thead>

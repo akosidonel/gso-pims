@@ -94,6 +94,7 @@ if(!isset($_SESSION['alogin'])){
                           <option value="">-SELECT-</option>
                           <option value="DISPOSAL-ADMIN">DISPOSAL-ADMIN</option>
                           <option value="GF/SEF-ADMIN">GF/SEF-ADMIN</option>
+                          <option value="MV-ADMIN">MV-ADMIN</option>
                           <option value="SYSTEM-ADMIN">SYSTEM-ADMIN</option>
                           <option value="USER">USER</option>
                         </select>
@@ -165,6 +166,7 @@ if(!isset($_SESSION['alogin'])){
                           <option value="">-SELECT-</option>
                           <option value="DISPOSAL-ADMIN">DISPOSAL-ADMIN</option>
                           <option value="GF/SEF-ADMIN">GF/SEF-ADMIN</option>
+                          <option value="MV-ADMIN">MV-ADMIN</option>
                           <option value="SYSTEM-ADMIN">SYSTEM-ADMIN</option>
                           <option value="USER">USER</option>
                         </select>

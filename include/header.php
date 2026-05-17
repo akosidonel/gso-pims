@@ -21,10 +21,10 @@
   <link rel="stylesheet" href="../assets/dist/css/rt-notifications.css?v=20260118">
   <?php $currentPage = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')); ?>
   <?php
-    $needsPremiumTheme = in_array($currentPage, ['dashboard.php', 'motor-vehicle-dashboard.php', 'disposal.php', 'disposal-items.php', 'unserviceable.php', 'add-return.php', 'add-item.php', 'add-infrastructure.php', 'add-land.php', 'general-fund-department.php', 'general-fund-inventory.php', 'sef-institution.php', 'sef-inventory.php', 'new-purchase-items.php'], true);
+    $needsPremiumTheme = in_array($currentPage, ['dashboard.php', 'motor-vehicle-dashboard.php', 'motor-vehicle-statistics.php', 'disposal.php', 'disposal-items.php', 'unserviceable.php', 'add-return.php', 'add-item.php', 'add-infrastructure.php', 'add-land.php', 'general-fund-department.php', 'general-fund-inventory.php', 'sef-institution.php', 'sef-inventory.php', 'new-purchase-items.php'], true);
   ?>
   <?php if ($needsPremiumTheme): ?>
-    <link rel="stylesheet" href="../assets/dist/css/style.css?v=20260215">
+    <link rel="stylesheet" href="../assets/dist/css/style.css?v=20260517">
   <?php endif; ?>
   
   <style>

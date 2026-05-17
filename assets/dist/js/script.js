@@ -9653,6 +9653,14 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
 
   window.GSO.MotorVehicleDashboard = window.GSO.MotorVehicleDashboard || (function(){
     var table = null;
+    var currentScope = 'all';
+    var currentMonthText = '';
+    var scopeTitles = {
+      all: 'All Motor Vehicles',
+      registered: 'Registered Vehicles',
+      unregistered: 'Vehicles Needing Details',
+      due_current_month: 'For Registration This Month'
+    };
 
     function esc(value) {
       return $('<div>').text(String(value == null ? '' : value)).html();
@@ -9661,6 +9669,21 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
     function displayValue(value) {
       var text = String(value == null ? '' : value).trim();
       return text !== '' ? esc(text) : '<span class="text-muted">N/A</span>';
+    }
+
+    function renderStatus(value, type, row) {
+      var text = String(value == null ? '' : value).trim();
+      var key = String(row && row.registration_status_key ? row.registration_status_key : '').trim();
+      var classes = {
+        past_deadline: 'badge-danger',
+        due_now: 'badge-warning',
+        due_current_month: 'badge-info',
+        new_vehicle: 'badge-secondary',
+        invalid: 'badge-dark',
+        unregistered: 'badge-secondary',
+        scheduled: 'badge-success'
+      };
+      return text !== '' ? '<span class="badge ' + (classes[key] || 'badge-light') + '">' + esc(text) + '</span>' : displayValue(text);
     }
 
     function cleanAmount(value) {
@@ -9713,10 +9736,12 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
         data: { motor_vehicle_dashboard: 'metrics' },
         success: function(resp) {
           resp = resp || {};
+          currentMonthText = String(resp.current_month || '').trim();
           setMetric('total_vehicles', resp.total_vehicles);
           setMetric('registered_vehicles', resp.registered_vehicles);
           setMetric('for_registration', resp.for_registration);
           setMetric('fund_sources', resp.fund_sources);
+          updateScopeUi();
         },
         error: function() {
           setMetric('total_vehicles', 0);
@@ -9725,6 +9750,39 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
           setMetric('fund_sources', 0);
         }
       });
+    }
+
+    function scopeSubtitle() {
+      if (currentScope === 'registered') {
+        return 'Vehicles with saved motor vehicle details';
+      }
+      if (currentScope === 'unregistered') {
+        return 'Covered assets without saved vehicle details';
+      }
+      if (currentScope === 'due_current_month') {
+        return 'Plate-based renewal schedule for ' + (currentMonthText || 'the current month');
+      }
+      return '';
+    }
+
+    function updateScopeUi() {
+      $('.gso-mv-scope')
+        .removeClass('is-active')
+        .attr('aria-pressed', 'false');
+      $('.gso-mv-scope[data-scope="' + currentScope + '"]')
+        .addClass('is-active')
+        .attr('aria-pressed', 'true');
+      $('#motorVehicleTableTitle').text(scopeTitles[currentScope] || scopeTitles.all);
+      $('#motorVehicleTableSubtitle').text(scopeSubtitle());
+    }
+
+    function setScope(scope) {
+      scope = String(scope || 'all').trim();
+      if (!scopeTitles[scope]) { scope = 'all'; }
+      if (currentScope === scope) { return; }
+      currentScope = scope;
+      updateScopeUi();
+      if (table) { table.ajax.reload(null, true); }
     }
 
     function renderFilterOptions(payload) {
@@ -9852,6 +9910,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
             data.motor_vehicle_dashboard = 'table';
             data.mv_year_acquired = $('#mvYearAcquiredFilter').val() || '';
             data.mv_department = $('#mvDepartmentFilter').val() || '';
+            data.mv_scope = currentScope;
           }
         },
         columns: [
@@ -9862,6 +9921,8 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
           { data: 'plate_no', render: function(data) { return displayValue(data); } },
           { data: 'department_name', render: function(data) { return displayValue(data); } },
           { data: 'end_user', render: function(data) { return displayValue(data); } },
+          { data: 'registration_schedule', orderable: false, searchable: false, render: function(data) { return displayValue(data); } },
+          { data: 'registration_status', orderable: false, searchable: false, render: renderStatus },
           {
             data: null,
             orderable: false,
@@ -9891,7 +9952,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
             pageSize: 'LEGAL',
             title: 'Motor Vehicle Dashboard',
             exportOptions: {
-              columns: [0, 1, 2, 3, 4, 5, 6],
+              columns: [0, 1, 2, 3, 4, 5, 6, 7, 8],
               format: {
                 body: function(data) { return $('<div>').html(data).text().replace(/\s+/g, ' ').trim(); }
               }
@@ -9902,7 +9963,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
             orientation: 'landscape',
             pageSize: 'LEGAL',
             title: 'Motor Vehicle Dashboard',
-            exportOptions: { columns: [0, 1, 2, 3, 4, 5, 6] }
+            exportOptions: { columns: [0, 1, 2, 3, 4, 5, 6, 7, 8] }
           }
         ]
       });
@@ -10042,6 +10103,11 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
         .off('click.mvDashboard', '.mv-edit-btn')
         .on('click.mvDashboard', '.mv-edit-btn', function() {
           openVehicleModal($(this).attr('data-source-table'), $(this).attr('data-source-id'), this);
+        })
+        .off('click.mvDashboardScope', '.gso-mv-scope')
+        .on('click.mvDashboardScope', '.gso-mv-scope', function(e) {
+          e.preventDefault();
+          setScope($(this).attr('data-scope'));
         });
 
       $('#motorVehicleForm')
@@ -10070,6 +10136,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
       if (!$('#motorVehicleDashboard').length) { return; }
       initDatePicker();
       bindEvents();
+      updateScopeUi();
       loadMetrics();
       initTable();
     }
@@ -10080,6 +10147,211 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
   $(function(){
     try {
       if (window.GSO && window.GSO.MotorVehicleDashboard) { window.GSO.MotorVehicleDashboard.init(); }
+    } catch (e) {}
+  });
+
+  window.GSO.MotorVehicleStatistics = window.GSO.MotorVehicleStatistics || (function(){
+    var charts = {};
+    var statLabels = {
+      registered_vehicles: 'Registered',
+      for_registration: 'For Registration',
+      insured_vehicles: 'Insured',
+      serviceable_vehicles: 'Serviceable',
+      unserviceable_vehicles: 'Unserviceable',
+      new_motor_vehicles: 'New Motor Vehicles',
+      needs_details: 'Needs Details'
+    };
+
+    function esc(value) {
+      return $('<div>').text(String(value == null ? '' : value)).html();
+    }
+
+    function numberText(value) {
+      var number = Number(value || 0);
+      if (!isFinite(number)) { number = 0; }
+      return number.toLocaleString('en-US');
+    }
+
+    function setStat(key, value) {
+      $('[data-mv-stat="' + key + '"]').text(numberText(value));
+    }
+
+    function palette(i) {
+      var colors = ['#007bff', '#28a745', '#ffc107', '#dc3545', '#6f42c1', '#17a2b8', '#fd7e14', '#6c757d'];
+      return colors[i % colors.length];
+    }
+
+    function destroyChart(name) {
+      try {
+        if (charts[name] && typeof charts[name].destroy === 'function') {
+          charts[name].destroy();
+        }
+      } catch (e) {}
+      charts[name] = null;
+    }
+
+    function statRows(cards) {
+      cards = cards || {};
+      return Object.keys(statLabels).map(function(key, index) {
+        return {
+          key: key,
+          label: statLabels[key],
+          count: Number(cards[key] || 0) || 0,
+          color: palette(index)
+        };
+      });
+    }
+
+    function makeChart(name, selector, type, labels, data, colors) {
+      if (!window.Chart) { return; }
+      var canvas = $(selector).get(0);
+      if (!canvas) { return; }
+      destroyChart(name);
+      charts[name] = new Chart(canvas.getContext('2d'), {
+        type: type,
+        data: {
+          labels: labels || [],
+          datasets: [{
+            label: 'Vehicles',
+            data: data || [],
+            backgroundColor: colors || [],
+            borderColor: colors || [],
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          legend: { display: type !== 'horizontalBar', position: 'bottom' },
+          scales: type === 'horizontalBar' ? {
+            xAxes: [{ ticks: { beginAtZero: true, precision: 0 } }],
+            yAxes: [{ ticks: { autoSkip: false } }]
+          } : {}
+        }
+      });
+    }
+
+    function renderTotals(rows, total) {
+      var $wrap = $('#mvStatTotals');
+      if (!$wrap.length) { return; }
+      $wrap.empty();
+
+      if (!rows || !rows.length) {
+        $wrap.append('<div class="text-muted" style="font-size: 13px;">No statistics to display.</div>');
+        return;
+      }
+
+      var $table = $('<table class="table table-sm table-bordered mb-0"></table>');
+      var $thead = $('<thead class="thead-light"></thead>');
+      $thead.append('<tr><th>Statistic</th><th class="text-right" style="width: 90px;">Count</th></tr>');
+      $table.append($thead);
+
+      var $tbody = $('<tbody></tbody>');
+      rows.forEach(function(row) {
+        var $tr = $('<tr></tr>');
+        $tr.append($('<td></td>').text(row.label));
+        $tr.append($('<td class="text-right"></td>').text(numberText(row.count)));
+        $tbody.append($tr);
+      });
+      $table.append($tbody);
+
+      var $tfoot = $('<tfoot></tfoot>');
+      $tfoot.append('<tr><th class="text-right">Total Vehicles</th><th class="text-right">' + numberText(total) + '</th></tr>');
+      $table.append($tfoot);
+      $wrap.append($table);
+    }
+
+    function renderFunds(rows) {
+      var $body = $('#mvFundStatsBody');
+      if (!$body.length) { return; }
+      $body.empty();
+
+      if (!rows || !rows.length) {
+        $body.append('<tr><td colspan="4" class="text-center text-muted">No data available</td></tr>');
+        return;
+      }
+
+      rows.forEach(function(row) {
+        $body.append(
+          '<tr>' +
+            '<td>' + esc(row.fund_name || '') + '</td>' +
+            '<td class="text-center">' + numberText(row.serviceable) + '</td>' +
+            '<td class="text-center">' + numberText(row.unserviceable) + '</td>' +
+            '<td class="text-center font-weight-bold">' + numberText(row.total) + '</td>' +
+          '</tr>'
+        );
+      });
+    }
+
+    function renderSummary(cards) {
+      var total = Number(cards.total_vehicles || 0) || 0;
+      var registered = Number(cards.registered_vehicles || 0) || 0;
+      var due = Number(cards.for_registration || 0) || 0;
+      var needs = Number(cards.needs_details || 0) || 0;
+      var message = total > 0
+        ? numberText(total) + ' vehicle assets tracked. ' + numberText(registered) + ' registered, ' + numberText(due) + ' due this month, ' + numberText(needs) + ' need details.'
+        : 'No motor vehicle assets found.';
+      $('#mvStatsSummary').text(message);
+    }
+
+    function render(payload) {
+      payload = payload || {};
+      var cards = payload.cards || {};
+      var rows = statRows(cards);
+      var total = Number(cards.total_vehicles || 0) || 0;
+
+      Object.keys(cards).forEach(function(key) {
+        setStat(key, cards[key]);
+      });
+
+      $('#mvStatsAsOf').text(payload.as_of ? 'As of ' + payload.as_of : '');
+      renderFunds(Array.isArray(payload.funds) ? payload.funds : []);
+      renderTotals(rows, total);
+      renderSummary(cards);
+
+      var chartsData = payload.charts || {};
+      var breakdown = chartsData.breakdown || {};
+      var labels = Array.isArray(breakdown.labels) ? breakdown.labels : rows.map(function(row) { return row.label; });
+      var data = Array.isArray(breakdown.data) ? breakdown.data : rows.map(function(row) { return row.count; });
+      var colors = rows.map(function(row) { return row.color; });
+
+      makeChart('registration', '#mvRegistrationChart', 'horizontalBar', labels, data, colors);
+      makeChart('condition', '#mvConditionChart', 'doughnut', chartsData.condition && chartsData.condition.labels, chartsData.condition && chartsData.condition.data, ['#28a745', '#dc3545']);
+    }
+
+    function load() {
+      $('#mvStatsSummary').text('Loading...');
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'GET',
+        dataType: 'json',
+        cache: false,
+        data: { motor_vehicle_dashboard: 'statistics', _ts: Date.now() },
+        success: function(resp) {
+          if (!resp || resp.status !== 200 || !resp.data) {
+            $('#mvStatsSummary').text('Unable to load statistics.');
+            return;
+          }
+          render(resp.data);
+        },
+        error: function() {
+          $('#mvFundStatsBody').html('<tr><td colspan="4" class="text-center text-danger">Unable to load statistics</td></tr>');
+          $('#mvStatsSummary').text('Unable to load statistics.');
+        }
+      });
+    }
+
+    function init() {
+      if (!$('#motorVehicleStatistics').length) { return; }
+      load();
+    }
+
+    return { init: init };
+  })();
+
+  $(function(){
+    try {
+      if (window.GSO && window.GSO.MotorVehicleStatistics) { window.GSO.MotorVehicleStatistics.init(); }
     } catch (e) {}
   });
 
