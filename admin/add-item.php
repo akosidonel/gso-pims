@@ -326,6 +326,7 @@ if(!isset($_SESSION['alogin'])){
                     'DISASTER RESPONSE AND RESCUE EQUIPMENT',
                     'COMPUTER SOFTWARE',
                     'OTHER MAINTENANCE AND OPERATING EXPENSES',
+                    'PRINTING AND PUBLICATION EXPENSES',
                     'SUBSCRIPTION EXPENSES'
                   ];
                 ?>

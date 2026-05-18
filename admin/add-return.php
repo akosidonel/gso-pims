@@ -156,6 +156,7 @@ if (isset($conn) && $conn instanceof mysqli) {
                                 <option value="DISASTER RESPONSE AND RESCUE EQUIPMENT">DISASTER RESPONSE AND RESCUE EQUIPMENT</option>
                                 <option value="COMPUTER SOFTWARE">COMPUTER SOFTWARE</option>
                                 <option value="OTHER MAINTENANCE AND OPERATING EXPENSES">OTHER MAINTENANCE AND OPERATING EXPENSES</option>
+                                <option value="PRINTING AND PUBLICATION EXPENSES">PRINTING AND PUBLICATION EXPENSES</option>
                                 <option value="SUBSCRIPTION EXPENSES">SUBSCRIPTION EXPENSES</option>
                               </select>
                             </div>
