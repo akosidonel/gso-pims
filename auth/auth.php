@@ -54,6 +54,15 @@ if(!function_exists('gso_next_int_id')){
         return 1;
     }
 }
+if(!function_exists('gso_stmt_bind_params')){
+    function gso_stmt_bind_params(mysqli_stmt $stmt, $types, array &$params){
+        $refs = [$stmt, $types];
+        foreach ($params as $key => &$value) {
+            $refs[] = &$value;
+        }
+        return call_user_func_array('mysqli_stmt_bind_param', $refs);
+    }
+}
 if(!function_exists('gso_find_department_by_code')){
     function gso_find_department_by_code($conn, $departmentCode){
         $departmentCode = trim((string)$departmentCode);
@@ -305,6 +314,23 @@ if (!function_exists('gso_motor_vehicle_date_column')) {
 
         $dateColumn = 'mv_date_acquired';
         return $dateColumn;
+    }
+}
+
+if (!function_exists('gso_motor_vehicle_classification_column')) {
+    function gso_motor_vehicle_classification_column(mysqli $conn) {
+        static $classificationColumn = null;
+        if ($classificationColumn !== null) { return $classificationColumn; }
+
+        foreach (['classification', 'clasification'] as $column) {
+            if (gso_column_exists($conn, 'motor_vehicle', $column)) {
+                $classificationColumn = $column;
+                return $classificationColumn;
+            }
+        }
+
+        $classificationColumn = '';
+        return $classificationColumn;
     }
 }
 
@@ -1191,6 +1217,9 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $vehicleDateColumn = gso_motor_vehicle_date_column($conn);
         $hasSourceRemarks = gso_column_exists($conn, $table, 'remarks');
         $hasConductionSticker = gso_column_exists($conn, 'motor_vehicle', 'conduction_sticker');
+        $vehicleClassificationColumn = gso_motor_vehicle_classification_column($conn);
+        $vehicleClassification = strtoupper(trim((string)($row['asset_class'] ?? '')));
+        if ($vehicleClassification === '') { $vehicleClassification = 'MOTOR VEHICLE'; }
 
         mysqli_begin_transaction($conn);
         try {
@@ -1268,161 +1297,96 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
             mysqli_stmt_close($findStmt);
 
             if ($vehicleId > 0) {
-                if ($hasConductionSticker) {
-                    $vehicleSql = "
-                        UPDATE motor_vehicle
-                        SET {$vehicleDateColumn} = ?,
-                            chassis_no = ?,
-                            engine_no = ?,
-                            plate_no = ?,
-                            color = ?,
-                            mv_file = ?,
-                            conduction_sticker = ?,
-                            vehicle_usage = ?,
-                            capacity = ?,
-                            year_model = ?,
-                            cr_number = ?,
-                            or_number = ?,
-                            coverage = ?
-                        WHERE motor_vehicle_id = ?
-                        LIMIT 1
-                    ";
-                    $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
-                    if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle update.'); }
-                    mysqli_stmt_bind_param(
-                        $vehicleStmt,
-                        'sssssssssisssi',
-                        $dateAcquired,
-                        $chassisNo,
-                        $engineNo,
-                        $plateNo,
-                        $color,
-                        $mvFile,
-                        $conductionSticker,
-                        $vehicleUsage,
-                        $capacity,
-                        $yearModel,
-                        $crNumber,
-                        $orNumber,
-                        $coverage,
-                        $vehicleId
-                    );
-                } else {
-                    $vehicleSql = "
-                        UPDATE motor_vehicle
-                        SET {$vehicleDateColumn} = ?,
-                            chassis_no = ?,
-                            engine_no = ?,
-                            plate_no = ?,
-                            color = ?,
-                            mv_file = ?,
-                            vehicle_usage = ?,
-                            capacity = ?,
-                            year_model = ?,
-                            cr_number = ?,
-                            or_number = ?,
-                            coverage = ?
-                        WHERE motor_vehicle_id = ?
-                        LIMIT 1
-                    ";
-                    $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
-                    if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle update.'); }
-                    mysqli_stmt_bind_param(
-                        $vehicleStmt,
-                        'ssssssssisssi',
-                        $dateAcquired,
-                        $chassisNo,
-                        $engineNo,
-                        $plateNo,
-                        $color,
-                        $mvFile,
-                        $vehicleUsage,
-                        $capacity,
-                        $yearModel,
-                        $crNumber,
-                        $orNumber,
-                        $coverage,
-                        $vehicleId
-                    );
+                $vehicleSetParts = [];
+                $vehicleTypes = '';
+                $vehicleParams = [];
+
+                if ($vehicleClassificationColumn !== '') {
+                    $vehicleSetParts[] = "{$vehicleClassificationColumn} = ?";
+                    $vehicleTypes .= 's';
+                    $vehicleParams[] = $vehicleClassification;
                 }
+
+                $vehicleSetParts[] = "{$vehicleDateColumn} = ?";
+                $vehicleSetParts[] = "chassis_no = ?";
+                $vehicleSetParts[] = "engine_no = ?";
+                $vehicleSetParts[] = "plate_no = ?";
+                $vehicleSetParts[] = "color = ?";
+                $vehicleSetParts[] = "mv_file = ?";
+                $vehicleTypes .= 'ssssss';
+                array_push($vehicleParams, $dateAcquired, $chassisNo, $engineNo, $plateNo, $color, $mvFile);
+
+                if ($hasConductionSticker) {
+                    $vehicleSetParts[] = "conduction_sticker = ?";
+                    $vehicleTypes .= 's';
+                    $vehicleParams[] = $conductionSticker;
+                }
+
+                $vehicleSetParts[] = "vehicle_usage = ?";
+                $vehicleSetParts[] = "capacity = ?";
+                $vehicleSetParts[] = "year_model = ?";
+                $vehicleSetParts[] = "cr_number = ?";
+                $vehicleSetParts[] = "or_number = ?";
+                $vehicleSetParts[] = "coverage = ?";
+                $vehicleTypes .= 'ssisss';
+                array_push($vehicleParams, $vehicleUsage, $capacity, $yearModel, $crNumber, $orNumber, $coverage);
+
+                $vehicleTypes .= 'i';
+                $vehicleParams[] = $vehicleId;
+                $vehicleSql = "
+                    UPDATE motor_vehicle
+                    SET " . implode(",\n                        ", $vehicleSetParts) . "
+                    WHERE motor_vehicle_id = ?
+                    LIMIT 1
+                ";
+                $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
+                if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle update.'); }
+                gso_stmt_bind_params($vehicleStmt, $vehicleTypes, $vehicleParams);
             } else {
-                if ($hasConductionSticker) {
-                    $vehicleSql = "
-                        INSERT INTO motor_vehicle (
-                            property_number,
-                            {$vehicleDateColumn},
-                            chassis_no,
-                            engine_no,
-                            plate_no,
-                            color,
-                            mv_file,
-                            conduction_sticker,
-                            vehicle_usage,
-                            capacity,
-                            year_model,
-                            cr_number,
-                            or_number,
-                            coverage
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ";
-                    $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
-                    if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle registration.'); }
-                    mysqli_stmt_bind_param(
-                        $vehicleStmt,
-                        'ssssssssssisss',
-                        $propertyNumber,
-                        $dateAcquired,
-                        $chassisNo,
-                        $engineNo,
-                        $plateNo,
-                        $color,
-                        $mvFile,
-                        $conductionSticker,
-                        $vehicleUsage,
-                        $capacity,
-                        $yearModel,
-                        $crNumber,
-                        $orNumber,
-                        $coverage
-                    );
-                } else {
-                    $vehicleSql = "
-                        INSERT INTO motor_vehicle (
-                            property_number,
-                            {$vehicleDateColumn},
-                            chassis_no,
-                            engine_no,
-                            plate_no,
-                            color,
-                            mv_file,
-                            vehicle_usage,
-                            capacity,
-                            year_model,
-                            cr_number,
-                            or_number,
-                            coverage
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ";
-                    $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
-                    if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle registration.'); }
-                    mysqli_stmt_bind_param(
-                        $vehicleStmt,
-                        'sssssssssisss',
-                        $propertyNumber,
-                        $dateAcquired,
-                        $chassisNo,
-                        $engineNo,
-                        $plateNo,
-                        $color,
-                        $mvFile,
-                        $vehicleUsage,
-                        $capacity,
-                        $yearModel,
-                        $crNumber,
-                        $orNumber,
-                        $coverage
-                    );
+                $vehicleColumns = [];
+                $vehicleTypes = '';
+                $vehicleParams = [];
+
+                if ($vehicleClassificationColumn !== '') {
+                    $vehicleColumns[] = $vehicleClassificationColumn;
+                    $vehicleTypes .= 's';
+                    $vehicleParams[] = $vehicleClassification;
                 }
+
+                $vehicleColumns[] = 'property_number';
+                $vehicleColumns[] = $vehicleDateColumn;
+                $vehicleColumns[] = 'chassis_no';
+                $vehicleColumns[] = 'engine_no';
+                $vehicleColumns[] = 'plate_no';
+                $vehicleColumns[] = 'color';
+                $vehicleColumns[] = 'mv_file';
+                $vehicleTypes .= 'sssssss';
+                array_push($vehicleParams, $propertyNumber, $dateAcquired, $chassisNo, $engineNo, $plateNo, $color, $mvFile);
+
+                if ($hasConductionSticker) {
+                    $vehicleColumns[] = 'conduction_sticker';
+                    $vehicleTypes .= 's';
+                    $vehicleParams[] = $conductionSticker;
+                }
+
+                $vehicleColumns[] = 'vehicle_usage';
+                $vehicleColumns[] = 'capacity';
+                $vehicleColumns[] = 'year_model';
+                $vehicleColumns[] = 'cr_number';
+                $vehicleColumns[] = 'or_number';
+                $vehicleColumns[] = 'coverage';
+                $vehicleTypes .= 'ssisss';
+                array_push($vehicleParams, $vehicleUsage, $capacity, $yearModel, $crNumber, $orNumber, $coverage);
+
+                $placeholders = implode(',', array_fill(0, count($vehicleColumns), '?'));
+                $vehicleSql = "
+                    INSERT INTO motor_vehicle (
+                        " . implode(",\n                        ", $vehicleColumns) . "
+                    ) VALUES ({$placeholders})
+                ";
+                $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
+                if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle registration.'); }
+                gso_stmt_bind_params($vehicleStmt, $vehicleTypes, $vehicleParams);
             }
 
             if (!mysqli_stmt_execute($vehicleStmt)) {
