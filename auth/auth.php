@@ -2759,6 +2759,74 @@ if(!function_exists('fetch_iirup_appendix74_print_data')){
     }
 }
 
+if(!function_exists('gso_fetch_property_transfer_report_rows')){
+    function gso_fetch_property_transfer_report_rows(mysqli $conn, array $referenceNumbers): array {
+        $refs = [];
+        foreach ($referenceNumbers as $ref) {
+            $ref = trim((string)$ref);
+            if ($ref !== '' && !in_array($ref, $refs, true)) {
+                $refs[] = $ref;
+            }
+        }
+
+        if (count($refs) === 0) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($refs), '?'));
+        $sql = "
+            SELECT
+                i.par_number,
+                i.ptr_number,
+                i.reference_number,
+                i.new_dept,
+                i.reason,
+                i.previous_user,
+                i.previous_dept,
+                i.new_user,
+                i.unit_condition,
+                COALESCE(pg.par_number, ps.property_number) AS p_par_number,
+                COALESCE(pg.model, ps.model) AS model,
+                COALESCE(pg.serial_number, ps.serial_number) AS serial_number,
+                COALESCE(pg.serial_number_2, ps.serial_number_2) AS serial_number_2,
+                COALESCE(pg.unit_value, ps.unit_value) AS unit_value,
+                COALESCE(pg.description, ps.description) AS description,
+                COALESCE(pg.date_aquired, ps.date_aquired) AS date_aquired,
+                e.emp_id,
+                e.emp_name,
+                d.department_name,
+                d.department_code
+            FROM items_user_history AS i
+            LEFT JOIN par_gen_fund AS pg ON i.par_number = pg.par_number
+            LEFT JOIN property_sef AS ps ON i.par_number = ps.property_number
+            JOIN employee AS e ON i.new_user = e.emp_id
+            JOIN department AS d ON i.new_dept = d.department_code
+            WHERE i.reference_number IN ($placeholders)
+            ORDER BY i.reference_number ASC, i.id ASC
+        ";
+
+        $stmt = mysqli_prepare($conn, $sql);
+        if (!$stmt) {
+            return [];
+        }
+
+        $types = str_repeat('s', count($refs));
+        gso_stmt_bind_params($stmt, $types, $refs);
+        mysqli_stmt_execute($stmt);
+
+        $rows = [];
+        $result = mysqli_stmt_get_result($stmt);
+        if ($result) {
+            while ($row = mysqli_fetch_assoc($result)) {
+                $rows[] = $row;
+            }
+        }
+
+        mysqli_stmt_close($stmt);
+        return $rows;
+    }
+}
+
 // Allow other PHP scripts (e.g., print templates) to include this file as a library without
 // running the request/JSON handlers below.
 if (defined('GSO_AUTH_LIB_ONLY') && GSO_AUTH_LIB_ONLY) {
