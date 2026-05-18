@@ -10050,10 +10050,6 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
     function saveVehicle() {
       var form = $('#motorVehicleForm').get(0);
       if (!form) { return; }
-      if (form.checkValidity && !form.checkValidity()) {
-        form.reportValidity();
-        return;
-      }
 
       var $btn = $('#motorVehicleSaveBtn');
       var originalHtml = $btn.html();

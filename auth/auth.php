@@ -1175,18 +1175,6 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $jev = $text('jev');
         $remarks = $text('remarks');
 
-        $vehicleUsageOptions = [
-            'SERVICE',
-            'TRUCK',
-            'AMBULANCE',
-            'FIRE TRUCK',
-            'MOBILE PATROL',
-            'RESCUE VEHICLE',
-            'COMMAND AND CONTROL VEHICLE',
-            'INVESTIGATION VEHICLE',
-            'MOBILE SHOWER',
-        ];
-
         $amountRaw = preg_replace('/[^0-9.]/', '', (string)($_POST['amount'] ?? ''));
         $amount = $amountRaw === '' ? 0.0 : (float)$amountRaw;
 
@@ -1196,33 +1184,6 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
             $coverage = 'TPL';
         } elseif (in_array($coverageInput, ['COMPREHENSIVE', 'COMPHRENSIVE'], true)) {
             $coverage = 'Comprehensive';
-        }
-
-        $missing = [];
-        if ($brandModel === '') { $missing[] = 'Brand/Model'; }
-        if ($description === '') { $missing[] = 'Description'; }
-        if ($dateAcquired === '') { $missing[] = 'Date Acquired'; }
-        if ($chassisNo === '') { $missing[] = 'Chassis Number'; }
-        if ($engineNo === '') { $missing[] = 'Engine Number'; }
-        if ($plateNo === '') { $missing[] = 'Plate Number'; }
-        if ($plateNo !== '' && empty(gso_motor_vehicle_schedule($plateNo)['valid'])) {
-            $missing[] = 'Valid Plate Number';
-        }
-        if ($color === '') { $missing[] = 'Color'; }
-        if ($mvFile === '') { $missing[] = 'MV File'; }
-        if ($vehicleUsage === '') { $missing[] = 'Vehicle Usage'; }
-        if ($vehicleUsage !== '' && !in_array($vehicleUsage, $vehicleUsageOptions, true)) { $missing[] = 'Valid Vehicle Usage'; }
-        if ($capacity === '') { $missing[] = 'Capacity'; }
-        if ($yearModel <= 0) { $missing[] = 'Valid Date Acquired'; }
-
-        $maxYear = (int)date('Y') + 2;
-        if ($yearModel > 0 && ($yearModel < 1900 || $yearModel > $maxYear)) {
-            $missing[] = 'Valid Year Model';
-        }
-
-        if (!empty($missing)) {
-            echo json_encode(['status' => 422, 'message' => 'Please complete: ' . implode(', ', $missing) . '.']);
-            exit();
         }
 
         $table = $sourceTable;

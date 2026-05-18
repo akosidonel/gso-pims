@@ -170,11 +170,11 @@ include('../include/sidebar.php');
                                     <div class="form-row">
                                         <div class="form-group col-md-6">
                                             <label>Brand/Model</label>
-                                            <input type="text" class="form-control text-uppercase" name="brand_model" id="mv_brand_model" required>
+                                            <input type="text" class="form-control text-uppercase" name="brand_model" id="mv_brand_model">
                                         </div>
                                         <div class="form-group col-md-6">
                                             <label>Property Number</label>
-                                            <input type="text" class="form-control text-uppercase" name="property_number" id="mv_property_number" readonly required>
+                                            <input type="text" class="form-control text-uppercase" name="property_number" id="mv_property_number" readonly>
                                         </div>
                                     </div>
                                     <div class="form-row">
@@ -185,7 +185,7 @@ include('../include/sidebar.php');
                                         <div class="form-group col-md-6 mb-0">
                                             <label>Date Acquired</label>
                                             <div class="input-group date" id="mv_date_acquired_picker" data-target-input="nearest">
-                                                <input type="text" class="form-control" name="date_acquired" id="mv_date_acquired" placeholder="YYYY-MM-DD" required>
+                                                <input type="text" class="form-control" name="date_acquired" id="mv_date_acquired" placeholder="YYYY-MM-DD">
                                                 <div class="input-group-append">
                                                     <span class="input-group-text"><i class="fas fa-calendar-alt"></i></span>
                                                 </div>
@@ -195,7 +195,7 @@ include('../include/sidebar.php');
                                     <div class="form-row mt-3">
                                         <div class="form-group col-md-12 mb-0">
                                             <label>Description</label>
-                                            <textarea class="form-control text-uppercase" name="description" id="mv_description" rows="3" required></textarea>
+                                            <textarea class="form-control text-uppercase" name="description" id="mv_description" rows="3"></textarea>
                                         </div>
                                     </div>
                                 </div>
@@ -213,27 +213,27 @@ include('../include/sidebar.php');
                                     <div class="form-row">
                                         <div class="form-group col-md-6">
                                             <label>Chassis Number</label>
-                                            <input type="text" class="form-control text-uppercase" name="chassis_no" id="mv_chassis_no" required>
+                                            <input type="text" class="form-control text-uppercase" name="chassis_no" id="mv_chassis_no">
                                         </div>
                                         <div class="form-group col-md-6">
                                             <label>Engine Number</label>
-                                            <input type="text" class="form-control text-uppercase" name="engine_no" id="mv_engine_no" required>
+                                            <input type="text" class="form-control text-uppercase" name="engine_no" id="mv_engine_no">
                                         </div>
                                     </div>
                                     <div class="form-row">
                                         <div class="form-group col-md-6">
                                             <label>Plate Number</label>
-                                            <input type="text" class="form-control text-uppercase" name="plate_no" id="mv_plate_no" required>
+                                            <input type="text" class="form-control text-uppercase" name="plate_no" id="mv_plate_no">
                                         </div>
                                         <div class="form-group col-md-6">
                                             <label>Color</label>
-                                            <input type="text" class="form-control text-uppercase" name="color" id="mv_color" required>
+                                            <input type="text" class="form-control text-uppercase" name="color" id="mv_color">
                                         </div>
                                     </div>
                                     <div class="form-row">
                                         <div class="form-group col-md-6">
                                             <label>MV File</label>
-                                            <input type="text" class="form-control text-uppercase" name="mv_file" id="mv_file" required>
+                                            <input type="text" class="form-control text-uppercase" name="mv_file" id="mv_file">
                                         </div>
                                         <div class="form-group col-md-6">
                                             <label>Conduction Sticker</label>
@@ -243,7 +243,7 @@ include('../include/sidebar.php');
                                     <div class="form-row mb-0">
                                         <div class="form-group col-md-6 mb-md-0">
                                             <label>Vehicle Usage</label>
-                                            <select class="form-control text-uppercase" name="vehicle_usage" id="mv_vehicle_usage" required>
+                                            <select class="form-control text-uppercase" name="vehicle_usage" id="mv_vehicle_usage">
                                                 <option value="">Select Usage</option>
                                                 <option value="SERVICE">SERVICE</option>
                                                 <option value="TRUCK">TRUCK</option>
@@ -258,7 +258,7 @@ include('../include/sidebar.php');
                                         </div>
                                         <div class="form-group col-md-6 mb-0">
                                             <label>Capacity</label>
-                                            <input type="text" class="form-control text-uppercase" name="capacity" id="mv_capacity" required>
+                                            <input type="text" class="form-control text-uppercase" name="capacity" id="mv_capacity">
                                         </div>
                                     </div>
                                 </div>
@@ -286,7 +286,7 @@ include('../include/sidebar.php');
                                         </div>
                                         <div class="form-group col-md-4">
                                             <label>Coverage</label>
-                                            <select class="form-control" name="coverage" id="mv_coverage" required>
+                                            <select class="form-control" name="coverage" id="mv_coverage">
                                                 <option value="None">None</option>
                                                 <option value="TPL">TPL</option>
                                                 <option value="Comprehensive">Comprehensive</option>
