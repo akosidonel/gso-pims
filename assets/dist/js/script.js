@@ -9986,6 +9986,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
       field('#mv_plate_no', data.plate_no);
       field('#mv_color', data.color);
       field('#mv_file', data.mv_file);
+      field('#mv_conduction_sticker', data.conduction_sticker);
       field('#mv_vehicle_usage', data.vehicle_usage);
       field('#mv_capacity', data.capacity);
       if (!$('#mv_year_model').val()) { field('#mv_year_model', data.year_model); }
@@ -9997,6 +9998,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
       field('#mv_obr', data.obr);
       field('#mv_pr', data.pr);
       field('#mv_jev', data.jev);
+      field('#mv_remarks', data.remarks);
       $('#mv_coverage').val(data.coverage || 'None');
     }
 

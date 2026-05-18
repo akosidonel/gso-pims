@@ -178,9 +178,18 @@ include('../include/sidebar.php');
                                         </div>
                                     </div>
                                     <div class="form-row">
-                                        <div class="form-group col-md-12 mb-0">
+                                        <div class="form-group col-md-6 mb-md-0">
                                             <label>Amount</label>
                                             <input type="text" inputmode="decimal" class="form-control text-right" name="amount" id="mv_amount" placeholder="0.00">
+                                        </div>
+                                        <div class="form-group col-md-6 mb-0">
+                                            <label>Date Acquired</label>
+                                            <div class="input-group date" id="mv_date_acquired_picker" data-target-input="nearest">
+                                                <input type="text" class="form-control" name="date_acquired" id="mv_date_acquired" placeholder="YYYY-MM-DD" required>
+                                                <div class="input-group-append">
+                                                    <span class="input-group-text"><i class="fas fa-calendar-alt"></i></span>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                     <div class="form-row mt-3">
@@ -227,23 +236,29 @@ include('../include/sidebar.php');
                                             <input type="text" class="form-control text-uppercase" name="mv_file" id="mv_file" required>
                                         </div>
                                         <div class="form-group col-md-6">
-                                            <label>Vehicle Usage</label>
-                                            <input type="text" class="form-control text-uppercase" name="vehicle_usage" id="mv_vehicle_usage" required>
+                                            <label>Conduction Sticker</label>
+                                            <input type="text" class="form-control text-uppercase" name="conduction_sticker" id="mv_conduction_sticker">
                                         </div>
                                     </div>
                                     <div class="form-row mb-0">
                                         <div class="form-group col-md-6 mb-md-0">
-                                            <label>Capacity</label>
-                                            <input type="text" class="form-control text-uppercase" name="capacity" id="mv_capacity" required>
+                                            <label>Vehicle Usage</label>
+                                            <select class="form-control text-uppercase" name="vehicle_usage" id="mv_vehicle_usage" required>
+                                                <option value="">Select Usage</option>
+                                                <option value="SERVICE">SERVICE</option>
+                                                <option value="TRUCK">TRUCK</option>
+                                                <option value="AMBULANCE">AMBULANCE</option>
+                                                <option value="FIRE TRUCK">FIRE TRUCK</option>
+                                                <option value="MOBILE PATROL">MOBILE PATROL</option>
+                                                <option value="RESCUE VEHICLE">RESCUE VEHICLE</option>
+                                                <option value="COMMAND AND CONTROL VEHICLE">COMMAND AND CONTROL VEHICLE</option>
+                                                <option value="INVESTIGATION VEHICLE">INVESTIGATION VEHICLE</option>
+                                                <option value="MOBILE SHOWER">MOBILE SHOWER</option>
+                                            </select>
                                         </div>
                                         <div class="form-group col-md-6 mb-0">
-                                            <label>Date Acquired</label>
-                                            <div class="input-group date" id="mv_date_acquired_picker" data-target-input="nearest">
-                                                <input type="text" class="form-control" name="date_acquired" id="mv_date_acquired" placeholder="YYYY-MM-DD" required>
-                                                <div class="input-group-append">
-                                                    <span class="input-group-text"><i class="fas fa-calendar-alt"></i></span>
-                                                </div>
-                                            </div>
+                                            <label>Capacity</label>
+                                            <input type="text" class="form-control text-uppercase" name="capacity" id="mv_capacity" required>
                                         </div>
                                     </div>
                                 </div>
@@ -300,6 +315,12 @@ include('../include/sidebar.php');
                                         <div class="form-group col-md-3 mb-0">
                                             <label>J.E.V No.</label>
                                             <input type="text" class="form-control text-uppercase" name="jev" id="mv_jev">
+                                        </div>
+                                    </div>
+                                    <div class="form-row mt-3 mb-0">
+                                        <div class="form-group col-md-12 mb-0">
+                                            <label>Remarks</label>
+                                            <textarea class="form-control text-uppercase" name="remarks" id="mv_remarks" rows="3"></textarea>
                                         </div>
                                     </div>
                                 </div>

@@ -120,6 +120,13 @@ if (!function_exists('gso_motor_vehicle_inventory_sql')) {
             return "'" . mysqli_real_escape_string($conn, $code) . "'";
         }, gso_motor_vehicle_account_codes());
         $accountCodes = implode(',', $codes);
+        $remarksColumn = function ($table, $alias) use ($conn) {
+            return gso_column_exists($conn, $table, 'remarks') ? "{$alias}.remarks" : "''";
+        };
+        $parRemarks = $remarksColumn('par_gen_fund', 'p');
+        $sefRemarks = $remarksColumn('property_sef', 's');
+        $trustRemarks = $remarksColumn('trust_fund', 't');
+        $donationRemarks = $remarksColumn('donation', 'd');
 
         return "
             SELECT *
@@ -142,6 +149,7 @@ if (!function_exists('gso_motor_vehicle_inventory_sql')) {
                     p.purchase_request,
                     p.obr_number,
                     p.jev_number,
+                    {$parRemarks} AS remarks,
                     COALESCE(ed.department_name, hd.department_name, hdp.department_name, '') AS department_name,
                     COALESCE(e.emp_name, '') AS end_user
                 FROM par_gen_fund AS p
@@ -177,6 +185,7 @@ if (!function_exists('gso_motor_vehicle_inventory_sql')) {
                     s.purchase_request,
                     s.obr_number,
                     s.jev_number,
+                    {$sefRemarks} AS remarks,
                     COALESCE(ed.department_name, sd.department_name, sdp.department_name, '') AS department_name,
                     COALESCE(e.emp_name, '') AS end_user
                 FROM property_sef AS s
@@ -212,6 +221,7 @@ if (!function_exists('gso_motor_vehicle_inventory_sql')) {
                     t.purchase_request,
                     t.obr_number,
                     t.jev_number,
+                    {$trustRemarks} AS remarks,
                     COALESCE(ed.department_name, hd.department_name, hdp.department_name, '') AS department_name,
                     COALESCE(e.emp_name, '') AS end_user
                 FROM trust_fund AS t
@@ -247,6 +257,7 @@ if (!function_exists('gso_motor_vehicle_inventory_sql')) {
                     d.purchase_request,
                     d.obr_number,
                     d.jev_number,
+                    {$donationRemarks} AS remarks,
                     COALESCE(ed.department_name, hd.department_name, hdp.department_name, '') AS department_name,
                     COALESCE(e.emp_name, '') AS end_user
                 FROM donation AS d
@@ -297,6 +308,18 @@ if (!function_exists('gso_motor_vehicle_date_column')) {
     }
 }
 
+if (!function_exists('gso_motor_vehicle_ensure_schema')) {
+    function gso_motor_vehicle_ensure_schema(mysqli $conn) {
+        static $ensured = false;
+        if ($ensured) { return; }
+        $ensured = true;
+
+        if (!gso_column_exists($conn, 'motor_vehicle', 'conduction_sticker')) {
+            @mysqli_query($conn, "ALTER TABLE motor_vehicle ADD COLUMN conduction_sticker VARCHAR(100) NULL AFTER mv_file");
+        }
+    }
+}
+
 if (!function_exists('gso_motor_vehicle_fetch_record')) {
     function gso_motor_vehicle_fetch_record(mysqli $conn, $sourceTable, $sourceId) {
         $sourceTable = trim((string)$sourceTable);
@@ -307,6 +330,7 @@ if (!function_exists('gso_motor_vehicle_fetch_record')) {
 
         $inventorySql = gso_motor_vehicle_inventory_sql($conn);
         $vehicleDateColumn = gso_motor_vehicle_date_column($conn);
+        $conductionStickerColumn = gso_column_exists($conn, 'motor_vehicle', 'conduction_sticker') ? 'mv.conduction_sticker' : "''";
         $sql = "
             SELECT
                 v.*,
@@ -317,6 +341,7 @@ if (!function_exists('gso_motor_vehicle_fetch_record')) {
                 mv.plate_no,
                 mv.color,
                 mv.mv_file,
+                {$conductionStickerColumn} AS conduction_sticker,
                 mv.vehicle_usage,
                 mv.capacity,
                 mv.year_model,
@@ -363,6 +388,7 @@ if (!function_exists('gso_motor_vehicle_response_record')) {
             'plate_no' => (string)($row['plate_no'] ?? ''),
             'color' => (string)($row['color'] ?? ''),
             'mv_file' => (string)($row['mv_file'] ?? ''),
+            'conduction_sticker' => (string)($row['conduction_sticker'] ?? ''),
             'vehicle_usage' => (string)($row['vehicle_usage'] ?? ''),
             'capacity' => (string)($row['capacity'] ?? ''),
             'year_model' => (string)($row['year_model'] ?? ''),
@@ -375,6 +401,7 @@ if (!function_exists('gso_motor_vehicle_response_record')) {
             'pr' => (string)($row['purchase_request'] ?? ''),
             'obr' => (string)($row['obr_number'] ?? ''),
             'jev' => (string)($row['jev_number'] ?? ''),
+            'remarks' => (string)($row['remarks'] ?? ''),
             'department_name' => (string)($row['department_name'] ?? ''),
             'end_user' => (string)($row['end_user'] ?? ''),
         ];
@@ -891,6 +918,7 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
     }
 
     $mode = strtolower(trim((string)$_REQUEST['motor_vehicle_dashboard']));
+    gso_motor_vehicle_ensure_schema($conn);
     $inventorySql = gso_motor_vehicle_inventory_sql($conn);
     $vehicleDateColumn = gso_motor_vehicle_date_column($conn);
     $dashboardFromSql = gso_motor_vehicle_dashboard_from_sql($inventorySql);
@@ -1131,6 +1159,7 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $plateNo = $text('plate_no');
         $color = $text('color');
         $mvFile = $text('mv_file');
+        $conductionSticker = $text('conduction_sticker');
         $vehicleUsage = $text('vehicle_usage');
         $capacity = $text('capacity');
         $yearModel = (int)($_POST['year_model'] ?? 0);
@@ -1144,6 +1173,19 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $pr = $text('pr');
         $obr = $text('obr');
         $jev = $text('jev');
+        $remarks = $text('remarks');
+
+        $vehicleUsageOptions = [
+            'SERVICE',
+            'TRUCK',
+            'AMBULANCE',
+            'FIRE TRUCK',
+            'MOBILE PATROL',
+            'RESCUE VEHICLE',
+            'COMMAND AND CONTROL VEHICLE',
+            'INVESTIGATION VEHICLE',
+            'MOBILE SHOWER',
+        ];
 
         $amountRaw = preg_replace('/[^0-9.]/', '', (string)($_POST['amount'] ?? ''));
         $amount = $amountRaw === '' ? 0.0 : (float)$amountRaw;
@@ -1169,6 +1211,7 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         if ($color === '') { $missing[] = 'Color'; }
         if ($mvFile === '') { $missing[] = 'MV File'; }
         if ($vehicleUsage === '') { $missing[] = 'Vehicle Usage'; }
+        if ($vehicleUsage !== '' && !in_array($vehicleUsage, $vehicleUsageOptions, true)) { $missing[] = 'Valid Vehicle Usage'; }
         if ($capacity === '') { $missing[] = 'Capacity'; }
         if ($yearModel <= 0) { $missing[] = 'Valid Date Acquired'; }
 
@@ -1185,9 +1228,12 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $table = $sourceTable;
         $idColumn = $sourceMap[$sourceTable]['id'];
         $vehicleDateColumn = gso_motor_vehicle_date_column($conn);
+        $hasSourceRemarks = gso_column_exists($conn, $table, 'remarks');
+        $hasConductionSticker = gso_column_exists($conn, 'motor_vehicle', 'conduction_sticker');
 
         mysqli_begin_transaction($conn);
         try {
+            $assetRemarksSql = $hasSourceRemarks ? ",\n                    remarks = ?" : '';
             $assetSql = "
                 UPDATE {$table}
                 SET model = ?,
@@ -1200,28 +1246,48 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
                     purchase_order = ?,
                     purchase_request = ?,
                     obr_number = ?,
-                    jev_number = ?
+                    jev_number = ?{$assetRemarksSql}
                 WHERE {$idColumn} = ?
                 LIMIT 1
             ";
             $assetStmt = mysqli_prepare($conn, $assetSql);
             if (!$assetStmt) { throw new Exception('Unable to prepare asset update.'); }
-            mysqli_stmt_bind_param(
-                $assetStmt,
-                'ssssdssssssi',
-                $brandModel,
-                $description,
-                $chassisNo,
-                $engineNo,
-                $amount,
-                $dateAcquired,
-                $supplier,
-                $po,
-                $pr,
-                $obr,
-                $jev,
-                $sourceId
-            );
+            if ($hasSourceRemarks) {
+                mysqli_stmt_bind_param(
+                    $assetStmt,
+                    'ssssdsssssssi',
+                    $brandModel,
+                    $description,
+                    $chassisNo,
+                    $engineNo,
+                    $amount,
+                    $dateAcquired,
+                    $supplier,
+                    $po,
+                    $pr,
+                    $obr,
+                    $jev,
+                    $remarks,
+                    $sourceId
+                );
+            } else {
+                mysqli_stmt_bind_param(
+                    $assetStmt,
+                    'ssssdssssssi',
+                    $brandModel,
+                    $description,
+                    $chassisNo,
+                    $engineNo,
+                    $amount,
+                    $dateAcquired,
+                    $supplier,
+                    $po,
+                    $pr,
+                    $obr,
+                    $jev,
+                    $sourceId
+                );
+            }
             if (!mysqli_stmt_execute($assetStmt)) {
                 $assetError = mysqli_stmt_error($assetStmt);
                 mysqli_stmt_close($assetStmt);
@@ -1241,79 +1307,161 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
             mysqli_stmt_close($findStmt);
 
             if ($vehicleId > 0) {
-                $vehicleSql = "
-                    UPDATE motor_vehicle
-                    SET {$vehicleDateColumn} = ?,
-                        chassis_no = ?,
-                        engine_no = ?,
-                        plate_no = ?,
-                        color = ?,
-                        mv_file = ?,
-                        vehicle_usage = ?,
-                        capacity = ?,
-                        year_model = ?,
-                        cr_number = ?,
-                        or_number = ?,
-                        coverage = ?
-                    WHERE motor_vehicle_id = ?
-                    LIMIT 1
-                ";
-                $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
-                if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle update.'); }
-                mysqli_stmt_bind_param(
-                    $vehicleStmt,
-                    'ssssssssisssi',
-                    $dateAcquired,
-                    $chassisNo,
-                    $engineNo,
-                    $plateNo,
-                    $color,
-                    $mvFile,
-                    $vehicleUsage,
-                    $capacity,
-                    $yearModel,
-                    $crNumber,
-                    $orNumber,
-                    $coverage,
-                    $vehicleId
-                );
+                if ($hasConductionSticker) {
+                    $vehicleSql = "
+                        UPDATE motor_vehicle
+                        SET {$vehicleDateColumn} = ?,
+                            chassis_no = ?,
+                            engine_no = ?,
+                            plate_no = ?,
+                            color = ?,
+                            mv_file = ?,
+                            conduction_sticker = ?,
+                            vehicle_usage = ?,
+                            capacity = ?,
+                            year_model = ?,
+                            cr_number = ?,
+                            or_number = ?,
+                            coverage = ?
+                        WHERE motor_vehicle_id = ?
+                        LIMIT 1
+                    ";
+                    $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
+                    if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle update.'); }
+                    mysqli_stmt_bind_param(
+                        $vehicleStmt,
+                        'sssssssssisssi',
+                        $dateAcquired,
+                        $chassisNo,
+                        $engineNo,
+                        $plateNo,
+                        $color,
+                        $mvFile,
+                        $conductionSticker,
+                        $vehicleUsage,
+                        $capacity,
+                        $yearModel,
+                        $crNumber,
+                        $orNumber,
+                        $coverage,
+                        $vehicleId
+                    );
+                } else {
+                    $vehicleSql = "
+                        UPDATE motor_vehicle
+                        SET {$vehicleDateColumn} = ?,
+                            chassis_no = ?,
+                            engine_no = ?,
+                            plate_no = ?,
+                            color = ?,
+                            mv_file = ?,
+                            vehicle_usage = ?,
+                            capacity = ?,
+                            year_model = ?,
+                            cr_number = ?,
+                            or_number = ?,
+                            coverage = ?
+                        WHERE motor_vehicle_id = ?
+                        LIMIT 1
+                    ";
+                    $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
+                    if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle update.'); }
+                    mysqli_stmt_bind_param(
+                        $vehicleStmt,
+                        'ssssssssisssi',
+                        $dateAcquired,
+                        $chassisNo,
+                        $engineNo,
+                        $plateNo,
+                        $color,
+                        $mvFile,
+                        $vehicleUsage,
+                        $capacity,
+                        $yearModel,
+                        $crNumber,
+                        $orNumber,
+                        $coverage,
+                        $vehicleId
+                    );
+                }
             } else {
-                $vehicleSql = "
-                    INSERT INTO motor_vehicle (
-                        property_number,
-                        {$vehicleDateColumn},
-                        chassis_no,
-                        engine_no,
-                        plate_no,
-                        color,
-                        mv_file,
-                        vehicle_usage,
-                        capacity,
-                        year_model,
-                        cr_number,
-                        or_number,
-                        coverage
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ";
-                $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
-                if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle registration.'); }
-                mysqli_stmt_bind_param(
-                    $vehicleStmt,
-                    'sssssssssisss',
-                    $propertyNumber,
-                    $dateAcquired,
-                    $chassisNo,
-                    $engineNo,
-                    $plateNo,
-                    $color,
-                    $mvFile,
-                    $vehicleUsage,
-                    $capacity,
-                    $yearModel,
-                    $crNumber,
-                    $orNumber,
-                    $coverage
-                );
+                if ($hasConductionSticker) {
+                    $vehicleSql = "
+                        INSERT INTO motor_vehicle (
+                            property_number,
+                            {$vehicleDateColumn},
+                            chassis_no,
+                            engine_no,
+                            plate_no,
+                            color,
+                            mv_file,
+                            conduction_sticker,
+                            vehicle_usage,
+                            capacity,
+                            year_model,
+                            cr_number,
+                            or_number,
+                            coverage
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ";
+                    $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
+                    if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle registration.'); }
+                    mysqli_stmt_bind_param(
+                        $vehicleStmt,
+                        'ssssssssssisss',
+                        $propertyNumber,
+                        $dateAcquired,
+                        $chassisNo,
+                        $engineNo,
+                        $plateNo,
+                        $color,
+                        $mvFile,
+                        $conductionSticker,
+                        $vehicleUsage,
+                        $capacity,
+                        $yearModel,
+                        $crNumber,
+                        $orNumber,
+                        $coverage
+                    );
+                } else {
+                    $vehicleSql = "
+                        INSERT INTO motor_vehicle (
+                            property_number,
+                            {$vehicleDateColumn},
+                            chassis_no,
+                            engine_no,
+                            plate_no,
+                            color,
+                            mv_file,
+                            vehicle_usage,
+                            capacity,
+                            year_model,
+                            cr_number,
+                            or_number,
+                            coverage
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ";
+                    $vehicleStmt = mysqli_prepare($conn, $vehicleSql);
+                    if (!$vehicleStmt) { throw new Exception('Unable to prepare vehicle registration.'); }
+                    mysqli_stmt_bind_param(
+                        $vehicleStmt,
+                        'sssssssssisss',
+                        $propertyNumber,
+                        $dateAcquired,
+                        $chassisNo,
+                        $engineNo,
+                        $plateNo,
+                        $color,
+                        $mvFile,
+                        $vehicleUsage,
+                        $capacity,
+                        $yearModel,
+                        $crNumber,
+                        $orNumber,
+                        $coverage
+                    );
+                }
             }
 
             if (!mysqli_stmt_execute($vehicleStmt)) {
