@@ -5,6 +5,9 @@ require_once __DIR__ . '/../database/databaseConnection.php';
 require_once __DIR__ . '/../tcpdf/tcpdf.php';
 
 $refnumber = isset($_GET['refnumber']) ? trim((string)$_GET['refnumber']) : '';
+if ($refnumber === '' && isset($_GET['reference_number'])) {
+  $refnumber = trim((string)$_GET['reference_number']);
+}
 if ($refnumber === '') {
   die('Missing reference number.');
 }
@@ -53,7 +56,7 @@ function gso_repair_blank_new_purchase_history_links(mysqli $conn, string $refer
     SELECT id, created_at
     FROM new_purchase_history
     WHERE reference_number = ?
-      AND UPPER(category) = ?
+      AND REPLACE(UPPER(category), '.', '') = ?
       AND status = 1
       AND (par_number IS NULL OR par_number = '')
     ORDER BY id ASC
@@ -158,7 +161,7 @@ $sqlNew = "
   LEFT JOIN employee AS e ON e.emp_id = h.emp_id
   JOIN department AS d ON d.dept_id = h.dept_id
   WHERE h.reference_number = ?
-    AND UPPER(h.category) = 'PAR'
+    AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
 " . $parsInNew . "
   ORDER BY np.property_number ASC
@@ -212,7 +215,7 @@ $sqlGf = "
   JOIN employee AS e ON e.emp_id = h.emp_id
   JOIN department AS d ON d.dept_id = h.dept_id
   WHERE h.reference_number = ?
-    AND UPPER(h.category) = 'PAR'
+    AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
 " . $parsInGf . "
   ORDER BY p.pargf_id ASC
@@ -264,9 +267,9 @@ $sqlSef = "
   FROM sef_property_history AS h
   JOIN property_sef AS p ON p.property_number = h.property_number
   JOIN employee AS e ON e.emp_id = h.emp_id
-  JOIN department AS d ON d.dept_id = h.sch_id
+  JOIN department AS d ON (d.department_code = h.sch_id OR d.dept_id = h.sch_id)
   WHERE h.reference_number = ?
-    AND UPPER(h.category) = 'PAR'
+    AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
 " . $parsInSef . "
   ORDER BY p.sef_id ASC

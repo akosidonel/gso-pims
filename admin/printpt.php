@@ -87,8 +87,8 @@ class PDF extends TCPDF
     }
   }
 
-      if(isset($_GET['reference_number'])){
-        $refnumber = $_GET['reference_number'];
+      if (isset($_GET['reference_number']) || isset($_GET['refnumber'])) {
+        $refnumber = isset($_GET['reference_number']) ? trim((string)$_GET['reference_number']) : trim((string)$_GET['refnumber']);
         $parFilter = isset($_GET['par']) ? trim($_GET['par']) : '';
                 $parsRaw = isset($_GET['pars']) ? trim($_GET['pars']) : '';
                 $parsFilter = [];
@@ -122,7 +122,7 @@ class PDF extends TCPDF
             LEFT JOIN par_gen_fund AS pg ON i.par_number = pg.par_number
             LEFT JOIN property_sef AS ps ON i.par_number = ps.property_number
             JOIN employee as e ON i.new_user = e.emp_id
-            WHERE i.reference_number = ? AND UPPER(COALESCE(pg.category, ps.category)) = 'PAR'";
+            WHERE i.reference_number = ? AND REPLACE(UPPER(COALESCE(pg.category, ps.category)), '.', '') = 'PAR'";
         $bindTypes = 's';
         $bindValues = [$refnumber];
         if ($parFilter !== '') {
@@ -540,6 +540,10 @@ class PDF extends TCPDF
 
             // Output a single PDF for all items
             $pdf->Output();
+        } else {
+            exit('No PAR transfer records found for this reference number.');
         }
+      } else {
+        exit('Missing reference number.');
       }
 ?>

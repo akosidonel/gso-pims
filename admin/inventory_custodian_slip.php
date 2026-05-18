@@ -81,7 +81,7 @@ if ($refs_csv !== '') {
             JOIN department AS d ON d.dept_id = h.dept_id
             JOIN employee AS e ON e.emp_id = h.emp_id
             WHERE h.reference_number IN ($placeholders)
-              AND UPPER(h.category) = 'ICS'
+              AND REPLACE(UPPER(h.category), '.', '') = 'ICS'
               AND h.status = 1";
         if (count($pars) > 0) { $sqlNew .= ' AND UPPER(np.property_number) IN (' . $parsIn . ')'; }
         $stmtNew = $conn->prepare($sqlNew);
@@ -120,7 +120,7 @@ if ($refs_csv !== '') {
             LEFT JOIN property_sef AS ps ON i.par_number = ps.property_number
             JOIN department AS d ON i.new_dept = d.department_code
             JOIN employee as e ON i.new_user = e.emp_id
-            WHERE i.reference_number IN ($placeholders) AND UPPER(COALESCE(pg.category, ps.category)) = 'ICS'";
+            WHERE i.reference_number IN ($placeholders) AND REPLACE(UPPER(COALESCE(pg.category, ps.category)), '.', '') = 'ICS'";
         if (count($pars) > 0) { $sqlOld .= ' AND i.par_number IN (' . $parsIn . ')'; }
         $stmtOld = $conn->prepare($sqlOld);
         if ($stmtOld) {
@@ -178,7 +178,7 @@ if ($refs_csv !== '') {
         JOIN department AS d ON d.dept_id = h.dept_id
         JOIN employee as e ON e.emp_id = h.emp_id
         WHERE h.reference_number = ?
-          AND UPPER(h.category) = 'ICS'
+          AND REPLACE(UPPER(h.category), '.', '') = 'ICS'
           AND h.status = 1";
     if (count($pars) > 0) { $sqlNew .= ' AND UPPER(np.property_number) IN (' . $parsIn . ')'; }
     $stmtNew = $conn->prepare($sqlNew);
@@ -215,7 +215,7 @@ if ($refs_csv !== '') {
         LEFT JOIN property_sef AS ps ON i.par_number = ps.property_number
         JOIN department AS d ON i.new_dept = d.department_code
         JOIN employee as e ON i.new_user = e.emp_id
-    WHERE i.reference_number = ? AND UPPER(COALESCE(pg.category, ps.category)) = 'ICS'";
+    WHERE i.reference_number = ? AND REPLACE(UPPER(COALESCE(pg.category, ps.category)), '.', '') = 'ICS'";
     if (count($pars) > 0) { $sqlOld .= ' AND i.par_number IN (' . $parsIn . ')'; }
     $stmtOld = $conn->prepare($sqlOld);
     if ($stmtOld) {
