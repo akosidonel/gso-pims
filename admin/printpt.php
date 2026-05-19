@@ -2,6 +2,10 @@
 ini_set("display_errors", "1");
 error_reporting(E_ALL);
 require '../database/databaseConnection.php';
+if (!defined('GSO_AUTH_LIB_ONLY')) {
+    define('GSO_AUTH_LIB_ONLY', true);
+}
+require_once('../auth/auth.php');
 require_once('../tcpdf/tcpdf.php');
 require_once('../include/summarize_print_rows.php');
 
@@ -100,64 +104,8 @@ class PDF extends TCPDF
                                 $parsFilter = array_slice($parsFilter, 0, 200);
                         }
                 }
-        // Use prepared statement for security and select only used columns
-        $sql = "SELECT 
-                e.emp_name as user, i.previous_user, i.previous_dept, d.department_name,
-                COALESCE(pg.model, ps.model) AS model,
-                COALESCE(pg.description, ps.description) AS description,
-                COALESCE(pg.serial_number, ps.serial_number) AS serial_number,
-                COALESCE(pg.serial_number_2, ps.serial_number_2) AS serial_number_2,
-                i.par_number,
-                COALESCE(pg.date_aquired, ps.date_aquired) AS date_aquired,
-                COALESCE(pg.unit_value, ps.unit_value) AS unit_value,
-                COALESCE(pg.supplier, ps.supplier) AS supplier,
-                COALESCE(pg.purchase_order, ps.purchase_order) AS purchase_order,
-                COALESCE(pg.purchase_request, ps.purchase_request) AS purchase_request,
-                COALESCE(pg.obr_number, ps.obr_number) AS obr_number,
-                COALESCE(pg.account_code, ps.account_code) AS account_code,
-            UPPER(COALESCE(pg.category, ps.category)) AS category,
-            UPPER(COALESCE(pg.fund, ps.fund)) AS fund
-            FROM items_user_history AS i
-            JOIN department AS d ON i.new_dept = d.department_code
-            LEFT JOIN par_gen_fund AS pg ON i.par_number = pg.par_number
-            LEFT JOIN property_sef AS ps ON i.par_number = ps.property_number
-            JOIN employee as e ON i.new_user = e.emp_id
-            WHERE i.reference_number = ? AND REPLACE(UPPER(COALESCE(pg.category, ps.category)), '.', '') = 'PAR'";
-        $bindTypes = 's';
-        $bindValues = [$refnumber];
-        if ($parFilter !== '') {
-            $sql .= " AND i.par_number = ?";
-            $bindTypes .= 's';
-            $bindValues[] = $parFilter;
-        } elseif (!empty($parsFilter)) {
-            $placeholders = implode(',', array_fill(0, count($parsFilter), '?'));
-            $sql .= " AND i.par_number IN ($placeholders)";
-            $bindTypes .= str_repeat('s', count($parsFilter));
-            foreach ($parsFilter as $parCode) {
-                $bindValues[] = $parCode;
-            }
-        }
-        $sql .= " ORDER BY i.id ASC";
-
-        $stmt = $conn->prepare($sql);
-        if ($stmt === false) {
-            exit('Failed to prepare print query.');
-        }
-
-        $bindArgs = array_merge([$bindTypes], $bindValues);
-        $bindRefs = [];
-        foreach ($bindArgs as $k => $v) {
-            $bindRefs[$k] = &$bindArgs[$k];
-        }
-        call_user_func_array([$stmt, 'bind_param'], $bindRefs);
-
-        $stmt->execute();
-        $result = $stmt->get_result();
-        if($result && $result->num_rows > 0){
-            // Collect rows first to build a single PDF for all items
-            $rows = [];
-            while ($r = $result->fetch_assoc()) { $rows[] = $r; }
-
+        $rows = gso_fetch_printpt_rows($conn, $refnumber, $parFilter, $parsFilter);
+        if(!empty($rows)){
             // Summarize identical items with no serial numbers into single rows
             $rows = summarizePrintRows($rows);
 

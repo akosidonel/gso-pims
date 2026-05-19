@@ -2827,6 +2827,90 @@ if(!function_exists('gso_fetch_property_transfer_report_rows')){
     }
 }
 
+if(!function_exists('gso_fetch_printpt_rows')){
+    function gso_fetch_printpt_rows(mysqli $conn, string $referenceNumber, string $parFilter = '', array $parsFilter = []): array {
+        $referenceNumber = trim($referenceNumber);
+        if ($referenceNumber === '') {
+            return [];
+        }
+
+        $pars = [];
+        foreach ($parsFilter as $par) {
+            $par = trim((string)$par);
+            if ($par !== '' && !in_array($par, $pars, true)) {
+                $pars[] = $par;
+            }
+        }
+        if (count($pars) > 200) {
+            $pars = array_slice($pars, 0, 200);
+        }
+
+        $sql = "
+            SELECT
+                e.emp_name AS user,
+                i.previous_user,
+                i.previous_dept,
+                COALESCE(d_code.department_name, d_id.department_name, i.new_dept) AS department_name,
+                COALESCE(pg.model, ps.model) AS model,
+                COALESCE(pg.description, ps.description) AS description,
+                COALESCE(pg.serial_number, ps.serial_number) AS serial_number,
+                COALESCE(pg.serial_number_2, ps.serial_number_2) AS serial_number_2,
+                i.par_number,
+                COALESCE(pg.date_aquired, ps.date_aquired) AS date_aquired,
+                COALESCE(pg.unit_value, ps.unit_value) AS unit_value,
+                COALESCE(pg.supplier, ps.supplier) AS supplier,
+                COALESCE(pg.purchase_order, ps.purchase_order) AS purchase_order,
+                COALESCE(pg.purchase_request, ps.purchase_request) AS purchase_request,
+                COALESCE(pg.obr_number, ps.obr_number) AS obr_number,
+                COALESCE(pg.account_code, ps.account_code) AS account_code,
+                UPPER(COALESCE(pg.category, ps.category)) AS category,
+                UPPER(COALESCE(pg.fund, ps.fund)) AS fund
+            FROM items_user_history AS i
+            LEFT JOIN department AS d_code ON i.new_dept = d_code.department_code
+            LEFT JOIN department AS d_id ON CAST(i.new_dept AS UNSIGNED) = d_id.dept_id
+            LEFT JOIN par_gen_fund AS pg ON i.par_number = pg.par_number
+            LEFT JOIN property_sef AS ps ON i.par_number = ps.property_number
+            JOIN employee AS e ON i.new_user = e.emp_id
+            WHERE i.reference_number = ?
+              AND REPLACE(UPPER(TRIM(COALESCE(pg.category, ps.category))), '.', '') = 'PAR'
+        ";
+
+        $types = 's';
+        $params = [$referenceNumber];
+        if ($parFilter !== '') {
+            $sql .= " AND i.par_number = ?";
+            $types .= 's';
+            $params[] = $parFilter;
+        } elseif (count($pars) > 0) {
+            $sql .= " AND i.par_number IN (" . implode(',', array_fill(0, count($pars), '?')) . ")";
+            $types .= str_repeat('s', count($pars));
+            foreach ($pars as $par) {
+                $params[] = $par;
+            }
+        }
+        $sql .= " ORDER BY i.id ASC";
+
+        $stmt = mysqli_prepare($conn, $sql);
+        if (!$stmt) {
+            return [];
+        }
+
+        gso_stmt_bind_params($stmt, $types, $params);
+        mysqli_stmt_execute($stmt);
+
+        $rows = [];
+        $result = mysqli_stmt_get_result($stmt);
+        if ($result) {
+            while ($row = mysqli_fetch_assoc($result)) {
+                $rows[] = $row;
+            }
+        }
+
+        mysqli_stmt_close($stmt);
+        return $rows;
+    }
+}
+
 // Allow other PHP scripts (e.g., print templates) to include this file as a library without
 // running the request/JSON handlers below.
 if (defined('GSO_AUTH_LIB_ONLY') && GSO_AUTH_LIB_ONLY) {
@@ -5151,6 +5235,15 @@ if (isset($_POST['bulkTransferPar'])) {
     $ptrRes     = mysqli_query($conn, "SELECT MAX(CAST(SUBSTRING_INDEX(ptr_number,'-',-1) AS UNSIGNED)) AS m FROM items_user_history WHERE ptr_number LIKE CONCAT('$ptrPrefEsc','%')");
     $ptrCounter = ($ptrRes && ($r = mysqli_fetch_assoc($ptrRes)) && $r['m'] !== null) ? (int)$r['m'] : 0;
     $usedPtrs   = [];
+    $movedCount = 0;
+    $run = function ($sql, $mustAffect = false) use ($conn) {
+        if (!mysqli_query($conn, $sql)) {
+            throw new Exception(mysqli_error($conn));
+        }
+        if ($mustAffect && mysqli_affected_rows($conn) < 1) {
+            throw new Exception('No property data was copied. Transfer cancelled.');
+        }
+    };
 
     mysqli_begin_transaction($conn);
     try {
@@ -5172,39 +5265,39 @@ if (isset($_POST['bulkTransferPar'])) {
 
             // Deactivate current history
             if ($srcIsGF) {
-                mysqli_query($conn, "UPDATE general_fund_property_history SET status='0', created_at='$today' WHERE par_number='$parSafe' AND status='1'");
+                $run("UPDATE general_fund_property_history SET status='0', created_at='$today' WHERE par_number='$parSafe' AND status='1'", true);
             } else {
-                mysqli_query($conn, "UPDATE sef_property_history SET status='0', created_at='$today' WHERE property_number='$parSafe' AND status='1'");
+                $run("UPDATE sef_property_history SET status='0', created_at='$today' WHERE property_number='$parSafe' AND status='1'", true);
             }
 
             // Move physical data between fund tables when fund type changes
             if ($srcIsGF && !$destIsGF) {
                 // GF → SEF: copy from par_gen_fund to property_sef, then remove from par_gen_fund
                 $newIcs = mysqli_real_escape_string($conn, $nextParIcs('property_sef', $category, 'SEF'));
-                mysqli_query($conn, "INSERT INTO property_sef (category,item,model,description,serial_number,serial_number_2,property_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks)
-                    SELECT category,item,model,description,serial_number,serial_number_2,par_number,unit,unit_value,date_aquired,account_code,'SPECIAL EDUCATION FUND',supplier,'$newIcs',purchase_order,purchase_request,obr_number,jev_number,remarks
-                    FROM par_gen_fund WHERE par_number='$parSafe' LIMIT 1");
-                mysqli_query($conn, "DELETE FROM par_gen_fund WHERE par_number='$parSafe'");
+                $run("INSERT INTO property_sef (category,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks)
+                    SELECT category,item,model,description,serial_number,serial_number_2,par_number,unit_value,date_aquired,account_code,'SPECIAL EDUCATION FUND',supplier,'$newIcs',purchase_order,purchase_request,obr_number,jev_number,remarks
+                    FROM par_gen_fund WHERE par_number='$parSafe' LIMIT 1", true);
+                $run("DELETE FROM par_gen_fund WHERE par_number='$parSafe'", true);
             } elseif (!$srcIsGF && $destIsGF) {
                 // SEF → GF: copy from property_sef to par_gen_fund, then remove from property_sef
                 $newIcs = mysqli_real_escape_string($conn, $nextParIcs('par_gen_fund', $category, 'GF'));
-                mysqli_query($conn, "INSERT INTO par_gen_fund (category,item,model,description,serial_number,serial_number_2,par_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks)
-                    SELECT category,item,model,description,serial_number,serial_number_2,property_number,unit,unit_value,date_aquired,account_code,'GENERAL FUND',supplier,'$newIcs',purchase_order,purchase_request,obr_number,jev_number,remarks
-                    FROM property_sef WHERE property_number='$parSafe' LIMIT 1");
-                mysqli_query($conn, "DELETE FROM property_sef WHERE property_number='$parSafe'");
+                $run("INSERT INTO par_gen_fund (category,item,model,description,serial_number,serial_number_2,par_number,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks)
+                    SELECT category,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,'GENERAL FUND',supplier,'$newIcs',purchase_order,purchase_request,obr_number,jev_number,remarks
+                    FROM property_sef WHERE property_number='$parSafe' LIMIT 1", true);
+                $run("DELETE FROM property_sef WHERE property_number='$parSafe'", true);
             } else {
                 // Same fund: just refresh par_ics_number in the existing table
                 $destTable = $destIsGF ? 'par_gen_fund' : 'property_sef';
                 $destPnCol = $destIsGF ? 'par_number'   : 'property_number';
                 $newIcs    = mysqli_real_escape_string($conn, $nextParIcs($destTable, $category, $destIsGF ? 'GF' : 'SEF'));
-                mysqli_query($conn, "UPDATE $destTable SET par_ics_number='$newIcs' WHERE $destPnCol='$parSafe' LIMIT 1");
+                $run("UPDATE $destTable SET par_ics_number='$newIcs' WHERE $destPnCol='$parSafe' LIMIT 1", true);
             }
 
             // Insert active history in the destination fund table
             if ($destIsGF) {
-                mysqli_query($conn, "INSERT INTO general_fund_property_history (emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES ('$newUserId','$newDept','$parSafe','$referenceNumber','1','$category','$today')");
+                $run("INSERT INTO general_fund_property_history (emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES ('$newUserId','$newDept','$parSafe','$referenceNumber','1','$category','$today')");
             } else {
-                mysqli_query($conn, "INSERT INTO sef_property_history (emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES ('$newUserId','$newDept','$parSafe','$referenceNumber','1','$category','$today')");
+                $run("INSERT INTO sef_property_history (emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES ('$newUserId','$newDept','$parSafe','$referenceNumber','1','$category','$today')");
             }
 
             // Generate unique PTR number for this item
@@ -5216,8 +5309,13 @@ if (isset($_POST['bulkTransferPar'])) {
             } while ($ptrExists);
             $usedPtrs[$ptr] = true;
 
-            mysqli_query($conn, "INSERT INTO items_user_history (par_number,new_user,new_dept,previous_user,previous_dept,reason,unit_condition,reference_number,ptr_number) VALUES ('$parSafe','$newUserId','$newDept','$prevEmpName','$prevDeptName',$reason,$condition,'$referenceNumber','$ptrEsc')");
-            mysqli_query($conn, "INSERT INTO activity_log (admin_id,ip_address,activity) VALUES ('$uid','$uip','" . mysqli_real_escape_string($conn, "Transferred $par to new user id $newUserId") . "')");
+            $run("INSERT INTO items_user_history (par_number,new_user,new_dept,previous_user,previous_dept,reason,unit_condition,reference_number,ptr_number) VALUES ('$parSafe','$newUserId','$newDept','$prevEmpName','$prevDeptName',$reason,$condition,'$referenceNumber','$ptrEsc')");
+            $run("INSERT INTO activity_log (admin_id,ip_address,activity) VALUES ('$uid','$uip','" . mysqli_real_escape_string($conn, "Transferred $par to new user id $newUserId") . "')");
+            $movedCount++;
+        }
+
+        if ($movedCount < 1) {
+            throw new Exception('No active property records were found for transfer.');
         }
 
         mysqli_commit($conn);
