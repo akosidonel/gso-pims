@@ -9,6 +9,7 @@ define('PTR_PAGE_HEIGHT', 356);
 define('PTR_MARGIN', 10);
 define('PTR_BOTTOM_Y', PTR_PAGE_HEIGHT - PTR_MARGIN);
 define('PTR_FOOTER_HEIGHT', 80);
+define('PTR_FOOTER_TOP', PTR_BOTTOM_Y - PTR_FOOTER_HEIGHT);
 define('PTR_ROW_MIN_HEIGHT', 14);
 define('PTR_ROW_MAX_HEIGHT', 140);
 define('PTR_COL', [12, 25, 40, 50, 35, 34]);
@@ -198,15 +199,24 @@ function ptr_format_item(TCPDF $pdf, array $item): array {
 }
 
 function ptr_row_fits(TCPDF $pdf, float $rowHeight, bool $needsFooter): bool {
-    $bottomY = PTR_BOTTOM_Y - ($needsFooter ? PTR_FOOTER_HEIGHT : 0);
+    $bottomY = $needsFooter ? PTR_FOOTER_TOP : PTR_BOTTOM_Y;
     return ($pdf->GetY() + $rowHeight) <= $bottomY;
 }
 
-function ptr_close_table(TCPDF $pdf): void {
-    $y = $pdf->GetY();
-    if ($y < PTR_BOTTOM_Y) {
-        $pdf->Line(PTR_MARGIN, $y, PTR_PAGE_WIDTH - PTR_MARGIN, $y);
+function ptr_extend_table_to_footer(TCPDF $pdf): void {
+    $startY = $pdf->GetY();
+    if ($startY >= PTR_FOOTER_TOP) {
+        $pdf->SetY(PTR_FOOTER_TOP);
+        return;
     }
+
+    $x = PTR_MARGIN;
+    $pdf->Line($x, $startY, $x, PTR_FOOTER_TOP);
+    foreach (PTR_COL as $width) {
+        $x += $width;
+        $pdf->Line($x, $startY, $x, PTR_FOOTER_TOP);
+    }
+    $pdf->SetY(PTR_FOOTER_TOP);
 }
 
 function ptr_render_item_row(TCPDF $pdf, array $row): void {
@@ -226,6 +236,8 @@ function ptr_render_item_row(TCPDF $pdf, array $row): void {
 }
 
 function ptr_render_footer(TCPDF $pdf, array $meta): void {
+    ptr_extend_table_to_footer($pdf);
+
     $pdf->SetFont('dejavusans', '', 9);
     $pdf->Cell(0, 8, 'Reason for Transfer: ' . ($meta['reason'] ?? ''), 'LTR', 1, 'L');
     for ($i = 0; $i < 3; $i++) {
