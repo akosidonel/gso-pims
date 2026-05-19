@@ -29,7 +29,8 @@ $par_sub = [
     '1-07-06-040' => '06-040',// Watercraft
     '5-02-03-990' => '03-990',// Other Supplies
     '5-02-03-010' => '03-010',// Office Supplies Expenses
-    '5-02-99-990' => '99-990' // Other Maintenance and Operating Expenses
+    '5-02-99-990' => '99-990', // Other Maintenance and Operating Expenses
+    '5-02-99-020' => '99-020' // Printing and Publication Expenses
 ];
 $ics_sub = [
     '1-07-05-030' => '223',// IT Equipment
@@ -51,7 +52,8 @@ $ics_sub = [
     '1-07-06-040' => '244',// Watercraft
     '5-02-03-990' => '878',// Other Supplies
     '5-02-03-010' => '755', // Office Supplies Expenses
-    '5-02-99-990' => '779' // Other Maintenance and Operating Expenses
+    '5-02-99-990' => '779', // Other Maintenance and Operating Expenses
+    '5-02-99-020' => '781' // Printing and Publication Expenses
 ];
 
 // Department code mapping
