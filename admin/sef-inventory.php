@@ -340,12 +340,13 @@ $refNumber = generateReferenceNumber($conn,'sef_property_history', 'reference_nu
                 <th style="width:50px;">#</th>
                 <th style="min-width:140px;">Property No.</th>
                 <th style="min-width:180px;">Item</th>
+                <th style="min-width:160px;">Serial Number</th>
                 <th style="min-width:160px;">Current User</th>
                 <th style="min-width:160px;">Department</th>
               </tr>
             </thead>
             <tbody id="bulkTransferTableBody">
-              <tr><td colspan="5" class="text-center text-muted">No selection.</td></tr>
+              <tr><td colspan="6" class="text-center text-muted">No selection.</td></tr>
             </tbody>
           </table>
         </div>
@@ -659,11 +660,15 @@ $refNumber = generateReferenceNumber($conn,'sef_property_history', 'reference_nu
             var user = escHtml(row.emp_name);
             var cat  = escHtml(row.category || '');
             var par  = escHtml(data || '');
+            var sn1 = escHtml(row.serial_number || '');
+            var sn2 = escHtml(row.serial_number_2 || '');
             return '<input type="checkbox" class="row-select"' +
                    ' value="' + par + '"' +
                    ' data-item="' + item + '"' +
                    ' data-user="' + user + '"' +
                    ' data-cat="' + cat + '"' +
+                   ' data-serial="' + sn1 + '"' +
+                   ' data-serial2="' + sn2 + '"' +
                    ' aria-label="Select property ' + par + '">';
           }
         },
@@ -788,23 +793,29 @@ $refNumber = generateReferenceNumber($conn,'sef_property_history', 'reference_nu
                 item: row.item,
                 user: row.user,
                 cat: row.cat,
+                serial: row.serial || '',
+                serial2: row.serial2 || '',
                 dept: deptName
               };
             });
             var $tbody = $('#bulkTransferTableBody');
             $tbody.empty();
             if(!selected.length){
-              $tbody.append('<tr><td colspan="5" class="text-center text-muted">No selection.</td></tr>');
+              $tbody.append('<tr><td colspan="6" class="text-center text-muted">No selection.</td></tr>');
             } else {
               selected.forEach(function(r, idx){
                 var safePar = $('<div>').text(r.par).html();
                 var safeItem = $('<div>').text(r.item).html();
+                var safeSerial = $('<div>').text(r.serial).html();
+                var safeSerial2 = $('<div>').text(r.serial2).html();
+                var serialDisplay = safeSerial || safeSerial2 ? (safeSerial + (safeSerial2 ? ' / ' + safeSerial2 : '')) : 'N/A';
                 var safeUser = $('<div>').text(r.user).html();
                 var safeDept = $('<div>').text(r.dept).html();
                 $tbody.append('<tr>'+
                   '<td>'+(idx+1)+'</td>'+
                   '<td>'+safePar+'</td>'+
                   '<td>'+safeItem+'</td>'+
+                  '<td>'+serialDisplay+'</td>'+
                   '<td>'+safeUser+'</td>'+
                   '<td>'+safeDept+'</td>'+
                 '</tr>');
@@ -885,7 +896,9 @@ $refNumber = generateReferenceNumber($conn,'sef_property_history', 'reference_nu
           par: par,
           item: $(this).data('item') || '',
           user: $(this).data('user') || '',
-          cat: $(this).data('cat') || ''
+          cat: $(this).data('cat') || '',
+          serial: $(this).data('serial') || '',
+          serial2: $(this).data('serial2') || ''
         };
       } else {
         delete selectedInventoryRows[par];
@@ -903,7 +916,9 @@ $refNumber = generateReferenceNumber($conn,'sef_property_history', 'reference_nu
         par: par,
         item: $(this).data('item') || '',
         user: $(this).data('user') || '',
-        cat: $(this).data('cat') || ''
+        cat: $(this).data('cat') || '',
+        serial: $(this).data('serial') || '',
+        serial2: $(this).data('serial2') || ''
       };
     } else {
       delete selectedInventoryRows[par];

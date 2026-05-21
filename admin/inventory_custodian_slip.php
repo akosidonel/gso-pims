@@ -419,9 +419,31 @@ function gso_ics_description(array $row): string {
     if ($qty < 1) { $qty = 1; }
     $model = gso_ics_is_new_condition($row) ? '' : trim((string)($row['model'] ?? ''));
     $base = trim($model . ' ' . trim((string)($row['description'] ?? '')));
-    if ($qty > 1) { return $base; }
-    $serial = trim((string)($row['serial_number'] ?? ''));
-    return $serial !== '' ? ($base . "\nSN: " . $serial) : $base;
+    
+    // Handle serial numbers - check if we have an array of serial numbers (from grouping)
+    $serialsArray = $row['serial_numbers'] ?? [];
+    if (!is_array($serialsArray)) {
+        $serialsArray = [trim((string)($row['serial_number'] ?? ''))];
+    }
+    
+    // Filter out empty serial numbers
+    $serialsArray = array_filter(array_map('trim', $serialsArray), function ($s) {
+        return $s !== '';
+    });
+    
+    if (empty($serialsArray)) {
+        return $base;
+    }
+    
+    // Format serial numbers
+    $serialDisplay = '';
+    if (count($serialsArray) === 1) {
+        $serialDisplay = "SN: " . reset($serialsArray);
+    } else {
+        $serialDisplay = "SNs: " . implode(', ', $serialsArray);
+    }
+    
+    return $base . "\n" . $serialDisplay;
 }
 
 function gso_ics_row_height($pdf, array $row, array $colWidths): float {

@@ -115,11 +115,16 @@ function summarizePrintRows(array $rows): array {
         $row['qty'] = 1;
         $row['total_value'] = (float)($row['unit_value'] ?? 0);
         $row['par_numbers'] = [$row['par_number'] ?? ''];
+        $row['serial_numbers'] = [trim((string)($row['serial_number'] ?? ''))];
+        $row['serial_numbers_2'] = [trim((string)($row['serial_number_2'] ?? ''))];
 
         $endUser = strtoupper(trim((string)($row['emp_id'] ?? ($row['user'] ?? ''))));
         $model   = strtoupper(trim((string)($row['model'] ?? '')));
         $desc    = strtoupper(trim((string)($row['description'] ?? '')));
         $unit    = strtoupper(trim((string)($row['unit'] ?? '')));
+        
+        // Group by user, model, description, and unit only
+        // Serial numbers will be aggregated in arrays
         $key     = $endUser . '|' . $model . '|' . $desc . '|' . $unit;
 
         if (!isset($grouped[$key])) {
@@ -128,6 +133,9 @@ function summarizePrintRows(array $rows): array {
             $grouped[$key]['qty']++;
             $grouped[$key]['total_value'] += (float)($row['unit_value'] ?? 0);
             $grouped[$key]['par_numbers'][] = $row['par_number'] ?? '';
+            // Accumulate serial numbers from all grouped items
+            $grouped[$key]['serial_numbers'][] = trim((string)($row['serial_number'] ?? ''));
+            $grouped[$key]['serial_numbers_2'][] = trim((string)($row['serial_number_2'] ?? ''));
         }
     }
 
