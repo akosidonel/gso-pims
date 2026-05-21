@@ -116,6 +116,170 @@ if(!function_exists('gso_resolve_history_department')){
         return null;
     }
 }
+if (!function_exists('gso_new_purchase_group_ids')) {
+    function gso_new_purchase_group_ids(mysqli $conn, $po = '', $rowId = 0) {
+        $po = trim((string)$po);
+        $rowId = (int)$rowId;
+
+        if ($po === '' && $rowId <= 0) {
+            return [];
+        }
+
+        if ($po !== '') {
+            $sql = "SELECT id
+                    FROM new_purchase
+                    WHERE UPPER(TRIM(COALESCE(purchase_order, ''))) = ?
+                    ORDER BY id ASC";
+            $stmt = mysqli_prepare($conn, $sql);
+            if (!$stmt) { return []; }
+            $poKey = strtoupper($po);
+            mysqli_stmt_bind_param($stmt, 's', $poKey);
+        } else {
+            $sql = "SELECT id
+                    FROM new_purchase
+                    WHERE id = ?
+                    ORDER BY id ASC";
+            $stmt = mysqli_prepare($conn, $sql);
+            if (!$stmt) { return []; }
+            mysqli_stmt_bind_param($stmt, 'i', $rowId);
+        }
+
+        mysqli_stmt_execute($stmt);
+        $res = mysqli_stmt_get_result($stmt);
+        $ids = [];
+        if ($res) {
+            while ($row = mysqli_fetch_assoc($res)) {
+                $id = (int)($row['id'] ?? 0);
+                if ($id > 0) {
+                    $ids[] = $id;
+                }
+            }
+        }
+        mysqli_stmt_close($stmt);
+
+        return $ids;
+    }
+}
+if (!function_exists('gso_new_purchase_group_rows')) {
+    function gso_new_purchase_group_rows(mysqli $conn, $po = '', $rowId = 0) {
+        $po = trim((string)$po);
+        $rowId = (int)$rowId;
+        if ($po === '' && $rowId <= 0) {
+            return [];
+        }
+
+        $where = $rowId > 0 ? 'np.id = ?' : 'np.purchase_order = ?';
+        $sql = "
+            SELECT
+                np.id,
+                np.unit, np.item, np.model, np.description,
+                np.serial_number, np.serial_number_2,
+                COALESCE(
+                    NULLIF(np.property_number, ''),
+                    CASE
+                        WHEN h.par_number LIKE 'NPID:%' THEN ''
+                        ELSE COALESCE(h.par_number, '')
+                    END
+                ) AS property_number,
+                np.fund, np.category, np.unit_value, np.date_aquired,
+                np.account_code, np.supplier, np.par_ics_number,
+                np.purchase_order, np.purchase_request, np.obr_number,
+                np.jev_number, np.remarks,
+                COALESCE(d_by_id.department_name, d_by_code.department_name) AS department_name,
+                COALESCE(d_by_id.department_code, d_by_code.department_code) AS department_code,
+                h.dept_id, h.emp_id, e.emp_name,
+                h.category AS doc_type, h.reference_number
+            FROM new_purchase AS np
+            LEFT JOIN new_purchase_history AS h
+                ON (h.par_number = np.property_number OR h.par_number = CONCAT('NPID:', np.id)) AND h.status = 1
+            LEFT JOIN department AS d_by_id ON d_by_id.dept_id = h.dept_id
+            LEFT JOIN department AS d_by_code ON d_by_code.department_code = h.dept_id
+            LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+            WHERE {$where}
+              AND (
+                np.property_number IS NULL
+                OR np.property_number = ''
+                OR np.id = (
+                    SELECT MIN(np2.id)
+                    FROM new_purchase AS np2
+                    WHERE np2.property_number = np.property_number
+                )
+              )
+            ORDER BY np.id ASC
+        ";
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) { return []; }
+        if ($rowId > 0) {
+            $stmt->bind_param('i', $rowId);
+        } else {
+            $stmt->bind_param('s', $po);
+        }
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $rows = [];
+        if ($result) {
+            while ($row = mysqli_fetch_assoc($result)) {
+                $rows[] = $row;
+            }
+        }
+        $stmt->close();
+        return $rows;
+    }
+}
+
+if (!function_exists('gso_new_purchase_property_number_in_use')) {
+    function gso_new_purchase_property_number_in_use($conn, $candidate, $newPurchaseId = 0, $oldPropertyNumber = '') {
+        $candidate = strtoupper(trim((string)$candidate));
+        $oldPropertyNumber = strtoupper(trim((string)$oldPropertyNumber));
+        $newPurchaseId = (int)$newPurchaseId;
+
+        if ($candidate === '') {
+            return false;
+        }
+
+        if ($oldPropertyNumber !== '' && $candidate === $oldPropertyNumber) {
+            return false;
+        }
+
+        $stmtDup = $conn->prepare('
+            SELECT 1
+            FROM (
+                SELECT property_number AS prop FROM new_purchase WHERE property_number = ? AND id <> ?
+                UNION ALL SELECT par_number AS prop FROM new_purchase_history WHERE par_number = ? AND par_number <> ?
+                UNION ALL SELECT property_number AS prop FROM new_bundle_purchase WHERE property_number = ? AND property_number <> ?
+                UNION ALL SELECT bundle_with AS prop FROM new_bundle_purchase WHERE bundle_with = ? AND bundle_with <> ?
+                UNION ALL SELECT par_number AS prop FROM par_gen_fund WHERE par_number = ?
+                UNION ALL SELECT property_number AS prop FROM property_sef WHERE property_number = ?
+            ) AS duplicates
+            LIMIT 1
+        ');
+
+        if (!$stmtDup) {
+            throw new RuntimeException('Prepare failed: ' . $conn->error);
+        }
+
+        $stmtDup->bind_param(
+            'sissssssss',
+            $candidate,
+            $newPurchaseId,
+            $candidate,
+            $oldPropertyNumber,
+            $candidate,
+            $oldPropertyNumber,
+            $candidate,
+            $oldPropertyNumber,
+            $candidate,
+            $candidate
+        );
+        $stmtDup->execute();
+        $resDup = $stmtDup->get_result();
+        $inUse = $resDup && $resDup->num_rows > 0;
+        $stmtDup->close();
+
+        return $inUse;
+    }
+}
 
 if (!function_exists('gso_motor_vehicle_account_codes')) {
     function gso_motor_vehicle_account_codes() {
@@ -6252,6 +6416,512 @@ if (isset($_POST['update_np_po'])) {
     return false;
 }
 
+if (isset($_POST['fetch_new_purchase_group'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!isset($_SESSION['alogin']) || trim((string)$_SESSION['alogin']) === '') {
+        echo json_encode(['status' => 401, 'message' => 'Unauthorized.']);
+        return false;
+    }
+
+    $po = trim((string)($_POST['po'] ?? ''));
+    $rowId = (int)($_POST['row_id'] ?? 0);
+    $rows = gso_new_purchase_group_rows($conn, $po, $rowId);
+
+    if (empty($rows)) {
+        echo json_encode(['status' => 404, 'message' => 'No matching purchase details found.']);
+        return false;
+    }
+
+    $first = $rows[0];
+    $items = [];
+    $setNo = 1;
+    foreach ($rows as $row) {
+        $items[] = [
+            'set_no' => $setNo++,
+            'id' => (int)($row['id'] ?? 0),
+            'unit' => (string)($row['unit'] ?? ''),
+            'item' => (string)($row['item'] ?? ''),
+            'model' => (string)($row['model'] ?? ''),
+            'description' => (string)($row['description'] ?? ''),
+            'serial_number' => (string)($row['serial_number'] ?? ''),
+            'serial_number_2' => (string)($row['serial_number_2'] ?? ''),
+            'property_number' => (string)($row['property_number'] ?? ''),
+            'unit_value' => (string)($row['unit_value'] ?? ''),
+            'account_code' => (string)($row['account_code'] ?? ''),
+            'remarks' => (string)($row['remarks'] ?? ''),
+            'emp_id' => (string)($row['emp_id'] ?? ''),
+            'emp_name' => (string)($row['emp_name'] ?? ''),
+        ];
+    }
+
+    echo json_encode([
+        'status' => 200,
+        'message' => 'OK',
+        'data' => [
+            'group' => [
+                'po' => (string)($first['purchase_order'] ?? ''),
+                'row_id' => $rowId,
+                'condition' => 'NEW',
+                'category' => (string)($first['category'] ?? ''),
+                'year' => (string)($first['date_aquired'] ?? ''),
+                'fund' => (string)($first['fund'] ?? ''),
+                'par_ics_number' => (string)($first['par_ics_number'] ?? ''),
+                'purchase_request' => (string)($first['purchase_request'] ?? ''),
+                'supplier' => (string)($first['supplier'] ?? ''),
+                'obr_number' => (string)($first['obr_number'] ?? ''),
+                'jev_number' => (string)($first['jev_number'] ?? ''),
+                'department_code' => (string)($first['department_code'] ?? ''),
+                'department_name' => (string)($first['department_name'] ?? ''),
+            ],
+            'items' => $items,
+        ],
+    ]);
+    return false;
+}
+
+if (isset($_POST['update_new_purchase_group'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!isset($_SESSION['alogin']) || trim((string)$_SESSION['alogin']) === '') {
+        echo json_encode(['status' => 401, 'message' => 'Unauthorized.']);
+        return false;
+    }
+
+    $po = trim((string)($_POST['po'] ?? ''));
+    $rowId = (int)($_POST['row_id'] ?? 0);
+    $currentRows = gso_new_purchase_group_rows($conn, $po, $rowId);
+    if (empty($currentRows)) {
+        echo json_encode(['status' => 404, 'message' => 'No matching purchase details found.']);
+        return false;
+    }
+
+    $currentById = [];
+    foreach ($currentRows as $row) {
+        $id = (int)($row['id'] ?? 0);
+        if ($id > 0) {
+            $currentById[$id] = $row;
+        }
+    }
+    if (empty($currentById)) {
+        echo json_encode(['status' => 404, 'message' => 'No editable items were found.']);
+        return false;
+    }
+
+    $postedSetKeys = isset($_POST['set_keys']) && is_array($_POST['set_keys']) ? $_POST['set_keys'] : [];
+    $setKeys = [];
+    foreach ($postedSetKeys as $postedKey) {
+        $setKey = trim((string)$postedKey);
+        if ($setKey !== '' && !in_array($setKey, $setKeys, true)) {
+            $setKeys[] = $setKey;
+        }
+    }
+    if (empty($setKeys)) {
+        foreach (array_keys($currentById) as $fallbackId) {
+            $setKeys[] = (string)$fallbackId;
+        }
+    }
+
+    $fund = strtoupper(trim((string)($_POST['fund'] ?? '')));
+    $category = strtoupper(trim((string)($_POST['category'] ?? '')));
+    $year = trim((string)($_POST['year'] ?? ''));
+    $purchaseOrder = strtoupper(trim((string)($_POST['purchase_order'] ?? '')));
+    $purchaseRequest = strtoupper(trim((string)($_POST['purchase_request'] ?? '')));
+    $obrNumber = strtoupper(trim((string)($_POST['obr_number'] ?? '')));
+    $jevNumber = strtoupper(trim((string)($_POST['jev_number'] ?? '')));
+    $supplier = strtoupper(trim((string)($_POST['supplier'] ?? '')));
+    $parIcsNumber = strtoupper(trim((string)($_POST['par_ics_number'] ?? '')));
+    $deptInput = trim((string)($_POST['dept_id'] ?? ''));
+
+    if ($fund === '' || $category === '' || $year === '' || $deptInput === '') {
+        echo json_encode(['status' => 422, 'message' => 'Fund, category, year, and department are required.']);
+        return false;
+    }
+
+    $departmentRow = gso_find_department_by_code($conn, $deptInput);
+    if (!$departmentRow && ctype_digit($deptInput)) {
+        $departmentRow = gso_find_department_by_pk($conn, (int)$deptInput);
+    }
+    if (!$departmentRow) {
+        echo json_encode(['status' => 422, 'message' => 'Invalid department selected.']);
+        return false;
+    }
+
+    $departmentPk = (int)($departmentRow['dept_id'] ?? 0);
+    $departmentCode = trim((string)($departmentRow['department_code'] ?? ''));
+    $propertyNumberOptionalFund = in_array($fund, ['TRUST FUND', 'DONATION'], true);
+    $referenceNumber = '';
+    foreach ($currentRows as $row) {
+        $candidateReference = trim((string)($row['reference_number'] ?? ''));
+        if ($candidateReference !== '') {
+            $referenceNumber = $candidateReference;
+            break;
+        }
+    }
+    if ($referenceNumber === '') {
+        $referenceNumber = generateReferenceNumber($conn, 'new_purchase_history', 'reference_number');
+    }
+
+    $existingItemIdMap = isset($_POST['existing_item_id']) && is_array($_POST['existing_item_id']) ? $_POST['existing_item_id'] : [];
+    $getPostedMapValue = function ($fieldName, $itemKey, $default = '') {
+        $source = isset($_POST[$fieldName]) && is_array($_POST[$fieldName]) ? $_POST[$fieldName] : [];
+        if (isset($source[$itemKey]) && !is_array($source[$itemKey])) {
+            return (string)$source[$itemKey];
+        }
+        if (isset($source[(string)$itemKey]) && !is_array($source[(string)$itemKey])) {
+            return (string)$source[(string)$itemKey];
+        }
+        return $default;
+    };
+    $getPostedNestedMapValue = function ($fieldName, $itemKey, $copyIndex, $default = '') {
+        $source = isset($_POST[$fieldName]) && is_array($_POST[$fieldName]) ? $_POST[$fieldName] : [];
+        $row = null;
+        if (isset($source[$itemKey]) && is_array($source[$itemKey])) {
+            $row = $source[$itemKey];
+        } elseif (isset($source[(string)$itemKey]) && is_array($source[(string)$itemKey])) {
+            $row = $source[(string)$itemKey];
+        }
+        if ($row === null) {
+            return $default;
+        }
+        if (isset($row[$copyIndex])) {
+            return (string)$row[$copyIndex];
+        }
+        if (isset($row[(string)$copyIndex])) {
+            return (string)$row[(string)$copyIndex];
+        }
+        return $default;
+    };
+    $normalizeItemQuantity = function ($value) {
+        $qty = (int)trim((string)$value);
+        if ($qty < 1) { $qty = 1; }
+        if ($qty > 5000) { $qty = 5000; }
+        return $qty;
+    };
+    $nextPropertyNumber = function ($current) {
+        $parts = explode('-', (string)$current);
+        if (count($parts) < 4) { return (string)$current; }
+        $seqIndex = count($parts) - 2;
+        $seq = $parts[$seqIndex];
+        $parts[$seqIndex] = str_pad((string)(((int)$seq) + 1), strlen($seq), '0', STR_PAD_LEFT);
+        return implode('-', $parts);
+    };
+    $totalRequestedItems = 0;
+    foreach ($setKeys as $setKey) {
+        $totalRequestedItems += $normalizeItemQuantity($getPostedMapValue('item_quantity', $setKey, '1'));
+    }
+    if ($totalRequestedItems > 5000) {
+        echo json_encode(['status' => 422, 'message' => 'A maximum of 5,000 total quantity is allowed per update.']);
+        return false;
+    }
+
+    mysqli_begin_transaction($conn);
+
+    try {
+        $itemSql = 'UPDATE new_purchase
+                    SET unit=?, item=?, model=?, description=?, serial_number=?, serial_number_2=?,
+                        property_number=?, unit_value=?, date_aquired=?, account_code=?, supplier=?,
+                        par_ics_number=?, purchase_order=?, purchase_request=?, obr_number=?, jev_number=?,
+                        remarks=?, fund=?, category=?
+                    WHERE id=?';
+        $itemStmt = $conn->prepare($itemSql);
+        if (!$itemStmt) {
+            throw new RuntimeException('Unable to prepare item update: ' . $conn->error);
+        }
+        $insertStmt = $conn->prepare(
+            'INSERT INTO new_purchase (fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+        );
+        if (!$insertStmt) {
+            throw new RuntimeException('Unable to prepare item insert: ' . $conn->error);
+        }
+        $historyInsertStmt = $conn->prepare(
+            'INSERT INTO new_purchase_history (emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES (?,?,?,?,?,?,?)'
+        );
+        if (!$historyInsertStmt) {
+            throw new RuntimeException('Unable to prepare history insert: ' . $conn->error);
+        }
+        $historyUpdateWithOldStmt = $conn->prepare(
+            'UPDATE new_purchase_history
+             SET par_number = ?, category = ?, dept_id = ?, emp_id = CASE WHEN ? > 0 THEN ? ELSE NULL END
+             WHERE (par_number = ? OR par_number = ?) AND status = 1'
+        );
+        if (!$historyUpdateWithOldStmt) {
+            throw new RuntimeException('Unable to prepare history update: ' . $conn->error);
+        }
+        $historyUpdateLinkStmt = $conn->prepare(
+            'UPDATE new_purchase_history
+             SET par_number = ?, category = ?, dept_id = ?, emp_id = CASE WHEN ? > 0 THEN ? ELSE NULL END
+             WHERE par_number = ? AND status = 1'
+        );
+        if (!$historyUpdateLinkStmt) {
+            throw new RuntimeException('Unable to prepare history link update: ' . $conn->error);
+        }
+        $deleteItemStmt = $conn->prepare('DELETE FROM new_purchase WHERE id = ?');
+        $deleteHistoryStmt = $conn->prepare('DELETE FROM new_purchase_history WHERE par_number = ? OR par_number = ?');
+        $clearBundleStmt = $conn->prepare('DELETE FROM new_bundle_purchase WHERE property_number = ? OR bundle_with = ?');
+        $bundleNullStmt = $conn->prepare(
+            'UPDATE new_bundle_purchase
+             SET property_number = CASE WHEN property_number = ? THEN NULL ELSE property_number END,
+                 bundle_with = CASE WHEN bundle_with = ? THEN NULL ELSE bundle_with END
+             WHERE property_number = ? OR bundle_with = ?'
+        );
+        $bundleMoveStmt = $conn->prepare(
+            'UPDATE new_bundle_purchase
+             SET property_number = CASE WHEN property_number = ? THEN ? ELSE property_number END,
+                 bundle_with = CASE WHEN bundle_with = ? THEN ? ELSE bundle_with END
+             WHERE property_number = ? OR bundle_with = ?'
+        );
+
+        $keptExistingIds = [];
+        foreach ($setKeys as $setKey) {
+            $existingId = 0;
+            if (isset($existingItemIdMap[$setKey])) {
+                $existingId = (int)$existingItemIdMap[$setKey];
+            } elseif (isset($existingItemIdMap[(string)$setKey])) {
+                $existingId = (int)$existingItemIdMap[(string)$setKey];
+            }
+            $currentRow = ($existingId > 0 && isset($currentById[$existingId])) ? $currentById[$existingId] : null;
+            $oldPropNum = strtoupper(trim((string)($currentRow['property_number'] ?? '')));
+            $npidLink = $existingId > 0 ? ('NPID:' . $existingId) : '';
+
+            $unit = strtoupper(trim($getPostedMapValue('unit', $setKey)));
+            $item = strtoupper(trim($getPostedMapValue('item', $setKey)));
+            $model = strtoupper(trim($getPostedMapValue('model', $setKey)));
+            $description = strtoupper(trim($getPostedMapValue('description', $setKey)));
+            $accountCode = strtoupper(trim($getPostedMapValue('account_code', $setKey)));
+            $remarks = strtoupper(trim($getPostedMapValue('remarks', $setKey)));
+            $propertyNumber = strtoupper(trim($getPostedMapValue('property_number', $setKey)));
+            $unitValue = (float)preg_replace('/[^0-9.]/', '', $getPostedMapValue('unit_value', $setKey, '0'));
+            $employeeRaw = trim($getPostedMapValue('emp_id', $setKey));
+            $newEmployeeName = strtoupper(trim($getPostedMapValue('emp_new_name', $setKey)));
+            $newEmployeePosition = strtoupper(trim($getPostedMapValue('emp_new_position', $setKey)));
+            $itemQuantity = $normalizeItemQuantity($getPostedMapValue('item_quantity', $setKey, '1'));
+
+            if ($item === '' || $unit === '') {
+                throw new RuntimeException('Each set must include at least a unit and asset class.');
+            }
+            if ($accountCode === '' && !$propertyNumberOptionalFund) {
+                throw new RuntimeException('Account code is required for each set.');
+            }
+
+            $employeeId = 0;
+            if (strtolower($employeeRaw) === 'add_new_emp') {
+                if ($newEmployeeName === '' || $newEmployeePosition === '') {
+                    throw new RuntimeException('New employee name and position are required for all add-new rows.');
+                }
+                $createdEmployee = gso_create_employee_atomic($conn, $newEmployeeName, $departmentCode, $newEmployeePosition, 1, null);
+                if (!$createdEmployee || !isset($createdEmployee['emp_id'])) {
+                    throw new RuntimeException('Unable to create employee for one of the sets.');
+                }
+                $employeeId = (int)$createdEmployee['emp_id'];
+            } elseif ($employeeRaw !== '') {
+                $employeeId = (int)$employeeRaw;
+            }
+
+            $serial1Values = [];
+            $serial2Values = [];
+            for ($copyIndex = 1; $copyIndex <= $itemQuantity; $copyIndex++) {
+                $serial1Values[$copyIndex] = strtoupper(trim($getPostedNestedMapValue('serial_number', $setKey, $copyIndex)));
+                $serial2Values[$copyIndex] = strtoupper(trim($getPostedNestedMapValue('serial_number_2', $setKey, $copyIndex)));
+            }
+
+            $currentPropertyNumber = $propertyNumberOptionalFund ? '' : $propertyNumber;
+            if (!$propertyNumberOptionalFund && $currentPropertyNumber === '') {
+                throw new RuntimeException('Property number is required for each set.');
+            }
+
+            for ($copyIndex = 1; $copyIndex <= $itemQuantity; $copyIndex++) {
+                $copyPropertyNumber = $propertyNumberOptionalFund ? '' : $currentPropertyNumber;
+                if (!$propertyNumberOptionalFund && $copyPropertyNumber !== '') {
+                    $checkId = ($copyIndex === 1 && $existingId > 0) ? $existingId : 0;
+                    $checkOld = ($copyIndex === 1) ? $oldPropNum : '';
+                    if (gso_new_purchase_property_number_in_use($conn, $copyPropertyNumber, $checkId, $checkOld)) {
+                        throw new RuntimeException('Property number already exists: ' . $copyPropertyNumber);
+                    }
+                }
+
+                $serial1 = $serial1Values[$copyIndex] ?? '';
+                $serial2 = $serial2Values[$copyIndex] ?? '';
+                $serial1Db = $serial1 !== '' ? $serial1 : null;
+                $serial2Db = $serial2 !== '' ? $serial2 : null;
+                $supplierDb = $supplier !== '' ? $supplier : null;
+                $parIcsDb = $parIcsNumber !== '' ? $parIcsNumber : null;
+                $purchaseOrderDb = $purchaseOrder !== '' ? $purchaseOrder : null;
+                $purchaseRequestDb = $purchaseRequest !== '' ? $purchaseRequest : null;
+                $obrNumberDb = $obrNumber !== '' ? $obrNumber : null;
+                $jevNumberDb = $jevNumber !== '' ? $jevNumber : null;
+                $remarksDb = $remarks !== '' ? $remarks : null;
+                $propertyNumberDb = $copyPropertyNumber !== '' ? $copyPropertyNumber : null;
+
+                if ($copyIndex === 1 && $existingId > 0 && $currentRow) {
+                    $itemStmt->bind_param(
+                        'sssssssdsssssssssssi',
+                        $unit,
+                        $item,
+                        $model,
+                        $description,
+                        $serial1Db,
+                        $serial2Db,
+                        $propertyNumberDb,
+                        $unitValue,
+                        $year,
+                        $accountCode,
+                        $supplierDb,
+                        $parIcsDb,
+                        $purchaseOrderDb,
+                        $purchaseRequestDb,
+                        $obrNumberDb,
+                        $jevNumberDb,
+                        $remarksDb,
+                        $fund,
+                        $category,
+                        $existingId
+                    );
+                    if (!$itemStmt->execute()) {
+                        throw new RuntimeException('Unable to update item #' . $existingId . ': ' . $itemStmt->error);
+                    }
+
+                    $historyParNumber = $propertyNumberOptionalFund ? $npidLink : ($copyPropertyNumber !== '' ? $copyPropertyNumber : $npidLink);
+                    if ($oldPropNum !== '') {
+                        $historyUpdateWithOldStmt->bind_param('ssiiiss', $historyParNumber, $category, $departmentPk, $employeeId, $employeeId, $oldPropNum, $npidLink);
+                        if (!$historyUpdateWithOldStmt->execute()) {
+                            throw new RuntimeException('Unable to update history for item #' . $existingId . '.');
+                        }
+                    } else {
+                        $historyUpdateLinkStmt->bind_param('ssiiis', $historyParNumber, $category, $departmentPk, $employeeId, $employeeId, $npidLink);
+                        if (!$historyUpdateLinkStmt->execute()) {
+                            throw new RuntimeException('Unable to update history for item #' . $existingId . '.');
+                        }
+                    }
+
+                    if ($oldPropNum !== $copyPropertyNumber && $oldPropNum !== '') {
+                        if ($copyPropertyNumber === '' && $bundleNullStmt) {
+                            $bundleNullStmt->bind_param('ssss', $oldPropNum, $oldPropNum, $oldPropNum, $oldPropNum);
+                            $bundleNullStmt->execute();
+                        } elseif ($bundleMoveStmt) {
+                            $bundleMoveStmt->bind_param('ssssss', $oldPropNum, $copyPropertyNumber, $oldPropNum, $copyPropertyNumber, $oldPropNum, $oldPropNum);
+                            $bundleMoveStmt->execute();
+                        }
+                    }
+
+                    $keptExistingIds[] = $existingId;
+                } else {
+                    $createdAt = date('Y-m-d H:i:s');
+                    $insertStmt->bind_param(
+                        'ssssssssdsssssssssss',
+                        $fund,
+                        $category,
+                        $unit,
+                        $item,
+                        $model,
+                        $description,
+                        $serial1Db,
+                        $serial2Db,
+                        $propertyNumberDb,
+                        $unitValue,
+                        $year,
+                        $accountCode,
+                        $supplierDb,
+                        $parIcsDb,
+                        $purchaseOrderDb,
+                        $purchaseRequestDb,
+                        $obrNumberDb,
+                        $jevNumberDb,
+                        $remarksDb,
+                        $createdAt
+                    );
+                    if (!$insertStmt->execute()) {
+                        throw new RuntimeException('Unable to create a new set: ' . $insertStmt->error);
+                    }
+                    $newItemId = (int)$conn->insert_id;
+                    $historyParNumber = $propertyNumberOptionalFund ? ('NPID:' . $newItemId) : $copyPropertyNumber;
+                    $historyCreatedAt = $createdAt;
+                    $historyStatus = 1;
+                    $historyInsertStmt->bind_param('iississ', $employeeId, $departmentPk, $historyParNumber, $referenceNumber, $historyStatus, $category, $historyCreatedAt);
+                    if (!$historyInsertStmt->execute()) {
+                        throw new RuntimeException('Unable to save history for a new set.');
+                    }
+                }
+
+                if (!$propertyNumberOptionalFund && $copyIndex < $itemQuantity) {
+                    $currentPropertyNumber = strtoupper(trim($nextPropertyNumber($currentPropertyNumber)));
+                }
+            }
+        }
+
+        $removeIds = array_diff(array_keys($currentById), array_unique($keptExistingIds));
+        foreach ($removeIds as $removeId) {
+            $removeId = (int)$removeId;
+            if ($removeId <= 0 || !isset($currentById[$removeId])) {
+                continue;
+            }
+            $oldPropNum = strtoupper(trim((string)($currentById[$removeId]['property_number'] ?? '')));
+            $npidLink = 'NPID:' . $removeId;
+            if ($oldPropNum !== '' && $clearBundleStmt) {
+                $clearBundleStmt->bind_param('ss', $oldPropNum, $oldPropNum);
+                $clearBundleStmt->execute();
+            }
+            if ($deleteHistoryStmt) {
+                $deleteHistoryStmt->bind_param('ss', $oldPropNum, $npidLink);
+                $deleteHistoryStmt->execute();
+            }
+            if ($deleteItemStmt) {
+                $deleteItemStmt->bind_param('i', $removeId);
+                $deleteItemStmt->execute();
+            }
+        }
+
+        $itemStmt->close();
+        $insertStmt->close();
+        $historyInsertStmt->close();
+        $historyUpdateWithOldStmt->close();
+        $historyUpdateLinkStmt->close();
+        if ($deleteItemStmt) { $deleteItemStmt->close(); }
+        if ($deleteHistoryStmt) { $deleteHistoryStmt->close(); }
+        if ($clearBundleStmt) { $clearBundleStmt->close(); }
+        if ($bundleNullStmt) { $bundleNullStmt->close(); }
+        if ($bundleMoveStmt) { $bundleMoveStmt->close(); }
+        mysqli_commit($conn);
+    } catch (Throwable $e) {
+        if (isset($itemStmt) && $itemStmt instanceof mysqli_stmt) {
+            $itemStmt->close();
+        }
+        if (isset($insertStmt) && $insertStmt instanceof mysqli_stmt) {
+            $insertStmt->close();
+        }
+        if (isset($historyInsertStmt) && $historyInsertStmt instanceof mysqli_stmt) {
+            $historyInsertStmt->close();
+        }
+        if (isset($historyUpdateWithOldStmt) && $historyUpdateWithOldStmt instanceof mysqli_stmt) {
+            $historyUpdateWithOldStmt->close();
+        }
+        if (isset($historyUpdateLinkStmt) && $historyUpdateLinkStmt instanceof mysqli_stmt) {
+            $historyUpdateLinkStmt->close();
+        }
+        if (isset($deleteItemStmt) && $deleteItemStmt instanceof mysqli_stmt) {
+            $deleteItemStmt->close();
+        }
+        if (isset($deleteHistoryStmt) && $deleteHistoryStmt instanceof mysqli_stmt) {
+            $deleteHistoryStmt->close();
+        }
+        if (isset($clearBundleStmt) && $clearBundleStmt instanceof mysqli_stmt) {
+            $clearBundleStmt->close();
+        }
+        if (isset($bundleNullStmt) && $bundleNullStmt instanceof mysqli_stmt) {
+            $bundleNullStmt->close();
+        }
+        if (isset($bundleMoveStmt) && $bundleMoveStmt instanceof mysqli_stmt) {
+            $bundleMoveStmt->close();
+        }
+        mysqli_rollback($conn);
+        echo json_encode(['status' => 500, 'message' => $e->getMessage()]);
+        return false;
+    }
+
+    echo json_encode(['status' => 200, 'message' => 'Purchase details updated successfully.']);
+    return false;
+}
+
 if (isset($_POST['save_item'])) {
     // ---- Idempotency & duplicate prevention start ----
     $submissionToken = isset($_POST['submission_token']) ? $_POST['submission_token'] : '';
@@ -11944,7 +12614,7 @@ if (isset($_POST['generate_new_purchase_edit_property_number'])) {
     $dept = trim((string)($_POST['dept'] ?? ''));
     $fund = strtoupper(trim((string)($_POST['fund'] ?? '')));
 
-    if ($newPurchaseId <= 0 || $category === '' || $year === '' || $accountCode === '' || $dept === '' || $fund === '') {
+    if ($category === '' || $year === '' || $accountCode === '' || $dept === '' || $fund === '') {
         echo json_encode(['status' => 422, 'message' => 'Missing required property number details.']);
         return;
     }
@@ -12190,15 +12860,22 @@ if (!function_exists('gso_new_purchase_items')) {
         $sql = "
             SELECT
                 np.id,
-                np.item, np.model, np.description,
-                np.serial_number, np.serial_number_2, np.property_number,
+                np.unit, np.item, np.model, np.description,
+                np.serial_number, np.serial_number_2,
+                COALESCE(
+                    NULLIF(np.property_number, ''),
+                    CASE
+                        WHEN h.par_number LIKE 'NPID:%' THEN ''
+                        ELSE COALESCE(h.par_number, '')
+                    END
+                ) AS property_number,
                 np.fund, np.category, np.unit_value, np.date_aquired,
                 np.account_code, np.supplier, np.par_ics_number,
                 np.purchase_order, np.purchase_request, np.obr_number,
                 np.jev_number, np.remarks,
                 COALESCE(d_by_id.department_name, d_by_code.department_name) AS department_name,
                 COALESCE(d_by_id.department_code, d_by_code.department_code) AS department_code,
-                h.dept_id, e.emp_name,
+                h.dept_id, h.emp_id, e.emp_name,
                 h.category AS doc_type, h.reference_number
             FROM new_purchase AS np
             LEFT JOIN new_purchase_history AS h

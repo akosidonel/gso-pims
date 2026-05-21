@@ -42,6 +42,7 @@ if(!isset($_SESSION['alogin'])){
   // emp_id is allocated by the server at save time (concurrency-safe)
   $next_emp_id = null;
   $accountCodeOptions = [];
+  $departmentOptions = [];
   $accountCodeSql = "SELECT account_code, account_name FROM account_code ORDER BY account_code ASC";
   $accountCodeQuery = mysqli_query($conn, $accountCodeSql);
   if ($accountCodeQuery && mysqli_num_rows($accountCodeQuery) > 0) {
@@ -49,6 +50,16 @@ if(!isset($_SESSION['alogin'])){
       $accountCodeOptions[] = [
         'account_code' => (string)($accountCodeRow['account_code'] ?? ''),
         'account_name' => (string)($accountCodeRow['account_name'] ?? ''),
+      ];
+    }
+  }
+  $departmentSql = "SELECT department_code, department_name FROM department ORDER BY department_name ASC";
+  $departmentQuery = mysqli_query($conn, $departmentSql);
+  if ($departmentQuery && mysqli_num_rows($departmentQuery) > 0) {
+    while ($departmentRow = mysqli_fetch_assoc($departmentQuery)) {
+      $departmentOptions[] = [
+        'department_code' => (string)($departmentRow['department_code'] ?? ''),
+        'department_name' => (string)($departmentRow['department_name'] ?? ''),
       ];
     }
   }
@@ -93,6 +104,42 @@ if(!isset($_SESSION['alogin'])){
 
     #addItemModal form#addItem .modal-footer {
       flex-shrink: 0;
+    }
+
+    #editNpDetailModal .modal-content > form#editNpDetailForm {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      max-height: inherit;
+      overflow: hidden;
+    }
+
+    #editNpDetailModal form#editNpDetailForm .modal-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    #editNpDetailModal form#editNpDetailForm .modal-footer {
+      flex-shrink: 0;
+    }
+
+    #editNpDetailModal .item-set-card + .item-set-card {
+      margin-top: 1rem;
+    }
+
+    .gso-serial-table-scroll {
+      max-height: 17.5rem;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .gso-serial-table-scroll thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
     }
   </style>
 
@@ -244,13 +291,16 @@ if(!isset($_SESSION['alogin'])){
                     <datalist id="deptDatalist"></datalist>
                     <select name="dept" id="dept" class="form-control" required style="display:none;">
                       <option value="">-SELECT-</option>
-                      <?php 
-                        $sql = "SELECT department_code, department_name FROM department ORDER BY department_name ASC";
-                        $query = mysqli_query($conn,$sql);
-                        if(mysqli_num_rows($query) > 0){
-                          foreach($query as $result){?> 
-                            <option value="<?php echo htmlentities($result['department_code']);?>"><?php echo htmlentities($result['department_name']);?></option>
-                      <?php }} ?>
+                      <?php foreach ($departmentOptions as $departmentOption): ?>
+                        <?php
+                          $departmentCode = trim((string)($departmentOption['department_code'] ?? ''));
+                          $departmentName = trim((string)($departmentOption['department_name'] ?? ''));
+                          if ($departmentCode === '') {
+                            continue;
+                          }
+                        ?>
+                        <option value="<?php echo htmlentities($departmentCode); ?>"><?php echo htmlentities($departmentName); ?></option>
+                      <?php endforeach; ?>
                     </select>
                   </div>
                 </div>
@@ -409,7 +459,7 @@ if(!isset($_SESSION['alogin'])){
 
       <div class="tab-content pt-3" id="addItemRecentTabContent">
         <div class="tab-pane fade show active" id="addItemNewPurchasePane" role="tabpanel" aria-labelledby="addItemNewPurchaseTab">
-          <!-- New Purchase: one row per P.O. No. â click to open items page -->
+          <!-- New Purchase: one row per P.O. No. -->
           <input type="hidden" id="np_transfer_token" value="<?= htmlspecialchars($np_transfer_token, ENT_QUOTES, 'UTF-8') ?>">
           <div class="table-responsive px-3 pb-1">
             <table id="addItemNewPurchaseTable" class="table table-bordered table-hover w-100 mb-0" style="width:100%">
@@ -438,11 +488,8 @@ if(!isset($_SESSION['alogin'])){
                       $poRaw = trim((string)($row['purchase_order'] ?? ''));
                       $po = htmlspecialchars($poRaw, ENT_QUOTES, 'UTF-8');
                       $rowId = (int)($row['row_id'] ?? 0);
-                      $itemsUrl = $poRaw !== ''
-                        ? 'new-purchase-items.php?po=' . urlencode($poRaw)
-                        : 'new-purchase-items.php?id=' . urlencode((string)$rowId);
                 ?>
-                  <tr class="add-item-np-row" data-href="<?= htmlspecialchars($itemsUrl, ENT_QUOTES, 'UTF-8') ?>">
+                  <tr class="add-item-np-row">
                     <td class="text-center">
                       <input type="checkbox" class="add-item-np-checkbox"
                         value="<?= $po ?>"
@@ -456,6 +503,7 @@ if(!isset($_SESSION['alogin'])){
                     <td><?= '₱ ' . number_format((float)($row['total_amount'] ?? 0), 2, '.', ',') ?></td>
                     <td class="text-center">
                       <button type="button" class="btn btn-xs btn-outline-primary np-edit-btn"
+                        data-row-id="<?= $rowId ?>"
                         data-po="<?= $po ?>"
                         data-fund="<?= htmlspecialchars((string)($row['fund'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
                         data-dept="<?= htmlspecialchars((string)($row['department_code'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
@@ -591,28 +639,30 @@ if(!isset($_SESSION['alogin'])){
     </section><!-- /.content -->
   </div><!-- /.content-wrapper -->
 
-  <!-- Edit P.O. Modal -->
-  <div class="modal fade" id="editNpPoModal" data-backdrop="static" tabindex="-1" role="dialog" aria-labelledby="editNpPoModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable" role="document">
+  <!-- Edit New Purchase Detail Modal -->
+  <div class="modal fade" id="editNpDetailModal" data-backdrop="static" tabindex="-1" role="dialog" aria-labelledby="editNpDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable" role="document">
       <div class="modal-content gso-modal">
         <div class="modal-header border-0 p-0">
           <div class="gso-hero w-100 gso-hero-modalhead">
             <div class="card-body py-3">
               <div class="d-flex align-items-start justify-content-between flex-wrap">
                 <div class="mb-2 mb-md-0">
-                  <div class="gso-title gso-title-sm" id="editNpPoModalLabel">P.O. Information</div>
+                  <div class="gso-title gso-title-sm" id="editNpDetailModalLabel">Edit Item or Equipment</div>
                 </div>
                 <button type="button" class="close text-white" style="opacity:.8;" data-dismiss="modal"><span>&times;</span></button>
               </div>
             </div>
           </div>
         </div>
-        <form id="editNpPoForm">
-          <input type="hidden" id="edit_np_original_po">
+        <form id="editNpDetailForm">
+          <input type="hidden" name="update_new_purchase_group" value="1">
+          <input type="hidden" id="edit_np_group_po" name="po">
+          <input type="hidden" id="edit_np_group_row_id" name="row_id">
           <div class="modal-body">
             <div class="row add-item-section">
-              <div class="col-12">
-                <div class="card gso-card mb-0">
+              <div class="col-lg-6 d-flex">
+                <div class="card gso-card w-100 h-100 mb-0">
                   <div class="card-header border-0">
                     <div class="d-flex justify-content-between align-items-center">
                       <h3 class="card-title mb-0"><i class="fas fa-bookmark"></i>&nbsp; Reference</h3>
@@ -620,7 +670,37 @@ if(!isset($_SESSION['alogin'])){
                   </div>
                   <div class="card-body">
                     <div class="form-row">
-                      <div class="form-group col-md-6">
+                      <div class="form-group col-md-4">
+                        <label>Condition</label>
+                        <select class="form-control" id="edit_np_condition" disabled>
+                          <option value="NEW" selected>NEW</option>
+                        </select>
+                      </div>
+                      <div class="form-group col-md-4">
+                        <label>Category</label>
+                        <select class="form-control" id="edit_np_category" name="category" required>
+                          <option value="">-SELECT-</option>
+                          <option value="PAR">PAR</option>
+                          <option value="ICS">ICS</option>
+                        </select>
+                      </div>
+                      <div class="form-group col-md-4">
+                        <label>Year Acquired</label>
+                        <select class="form-control" id="edit_np_year" name="year" required>
+                          <option value="">-SELECT-</option>
+                          <?php
+                            $currentYear = (int)date('Y');
+                            $startYear = 2001;
+                            for ($y = $currentYear; $y >= $startYear; $y--) {
+                              echo '<option value="' . $y . '">' . $y . '</option>';
+                            }
+                          ?>
+                          <option value="RFS">Found at Station</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group col-md-4">
                         <label>Fund</label>
                         <select class="form-control" id="edit_np_fund" name="fund" required>
                           <option value="">-SELECT-</option>
@@ -630,49 +710,142 @@ if(!isset($_SESSION['alogin'])){
                           <option value="DONATION">DONATION</option>
                         </select>
                       </div>
-                      <div class="form-group col-md-6">
-                        <label>Department</label>
-                        <select class="form-control" id="edit_np_dept" name="dept_id" required>
-                          <option value="">-SELECT-</option>
-                          <?php
-                            $editPoDeptSql = "SELECT department_code, department_name FROM department ORDER BY department_name ASC";
-                            $editPoDeptQuery = mysqli_query($conn, $editPoDeptSql);
-                            if ($editPoDeptQuery && mysqli_num_rows($editPoDeptQuery) > 0) {
-                              while ($editPoDept = mysqli_fetch_assoc($editPoDeptQuery)) {
-                                $departmentCode = (string)($editPoDept['department_code'] ?? '');
-                                $departmentName = (string)($editPoDept['department_name'] ?? '');
-                                echo '<option value="' . htmlentities($departmentCode) . '">' . htmlentities($departmentName) . '</option>';
-                              }
-                            }
-                          ?>
-                        </select>
-                      </div>
-                    </div>
-                    <div class="form-row">
-                      <div class="form-group col-md-6">
-                        <label>P.O. No.</label>
-                        <input type="text" class="form-control text-uppercase" id="edit_np_po" name="purchase_order" placeholder="Enter P.O. No.">
-                      </div>
-                      <div class="form-group col-md-6">
-                        <label>P.R. No.</label>
-                        <input type="text" class="form-control text-uppercase" id="edit_np_pr" name="purchase_request" placeholder="Enter P.R. No.">
-                      </div>
-                    </div>
-                    <div class="form-row">
-                      <div class="form-group col-md-6">
-                        <label>O.B.R. No.</label>
-                        <input type="text" class="form-control text-uppercase" id="edit_np_obr" name="obr_number" placeholder="Enter O.B.R. No.">
-                      </div>
-                      <div class="form-group col-md-6">
-                        <label>PAR/ICS No.</label>
+                      <div class="form-group col-md-4">
+                        <label>PAR/ICS NO. <span class="ml-2"><input type="checkbox" checked disabled> <small>Auto</small></span></label>
                         <input type="text" class="form-control text-uppercase" id="edit_np_paricsno" name="par_ics_number" placeholder="Enter PAR/ICS No.">
+                        <small id="edit-np-par-ics-help" class="form-text" style="display:none"></small>
+                      </div>
+                      <div class="form-group col-md-4">
+                        <label>P.R</label>
+                        <input type="text" class="form-control text-uppercase" id="edit_np_pr" name="purchase_request" placeholder="Enter purchase request no.">
+                      </div>
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group col-md-12">
+                        <label>Supplier</label>
+                        <input type="text" class="form-control text-uppercase" id="edit_np_supplier" name="supplier" placeholder="Enter supplier">
+                      </div>
+                    </div>
+                    <div class="form-row mb-0">
+                      <div class="form-group col-md-4 mb-0">
+                        <label>P.O</label>
+                        <input type="text" class="form-control text-uppercase" id="edit_np_po" name="purchase_order" placeholder="Enter purchase order">
+                      </div>
+                      <div class="form-group col-md-4 mb-0">
+                        <label>O.B.R</label>
+                        <input type="text" class="form-control text-uppercase" id="edit_np_obr" name="obr_number" placeholder="Enter obr">
+                      </div>
+                      <div class="form-group col-md-4 mb-0">
+                        <label>J.E.V No.</label>
+                        <input type="text" class="form-control text-uppercase" id="edit_np_jev" name="jev_number" placeholder="Enter jev no.">
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-6 d-flex mt-3 mt-lg-0">
+                <div class="card gso-card w-100 h-100 mb-0">
+                  <div class="card-header border-0">
+                    <div class="d-flex justify-content-between align-items-center">
+                      <h3 class="card-title mb-0"><i class="fas fa-clipboard-check"></i>&nbsp; Accountability</h3>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="form-row">
+                      <div class="form-group col-md-12">
+                        <label class="col-form-label">Department</label>
+                        <input type="text" id="editNpDeptSearch" class="form-control" list="editNpDeptDatalist" placeholder="Type to search department" autocomplete="off">
+                        <datalist id="editNpDeptDatalist"></datalist>
+                        <select name="dept_id" id="edit_np_dept" class="form-control" required style="display:none;">
+                          <option value="">-SELECT-</option>
+                          <?php foreach ($departmentOptions as $departmentOption): ?>
+                            <?php
+                              $departmentCode = trim((string)($departmentOption['department_code'] ?? ''));
+                              $departmentName = trim((string)($departmentOption['department_name'] ?? ''));
+                              if ($departmentCode === '') {
+                                continue;
+                              }
+                            ?>
+                            <option value="<?php echo htmlentities($departmentCode); ?>"><?php echo htmlentities($departmentName); ?></option>
+                          <?php endforeach; ?>
+                        </select>
                       </div>
                     </div>
                     <div class="form-row mb-0">
                       <div class="form-group col-md-12 mb-0">
-                        <label>Supplier</label>
-                        <input type="text" class="form-control text-uppercase" id="edit_np_supplier" name="supplier" placeholder="Enter Supplier">
+                        <label>End User <span class="text-muted">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                          <input type="checkbox" class="form-check-input" id="editNpMultipleEndUserCheckBox">
+                          <label class="form-check-label" for="editNpMultipleEndUserCheckBox">add multiple enduser</label>
+                        </span></label>
+                        <select id="edit_np_emp_single" class="form-control" autocomplete="off" style="display:none;">
+                          <option value="">-SELECT-</option>
+                        </select>
+                        <div id="editNpEndUserRows" style="display:none; max-height:260px; overflow-y:auto;"></div>
                       </div>
+                    </div>
+                    <div id="edit_np_add_new_employee" style="display:none;">
+                      <div class="form-row mt-3">
+                        <div class="form-group col-md-6 mb-0">
+                          <label class="col-form-label">Add New Employee</label>
+                          <input type="text" class="form-control text-uppercase" id="edit_np_new_emp" placeholder="Enter New Employee Name" disabled>
+                        </div>
+                        <div class="form-group col-md-6 mb-0">
+                          <label class="col-form-label">Position</label>
+                          <input type="text" class="form-control text-uppercase" id="edit_np_position" placeholder="Enter Employee Position" disabled>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row add-item-section">
+              <div class="col-12">
+                <div class="card gso-card mb-0">
+                  <div class="card-header border-0">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap" style="gap:0.75rem;">
+                      <h3 class="card-title mb-0"><i class="fas fa-file-alt"></i>&nbsp; Item Information</h3>
+                      <div class="form-group mb-0">
+                        <label class="mb-1" for="edit_np_set_count">Sets</label>
+                        <input type="number" class="form-control" id="edit_np_set_count" name="set_count" value="0" min="1" max="10" step="1">
+                      </div>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="d-none" id="editNpTemplates">
+                      <select id="editNpItemUnitOptionsTemplate">
+                        <option value="">-SELECT-</option>
+                        <?php foreach ($itemUnits as $itemUnit): ?>
+                          <option value="<?php echo htmlentities($itemUnit); ?>"><?php echo htmlentities($itemUnit); ?></option>
+                        <?php endforeach; ?>
+                      </select>
+                      <select id="editNpItemAccountCodeOptionsTemplate">
+                        <option value="">-SELECT-</option>
+                        <?php foreach ($accountCodeOptions as $accountCodeOption): ?>
+                          <?php
+                            $accountCodeValue = trim((string)($accountCodeOption['account_code'] ?? ''));
+                            $accountCodeName = trim((string)($accountCodeOption['account_name'] ?? ''));
+                            if ($accountCodeValue === '') {
+                              continue;
+                            }
+                            $accountCodeLabel = $accountCodeValue;
+                            if ($accountCodeName !== '') {
+                              $accountCodeLabel .= ' - ' . $accountCodeName;
+                            }
+                          ?>
+                          <option value="<?php echo htmlentities($accountCodeValue); ?>"><?php echo htmlentities($accountCodeLabel); ?></option>
+                        <?php endforeach; ?>
+                      </select>
+                      <select id="editNpItemAssetOptionsTemplate">
+                        <option value="">-SELECT-</option>
+                        <?php foreach ($assetClasses as $assetClass): ?>
+                          <option value="<?php echo htmlentities($assetClass); ?>"><?php echo htmlentities($assetClass); ?></option>
+                        <?php endforeach; ?>
+                      </select>
+                    </div>
+                    <div id="editNpItemRows">
+                      <div class="text-center text-muted py-4">Select a purchase to view details.</div>
                     </div>
                   </div>
                 </div>
@@ -680,14 +853,14 @@ if(!isset($_SESSION['alogin'])){
             </div>
           </div>
           <div class="modal-footer border-0 pt-0">
-            <button type="submit" class="btn btn-success" id="editNpPoSaveBtn"><i class="fas fa-save"></i>&nbsp; Save</button>
+            <button type="submit" class="btn btn-success" id="editNpDetailSaveBtn"><i class="fas fa-save"></i>&nbsp; Update</button>
             <button type="button" class="btn btn-outline-success" data-dismiss="modal">Close</button>
           </div>
         </form>
       </div>
     </div>
   </div>
-  <!-- /Edit P.O. Modal -->
+  <!-- /Edit New Purchase Detail Modal -->
   <?php include('../include/footer.php')?><!--footer-->
 </div><!-- ./wrapper -->
 <?php include('../include/script.php')?><!--script-->

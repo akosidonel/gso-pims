@@ -3063,77 +3063,528 @@ $(function(){
     syncAddItemNpSelectAll();
   }
 
-  $(document)
-    .off('click.addItemNpOpenRow', '#addItemNewPurchaseTable tbody tr.add-item-np-row')
-    .on('click.addItemNpOpenRow', '#addItemNewPurchaseTable tbody tr.add-item-np-row', function (e) {
-      if ($(e.target).closest('a, button, input, label, .dropdown-menu').length) { return; }
-
-      var href = String($(this).data('href') || '').trim();
-      if (href) { window.location.href = href; }
-    });
-
-  $('#addItemNewPurchaseTable tbody tr.add-item-np-row').css('cursor', 'pointer');
-
   // ============================================================
-  // New Purchase: edit P.O. modal
+  // Add Item page: edit new purchase detail modal
   // ============================================================
-  function loadEditNpDepartments(fund, selectedDept) {
-    var $deptSelect = $('#edit_np_dept');
-    var deptValue = String(selectedDept || '').trim();
+  (function () {
+    if (!$('#editNpDetailModal').length || !$('#addItemNewPurchaseTable').length) { return; }
 
-    if (!$deptSelect.length) { return; }
+    var npDetailState = {
+      group: null,
+      items: [],
+      employeeOptionsHtml: '<option value="">-SELECT-</option><option value="add_new_emp"> + ADD NEW EMPLOYEE </option>',
+      useMultipleEndUsers: false
+    };
+    var npDetailPropertyRequestId = 0;
+    var npDetailTempIndex = 0;
 
-    $deptSelect.prop('disabled', true).html('<option value="">Loading...</option>');
+    function npDetailEsc(value) {
+      return $('<div>').text(value === null || value === undefined ? '' : String(value)).html();
+    }
 
-    $.ajax({
-      url: '../auth/auth.php',
-      type: 'POST',
-      data: { fund_for_departments: fund },
-      success: function (html) {
-        $deptSelect.html(html);
-        if (deptValue && $deptSelect.find('option').filter(function () { return this.value === deptValue; }).length) {
-          $deptSelect.val(deptValue);
-        } else {
-          $deptSelect.val('');
-        }
-      },
-      error: function () {
-        $deptSelect.html('<option value="">Failed to load departments</option>');
-      },
-      complete: function () {
-        $deptSelect.prop('disabled', false);
+    function npDetailNormalizeFund(value) {
+      var fund = String(value || '').trim().toUpperCase();
+      if (fund === 'SEF') { return 'SPECIAL EDUCATION FUND'; }
+      return fund;
+    }
+
+    function npDetailPropertyOptionalFund() {
+      var fund = npDetailNormalizeFund($('#edit_np_fund').val());
+      return fund === 'TRUST FUND' || fund === 'DONATION';
+    }
+
+    function npDetailGetYear(value) {
+      var text = String(value || '').trim();
+      var match = text.match(/^\d{4}/);
+      return match ? match[0] : text;
+    }
+
+    function npDetailFormatMoney(value, fixed) {
+      var raw = String(value || '').replace(/,/g, '').replace(/[^0-9.]/g, '');
+      var parts = raw.split('.');
+      if (parts.length > 2) {
+        raw = parts.shift() + '.' + parts.join('');
+        parts = raw.split('.');
       }
-    });
-  }
+      var whole = (parts[0] || '').replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      var decimals = parts.length > 1 ? parts[1].slice(0, 2) : '';
+      if (!whole && decimals) { whole = '0'; }
+      if (fixed) {
+        decimals = (decimals + '00').slice(0, 2);
+        return (whole || '0') + '.' + decimals;
+      }
+      return parts.length > 1 ? whole + '.' + decimals : whole;
+    }
 
-  $(document)
-    .off('click.npEditBtn', '.np-edit-btn')
-    .on('click.npEditBtn', '.np-edit-btn', function () {
-      var $b = $(this);
-      var deptValue = String($b.data('dept') || '').trim();
-      var fundValue = String($b.data('fund') || '').trim();
-      $('#edit_np_original_po').val($b.data('po'));
-      $('#edit_np_fund').val(fundValue);
-      loadEditNpDepartments(fundValue, deptValue);
-      $('#edit_np_po').val($b.data('po'));
-      $('#edit_np_pr').val($b.data('pr'));
-      $('#edit_np_obr').val($b.data('obr'));
-      $('#edit_np_supplier').val($b.data('supplier'));
-      $('#edit_np_paricsno').val($b.data('paricsno'));
-      $('#editNpPoModal').modal('show');
-    });
+    function npDetailNormalizeSetCount(value) {
+      var count = parseInt(value, 10) || 1;
+      if (count < 1) { count = 1; }
+      if (count > 10) { count = 10; }
+      return count;
+    }
 
-  $(document)
-    .off('change.editNpFund', '#edit_np_fund')
-    .on('change.editNpFund', '#edit_np_fund', function () {
-      loadEditNpDepartments(String($(this).val() || '').trim(), '');
-    });
+    function npDetailNormalizeItemQuantity(value) {
+      var count = parseInt(value, 10) || 1;
+      if (count < 1) { count = 1; }
+      if (count > 5000) { count = 5000; }
+      return count;
+    }
 
-  $(document)
-    .off('submit.editNpPoForm', '#editNpPoForm')
-    .on('submit.editNpPoForm', '#editNpPoForm', function (e) {
-      e.preventDefault();
-      var $btn = $('#editNpPoSaveBtn').prop('disabled', true);
+    function npDetailNextPropertyNumber(value) {
+      var parts = String(value || '').trim().split('-');
+      if (parts.length < 4) { return String(value || '').trim(); }
+      var index = parts.length - 2;
+      var seq = parts[index];
+      var pad = seq.length;
+      parts[index] = String((parseInt(seq, 10) || 0) + 1).padStart(pad, '0');
+      return parts.join('-');
+    }
+
+    function npDetailPropertyCopies(firstValue, qty) {
+      var copies = [];
+      var current = String(firstValue || '').trim();
+      var count = npDetailNormalizeItemQuantity(qty);
+      for (var i = 0; i < count; i++) {
+        if (current) {
+          copies.push(current);
+          current = npDetailNextPropertyNumber(current);
+        }
+      }
+      return copies;
+    }
+
+    function npDetailBuildSerialRows(item) {
+      var quantity = npDetailNormalizeItemQuantity(item.item_quantity || 1);
+      var serials1 = $.isArray(item.serial_numbers) ? item.serial_numbers : [String(item.serial_number || '')];
+      var serials2 = $.isArray(item.serial_numbers_2) ? item.serial_numbers_2 : [String(item.serial_number_2 || '')];
+      var html = ''
+        + '<div class="table-responsive gso-serial-table-scroll">'
+        + '  <table class="table table-sm table-bordered mb-0">'
+        + '    <thead class="bg-light">'
+        + '      <tr>'
+        + '        <th style="width:80px;">Item</th>'
+        + '        <th>Primary Serial Number</th>'
+        + '        <th>Secondary Serial Number</th>'
+        + '      </tr>'
+        + '    </thead>'
+        + '    <tbody>';
+
+      for (var i = 1; i <= quantity; i++) {
+        html += ''
+          + '<tr data-copy-index="' + i + '">'
+          + '  <td class="align-middle text-center">' + i + '</td>'
+          + '  <td><input type="text" class="form-control text-uppercase edit-np-serial-primary" name="serial_number[' + npDetailEsc(item.key) + '][' + i + ']" value="' + npDetailEsc(serials1[i - 1] || '') + '" placeholder="Enter primary serial number"></td>'
+          + '  <td><input type="text" class="form-control text-uppercase edit-np-serial-secondary" name="serial_number_2[' + npDetailEsc(item.key) + '][' + i + ']" value="' + npDetailEsc(serials2[i - 1] || '') + '" placeholder="Enter secondary serial number"></td>'
+          + '</tr>';
+      }
+
+      html += '    </tbody></table></div>';
+      return html;
+    }
+
+    function npDetailHasSerialValues(item) {
+      var serials1 = $.isArray(item.serial_numbers) ? item.serial_numbers : [String(item.serial_number || '')];
+      var serials2 = $.isArray(item.serial_numbers_2) ? item.serial_numbers_2 : [String(item.serial_number_2 || '')];
+      var hasPrimary = $.grep(serials1, function (value) {
+        return String(value || '').trim() !== '';
+      }).length > 0;
+      var hasSecondary = $.grep(serials2, function (value) {
+        return String(value || '').trim() !== '';
+      }).length > 0;
+      return hasPrimary || hasSecondary;
+    }
+
+    function npDetailApplySerialVisibilityState($card, animate) {
+      var $serialRow = $card.find('.edit-np-serial-row');
+      var $toggle = $card.find('.edit-np-add-serial');
+      var showSerial = $toggle.is(':checked');
+      if (!$serialRow.length || !$toggle.length) { return; }
+
+      $serialRow.stop(true, true);
+      if (showSerial) {
+        if (animate && !$serialRow.is(':visible')) {
+          $serialRow
+            .css({ display: 'flex', overflow: 'hidden', opacity: 0 })
+            .hide()
+            .slideDown({
+              duration: 280,
+              queue: false,
+              complete: function () {
+                $serialRow.css({ display: 'flex', overflow: '', opacity: '' });
+              }
+            });
+          $serialRow.animate({ opacity: 1 }, { duration: 280, queue: false });
+        } else {
+          $serialRow.css({ display: 'flex', overflow: '', opacity: '' });
+        }
+      } else if (animate && $serialRow.is(':visible')) {
+        $serialRow.animate({ opacity: 0 }, { duration: 240, queue: false });
+        $serialRow.slideUp({
+          duration: 240,
+          queue: false,
+          complete: function () {
+            $serialRow.css({ overflow: '', opacity: '' });
+          }
+        });
+      } else {
+        $serialRow.hide().css({ overflow: '', opacity: '' });
+      }
+
+      $serialRow.find('.edit-np-serial-primary, .edit-np-serial-secondary').prop('disabled', !showSerial);
+    }
+
+    function npDetailSyncTotalAmount($input) {
+      var $card = $input.closest('.item-set-card');
+      var $total = $card.find('.edit-np-total-amount');
+      if (!$total.length) { return; }
+      var quantity = npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val());
+      var unitValue = (parseFloat(String($input.val() || '').replace(/,/g, '')) || 0) * quantity;
+      $total.val(npDetailFormatMoney(unitValue, true));
+    }
+
+    function npDetailSelectedOptions(templateSelector, selectedValue) {
+      var $wrap = $('<select>' + String($(templateSelector).html() || '<option value="">-SELECT-</option>') + '</select>');
+      var selectedText = String(selectedValue || '').trim();
+      if (selectedText) {
+        var hasOption = $wrap.find('option').filter(function () {
+          return String(this.value || '').trim() === selectedText;
+        }).length > 0;
+        if (!hasOption) {
+          $('<option>', {
+            value: selectedText,
+            text: selectedText
+          }).attr('data-current-value', '1').insertAfter($wrap.find('option:first'));
+        }
+      }
+      $wrap.find('option').prop('selected', false).removeAttr('selected');
+      $wrap.find('option').filter(function () {
+        return String(this.value || '').trim() === selectedText;
+      }).prop('selected', true).attr('selected', 'selected');
+      return $wrap.html();
+    }
+
+    function npDetailEmployeeOptionsHtml(selectedValue, selectedLabel) {
+      var selectedText = String(selectedValue || '').trim();
+      var labelText = String(selectedLabel || selectedText).trim();
+      var $wrap = $('<select>' + String(npDetailState.employeeOptionsHtml || '<option value="">-SELECT-</option>') + '</select>');
+
+      if (selectedText) {
+        var hasOption = $wrap.find('option').filter(function () {
+          return String(this.value || '').trim() === selectedText;
+        }).length > 0;
+        if (!hasOption) {
+          $('<option>', {
+            value: selectedText,
+            text: labelText || selectedText
+          }).attr('data-current-value', '1').insertAfter($wrap.find('option:first'));
+        }
+      }
+
+      $wrap.find('option').prop('selected', false).removeAttr('selected');
+      $wrap.find('option').filter(function () {
+        return String(this.value || '').trim() === selectedText;
+      }).prop('selected', true).attr('selected', 'selected');
+      return $wrap.html();
+    }
+
+    function npDetailGetPrimaryEmployee() {
+      if (!npDetailState.items.length) {
+        return { value: '', label: '' };
+      }
+
+      var firstItem = npDetailState.items[0];
+      return {
+        value: String(firstItem.emp_id || '').trim(),
+        label: String(firstItem.emp_name || firstItem.emp_id || '').trim()
+      };
+    }
+
+    function npDetailFindItem(itemKey) {
+      itemKey = String(itemKey || '').trim();
+      for (var i = 0; i < npDetailState.items.length; i++) {
+        if (String(npDetailState.items[i].key || '') === itemKey) {
+          return npDetailState.items[i];
+        }
+      }
+      return null;
+    }
+
+    function npDetailCurrentDeptCode() {
+      return String($('#edit_np_dept').val() || '').trim();
+    }
+
+    function npDetailPopulateDeptDatalist() {
+      var $deptSelect = $('#edit_np_dept');
+      var $list = $('#editNpDeptDatalist');
+      $list.empty();
+      $deptSelect.find('option').each(function () {
+        var value = String(this.value || '').trim();
+        var text = String($(this).text() || '').trim();
+        if (!value || !text) { return; }
+        $('<option>').attr('value', text).appendTo($list);
+      });
+    }
+
+    function npDetailSyncDeptInput() {
+      var $deptSelect = $('#edit_np_dept');
+      var selectedText = $deptSelect.val() ? $deptSelect.find('option:selected').text().trim() : '';
+      $('#editNpDeptSearch').val(selectedText);
+    }
+
+    function npDetailFindDeptCodeByName(name) {
+      var target = String(name || '').trim().toLowerCase();
+      var match = '';
+      $('#edit_np_dept option').each(function () {
+        if ($(this).text().trim().toLowerCase() === target) {
+          match = String(this.value || '').trim();
+          return false;
+        }
+      });
+      return match;
+    }
+
+    function npDetailRenderEndUserRows() {
+      var $single = $('#edit_np_emp_single');
+      var $multiWrap = $('#editNpEndUserRows');
+      var $multiToggle = $('#editNpMultipleEndUserCheckBox');
+      var $newEmpSection = $('#edit_np_add_new_employee');
+      var useMultiple = npDetailState.items.length > 1 && npDetailState.useMultipleEndUsers;
+
+      if (!npDetailState.items.length) {
+        $single.hide().removeAttr('name').prop('disabled', true);
+        $multiWrap.hide().empty();
+        $multiToggle.prop('checked', false).prop('disabled', true);
+        $newEmpSection.hide();
+        return;
+      }
+
+      if (!useMultiple) {
+        var singleItem = npDetailState.items[0];
+        var singleItemKey = String(singleItem.key || '');
+        var primaryEmployee = npDetailGetPrimaryEmployee();
+        var singleValue = primaryEmployee.value;
+        var singleLabel = primaryEmployee.label;
+
+        $multiToggle.prop('checked', false).prop('disabled', npDetailState.items.length <= 1);
+        $multiWrap.hide().empty();
+        $single
+          .html(npDetailEmployeeOptionsHtml(singleValue, singleLabel))
+          .attr('name', npDetailState.items.length === 1 ? ('emp_id[' + singleItemKey + ']') : '')
+          .attr('data-item-id', npDetailState.items.length === 1 ? singleItemKey : '')
+          .prop('disabled', false)
+          .show();
+
+        $('#edit_np_new_emp')
+          .attr('name', npDetailState.items.length === 1 ? ('emp_new_name[' + singleItemKey + ']') : '')
+          .prop('disabled', String($single.val() || '').toLowerCase() !== 'add_new_emp')
+          .val('');
+        $('#edit_np_position')
+          .attr('name', npDetailState.items.length === 1 ? ('emp_new_position[' + singleItemKey + ']') : '')
+          .prop('disabled', String($single.val() || '').toLowerCase() !== 'add_new_emp')
+          .val('');
+
+        if (String($single.val() || '').toLowerCase() === 'add_new_emp') {
+          $newEmpSection.show();
+        } else {
+          $newEmpSection.hide();
+        }
+        return;
+      }
+
+      $multiToggle.prop('checked', true).prop('disabled', false);
+      $single.hide().removeAttr('name').prop('disabled', true);
+      $newEmpSection.hide();
+
+      var html = '<table class="table table-sm table-bordered mb-0">'
+        + '<thead class="bg-light">'
+        + '<tr>'
+        + '<th style="width:90px;">Set</th>'
+        + '<th>End User</th>'
+        + '<th>New Employee</th>'
+        + '<th>Position</th>'
+        + '</tr>'
+        + '</thead><tbody>';
+
+      $.each(npDetailState.items, function (_, item) {
+        var itemKey = String(item.key || '');
+        var empValue = String(item.emp_id || '').trim();
+        html += ''
+          + '<tr data-item-id="' + npDetailEsc(itemKey) + '">'
+          + '  <td class="align-middle font-weight-bold">Set ' + npDetailEsc(item.set_no) + '</td>'
+          + '  <td>'
+          + '    <select class="form-control edit-np-emp-select" name="emp_id[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '">'
+          +        npDetailEmployeeOptionsHtml(empValue, item.emp_name || empValue)
+          + '    </select>'
+          + '  </td>'
+          + '  <td>'
+          + '    <input type="text" class="form-control text-uppercase edit-np-emp-new-name" name="emp_new_name[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" placeholder="Enter new employee name" disabled>'
+          + '  </td>'
+          + '  <td>'
+          + '    <input type="text" class="form-control text-uppercase edit-np-emp-new-position" name="emp_new_position[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" placeholder="Enter position" disabled>'
+          + '  </td>'
+          + '</tr>';
+      });
+
+      html += '</tbody></table>';
+      $multiWrap.html(html).show();
+      $multiWrap.find('select.edit-np-emp-select').each(function () {
+        npDetailToggleNewEmployeeRow($(this));
+      });
+    }
+
+    function npDetailRenderItemRows() {
+      var $wrap = $('#editNpItemRows');
+      if (!npDetailState.items.length) {
+        $wrap.html('<div class="text-center text-muted py-4">No items found.</div>');
+        $('#edit_np_set_count').val(0);
+        return;
+      }
+
+      var html = '';
+      $.each(npDetailState.items, function (_, item) {
+        var itemId = parseInt(item.id, 10) || 0;
+        var itemKey = String(item.key || '');
+        html += ''
+          + '<div class="border rounded p-3 item-set-card" data-item-id="' + npDetailEsc(itemKey) + '">'
+          + '  <input type="hidden" name="set_keys[]" value="' + npDetailEsc(itemKey) + '">'
+          + '  <input type="hidden" name="existing_item_id[' + npDetailEsc(itemKey) + ']" value="' + itemId + '">'
+          + '  <div class="d-flex justify-content-between align-items-center mb-3">'
+          + '    <strong>Set ' + npDetailEsc(item.set_no) + '</strong>'
+          + '    <button type="button" class="btn btn-sm btn-outline-danger edit-np-remove-set" data-item-id="' + npDetailEsc(itemKey) + '"' + (npDetailState.items.length === 1 ? ' style="visibility:hidden;"' : '') + '><i class="fas fa-trash"></i></button>'
+          + '  </div>'
+          + '  <div class="form-row">'
+          + '    <div class="form-group col-md-2">'
+          + '      <label>Quantity</label>'
+          + '      <input type="number" class="form-control edit-np-item-quantity" name="item_quantity[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" value="' + npDetailEsc(item.item_quantity || 1) + '" min="1" step="1">'
+          + '    </div>'
+          + '    <div class="form-group col-md-2">'
+          + '      <label>Unit</label>'
+          + '      <select class="form-control" name="unit[' + npDetailEsc(itemKey) + ']" required>'
+          +          npDetailSelectedOptions('#editNpItemUnitOptionsTemplate', item.unit)
+          + '      </select>'
+          + '    </div>'
+          + '    <div class="form-group col-md-4">'
+          + '      <label>Asset Class</label>'
+          + '      <select class="form-control" name="item[' + npDetailEsc(itemKey) + ']" required>'
+          +          npDetailSelectedOptions('#editNpItemAssetOptionsTemplate', item.item)
+          + '      </select>'
+          + '    </div>'
+          + '    <div class="form-group col-md-4">'
+          + '      <label>Brand/Model</label>'
+          + '      <input type="text" class="form-control text-uppercase" name="model[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(item.model) + '" placeholder="Enter Brand and model">'
+          + '    </div>'
+          + '  </div>'
+          + '  <div class="form-row">'
+          + '    <div class="form-group col-md-12">'
+          + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+          + '        <label class="mb-0">Description</label>'
+          + '        <div class="form-check form-check-inline mb-0 text-muted">'
+          + '          <input type="checkbox" class="form-check-input edit-np-add-serial" name="item_add_serial[' + npDetailEsc(itemKey) + ']" value="1"' + (item.add_serial ? ' checked' : '') + '>'
+          + '          <label class="form-check-label">add serial number</label>'
+          + '        </div>'
+          + '      </div>'
+          + '      <textarea class="form-control text-uppercase" name="description[' + npDetailEsc(itemKey) + ']" rows="4" placeholder="Enter description">' + npDetailEsc(item.description) + '</textarea>'
+          + '    </div>'
+          + '  </div>'
+          + '  <div class="form-row edit-np-serial-row"' + (item.add_serial ? '' : ' style="display:none;"') + '>'
+          + '    <div class="form-group col-12">'
+          + '      <div class="edit-np-serial-table-wrap">' + npDetailBuildSerialRows(item) + '</div>'
+          + '    </div>'
+          + '  </div>'
+          + '  <div class="form-row">'
+          + '    <div class="form-group col-md-3">'
+          + '      <label>Unit Value</label>'
+          + '      <input type="text" class="form-control text-right edit-np-unit-value" name="unit_value[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(npDetailFormatMoney(item.unit_value, true)) + '" placeholder="0.00" autocomplete="off">'
+          + '    </div>'
+          + '    <div class="form-group col-md-3">'
+          + '      <label>Total Amount</label>'
+          + '      <input type="text" class="form-control edit-np-total-amount" value="' + npDetailEsc(npDetailFormatMoney((Number(item.unit_value || 0) * Number(item.item_quantity || 1)), true)) + '" readonly>'
+          + '    </div>'
+          + '    <div class="form-group col-md-6">'
+          + '      <label>Account Code</label>'
+          + '      <select class="form-control edit-np-account-code" name="account_code[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '">'
+          +          npDetailSelectedOptions('#editNpItemAccountCodeOptionsTemplate', item.account_code)
+          + '      </select>'
+          + '    </div>'
+          + '  </div>'
+          + '  <div class="form-row mb-0">'
+          + '    <div class="form-group col-md-6">'
+          + '      <label>Property Number</label>'
+          + '      <input type="hidden" name="property_number[' + npDetailEsc(itemKey) + ']" class="edit-np-property-value" value="' + npDetailEsc(item.property_number) + '">'
+          + '      <textarea class="form-control edit-np-property-preview" rows="3" readonly>' + npDetailEsc(item.property_number_preview || item.property_number) + '</textarea>'
+          + '    </div>'
+          + '    <div class="form-group col-md-6 mb-0">'
+          + '      <label>Remarks</label>'
+          + '      <textarea class="form-control text-uppercase" name="remarks[' + npDetailEsc(itemKey) + ']" rows="3" placeholder="Enter remarks">' + npDetailEsc(item.remarks) + '</textarea>'
+          + '    </div>'
+          + '  </div>'
+          + '</div>';
+      });
+
+      $wrap.html(html);
+      $wrap.find('.item-set-card').each(function () {
+        npDetailApplySerialVisibilityState($(this), false);
+      });
+      $('#edit_np_set_count').val(npDetailState.items.length);
+    }
+
+    function npDetailSetProperty(itemId, value, message, type) {
+      var $card = $('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"]');
+      var $hidden = $card.find('.edit-np-property-value');
+      var $preview = $card.find('.edit-np-property-preview');
+      var quantity = npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val());
+      var firstValue = String(value || '').trim();
+      var previewValue = npDetailPropertyCopies(firstValue, quantity).join(', ');
+      var item = npDetailFindItem(itemId);
+
+      if (item) {
+        item.property_number = firstValue;
+        item.property_number_preview = previewValue;
+      }
+
+      $hidden.val(firstValue);
+      $preview.val(previewValue);
+    }
+
+    function npDetailRefreshProperty(itemId) {
+      var item = npDetailFindItem(itemId);
+      var $card = $('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"]');
+      if (!item || !$card.length) { return; }
+
+      var fund = npDetailNormalizeFund($('#edit_np_fund').val());
+      var category = String($('#edit_np_category').val() || '').trim().toUpperCase();
+      var year = npDetailGetYear($('#edit_np_year').val());
+      var dept = npDetailCurrentDeptCode();
+      var accountCode = String($card.find('.edit-np-account-code').val() || '').trim();
+      var originalYear = npDetailGetYear(item.original_year || item.year || '');
+      var originalFund = npDetailNormalizeFund(item.original_fund || item.fund || '');
+      var originalCategory = String(item.original_category || item.category || '').trim().toUpperCase();
+      var originalDept = String(item.original_dept || item.dept || '').trim();
+      var originalAccount = String(item.original_account_code || item.account_code || '').trim();
+      var unchanged = fund === originalFund
+        && category === originalCategory
+        && year === originalYear
+        && dept === originalDept
+        && accountCode === originalAccount;
+      var savedPropertyNumber = String(item.original_property_number || item.property_number || '').trim();
+
+      if (npDetailPropertyOptionalFund()) {
+        npDetailSetProperty(itemId, '', 'Property number is not generated for ' + fund + '.', 'info');
+        return;
+      }
+
+      if (unchanged && savedPropertyNumber) {
+        npDetailSetProperty(itemId, savedPropertyNumber, 'Generated from account code.');
+        return;
+      }
+
+      if (!fund || !category || !year || !dept || !accountCode) {
+        npDetailSetProperty(itemId, savedPropertyNumber, 'Select fund, category, year, department, and account code to generate a property number.', 'error');
+        return;
+      }
+
+      var requestId = ++npDetailPropertyRequestId;
+      npDetailSetProperty(itemId, 'Generating...', 'Checking available property number...', 'info');
 
       $.ajax({
         url: '../auth/auth.php',
@@ -3141,37 +3592,496 @@ $(function(){
         cache: false,
         dataType: 'json',
         data: {
-          update_np_po: 1,
-          original_po:      $('#edit_np_original_po').val(),
-          fund:             $('#edit_np_fund').val(),
-          dept_id:          $('#edit_np_dept').val(),
-          purchase_order:   $('#edit_np_po').val(),
-          purchase_request: $('#edit_np_pr').val(),
-          obr_number:       $('#edit_np_obr').val(),
-          supplier:         $('#edit_np_supplier').val(),
-          par_ics_number:   $('#edit_np_paricsno').val()
+          generate_new_purchase_edit_property_number: 1,
+          new_purchase_id: itemId,
+          property_number: item.original_property_number || item.property_number || '',
+          category: category,
+          year: year,
+          account_code: accountCode,
+          dept: dept,
+          fund: fund
         },
         success: function (resp) {
-          if (!resp || Number(resp.status) !== 200) {
-            var msg = (resp && resp.message) ? resp.message : 'Update failed.';
-            Swal ? Swal.fire({ icon: 'error', title: msg }) : alert(msg);
+          if (requestId !== npDetailPropertyRequestId) { return; }
+          if (resp && Number(resp.status) === 200 && resp.data && resp.data.property_number) {
+            npDetailSetProperty(itemId, resp.data.property_number, 'Available property number generated.', 'success');
             return;
           }
-          $('#editNpPoModal').modal('hide');
-          if (Swal) {
-            Swal.fire({ icon: 'success', title: resp.message || 'Updated successfully.' })
-              .then(function () { window.location.reload(); });
-          } else {
-            alert(resp.message || 'Updated successfully.');
-            window.location.reload();
-          }
+          npDetailSetProperty(itemId, savedPropertyNumber, (resp && resp.message) ? resp.message : 'Unable to generate an available property number.', 'error');
         },
         error: function () {
-          Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
-        },
-        complete: function () { $btn.prop('disabled', false); }
+          if (requestId !== npDetailPropertyRequestId) { return; }
+          npDetailSetProperty(itemId, savedPropertyNumber, 'Unable to check property number availability.', 'error');
+        }
       });
-    });
+    }
+
+    function npDetailRefreshAllProperties() {
+      $.each(npDetailState.items, function (_, item) {
+        npDetailRefreshProperty(item.key);
+      });
+    }
+
+    function npDetailToggleNewEmployeeRow($select) {
+      var itemId = String($select.data('itemId') || '');
+      var isAddNew = String($select.val() || '').toLowerCase() === 'add_new_emp';
+      var $name = $('.edit-np-emp-new-name[data-item-id="' + itemId + '"]');
+      var $position = $('.edit-np-emp-new-position[data-item-id="' + itemId + '"]');
+      $name.prop('disabled', !isAddNew).prop('required', isAddNew);
+      $position.prop('disabled', !isAddNew).prop('required', isAddNew);
+      if (!isAddNew) {
+        $name.val('');
+        $position.val('');
+      }
+    }
+
+    function npDetailLoadEmployees(deptCode, done) {
+      if (!deptCode) {
+        npDetailState.employeeOptionsHtml = '<option value="">SELECT A DEPARTMENT FIRST</option>';
+        npDetailRenderEndUserRows();
+        if (typeof done === 'function') { done(); }
+        return;
+      }
+
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: { departmentid: deptCode },
+        success: function (html) {
+          npDetailState.employeeOptionsHtml = String(html || '<option value="">-SELECT-</option>');
+          npDetailRenderEndUserRows();
+        },
+        error: function () {
+          npDetailState.employeeOptionsHtml = '<option value="">-SELECT-</option><option value="add_new_emp"> + ADD NEW EMPLOYEE </option>';
+          npDetailRenderEndUserRows();
+        },
+        complete: function () {
+          if (typeof done === 'function') { done(); }
+        }
+      });
+    }
+
+    function npDetailFillModal(data) {
+      var group = data && data.group ? data.group : {};
+      var items = data && data.items ? data.items : [];
+
+      npDetailState.group = group;
+      npDetailState.items = $.map(items, function (item) {
+        var originalYear = npDetailGetYear(group.year || '');
+        var originalFund = npDetailNormalizeFund(group.fund || '');
+        var originalCategory = String(group.category || '').trim().toUpperCase();
+        var originalDept = String(group.department_code || '').trim();
+        var key = String(item.id || ('tmp_' + (++npDetailTempIndex)));
+        var itemQuantity = npDetailNormalizeItemQuantity(item.item_quantity || 1);
+        var propertyNumber = String(item.property_number || '');
+        return $.extend({}, item, {
+          key: key,
+          item_quantity: itemQuantity,
+          serial_numbers: [String(item.serial_number || '')],
+          serial_numbers_2: [String(item.serial_number_2 || '')],
+          add_serial: false,
+          property_number: propertyNumber,
+          property_number_preview: npDetailPropertyCopies(propertyNumber, itemQuantity).join(', '),
+          original_property_number: String(item.property_number || ''),
+          original_account_code: String(item.account_code || ''),
+          original_year: originalYear,
+          original_fund: originalFund,
+          original_category: originalCategory,
+          original_dept: originalDept,
+          year: originalYear,
+          fund: originalFund,
+          category: originalCategory,
+          dept: originalDept
+        });
+      }).map(function (item) {
+        item.add_serial = npDetailHasSerialValues(item);
+        return item;
+      });
+
+      $('#edit_np_group_po').val(group.po || '');
+      $('#edit_np_group_row_id').val(group.row_id || '');
+      $('#edit_np_category').val(String(group.category || '').trim().toUpperCase());
+      $('#edit_np_year').val(npDetailGetYear(group.year || ''));
+      $('#edit_np_fund').val(npDetailNormalizeFund(group.fund || ''));
+      $('#edit_np_paricsno').val(group.par_ics_number || '');
+      $('#edit_np_pr').val(group.purchase_request || '');
+      $('#edit_np_supplier').val(group.supplier || '');
+      $('#edit_np_po').val(group.po || '');
+      $('#edit_np_obr').val(group.obr_number || '');
+      $('#edit_np_jev').val(group.jev_number || '');
+      $('#edit_np_dept').val(group.department_code || '');
+      npDetailPopulateDeptDatalist();
+      npDetailSyncDeptInput();
+      npDetailRenderItemRows();
+      npDetailLoadEmployees(String(group.department_code || '').trim(), function () {
+        npDetailRefreshAllProperties();
+      });
+    }
+
+    function npDetailResetSetNumbers() {
+      $.each(npDetailState.items, function (index, item) {
+        item.set_no = index + 1;
+      });
+      $('#edit_np_set_count').val(npDetailState.items.length);
+    }
+
+    function npDetailCreateBlankItem() {
+      var key = 'tmp_' + (++npDetailTempIndex);
+      return {
+        key: key,
+        id: 0,
+        set_no: npDetailState.items.length + 1,
+        unit: '',
+        item: '',
+        model: '',
+        description: '',
+        serial_number: '',
+        serial_number_2: '',
+        serial_numbers: [''],
+        serial_numbers_2: [''],
+        add_serial: false,
+        property_number: '',
+        property_number_preview: '',
+        unit_value: '0.00',
+        account_code: '',
+        remarks: '',
+        emp_id: '',
+        emp_name: '',
+        item_quantity: 1,
+        original_property_number: '',
+        original_account_code: '',
+        original_year: npDetailGetYear($('#edit_np_year').val()),
+        original_fund: npDetailNormalizeFund($('#edit_np_fund').val()),
+        original_category: String($('#edit_np_category').val() || '').trim().toUpperCase(),
+        original_dept: String($('#edit_np_dept').val() || '').trim(),
+        year: npDetailGetYear($('#edit_np_year').val()),
+        fund: npDetailNormalizeFund($('#edit_np_fund').val()),
+        category: String($('#edit_np_category').val() || '').trim().toUpperCase(),
+        dept: String($('#edit_np_dept').val() || '').trim()
+      };
+    }
+
+    function npDetailAdjustSetCount(nextCount) {
+      nextCount = npDetailNormalizeSetCount(nextCount);
+      while (npDetailState.items.length < nextCount) {
+        npDetailState.items.push(npDetailCreateBlankItem());
+      }
+      while (npDetailState.items.length > nextCount) {
+        npDetailState.items.pop();
+      }
+      npDetailResetSetNumbers();
+      npDetailRenderItemRows();
+      npDetailRenderEndUserRows();
+      npDetailRefreshAllProperties();
+    }
+
+    $(document)
+      .off('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn')
+      .on('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn', function () {
+        var $btn = $(this);
+        $('#editNpItemRows').html('<div class="text-center text-muted py-4">Loading details...</div>');
+        $('#editNpEndUserRows').html('<tr><td colspan="4" class="text-center text-muted">Loading details...</td></tr>');
+        $('#editNpDetailModal').modal('show');
+
+        $.ajax({
+          url: '../auth/auth.php',
+          type: 'POST',
+          cache: false,
+          dataType: 'json',
+          data: {
+            fetch_new_purchase_group: 1,
+            po: String($btn.data('po') || '').trim(),
+            row_id: parseInt($btn.data('rowId'), 10) || 0
+          },
+          success: function (resp) {
+            if (!resp || Number(resp.status) !== 200 || !resp.data) {
+              var message = (resp && resp.message) ? resp.message : 'Unable to load purchase details.';
+              $('#editNpDetailModal').modal('hide');
+              Swal ? Swal.fire({ icon: 'error', title: message }) : alert(message);
+              return;
+            }
+            npDetailFillModal(resp.data);
+          },
+          error: function () {
+            $('#editNpDetailModal').modal('hide');
+            Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
+          }
+        });
+      });
+
+    $(document)
+      .off('input.editNpDeptSearch change.editNpDeptSearch', '#editNpDeptSearch')
+      .on('input.editNpDeptSearch change.editNpDeptSearch', '#editNpDeptSearch', function () {
+        var code = npDetailFindDeptCodeByName($(this).val());
+        if (code) {
+          $('#edit_np_dept').val(code);
+        } else if (!$(this).val()) {
+          $('#edit_np_dept').val('');
+        }
+      });
+
+    $(document)
+      .off('change.editNpDeptSelect', '#edit_np_dept')
+      .on('change.editNpDeptSelect', '#edit_np_dept', function () {
+        npDetailSyncDeptInput();
+        npDetailLoadEmployees(String($(this).val() || '').trim(), function () {
+          npDetailRefreshAllProperties();
+        });
+      });
+
+    $(document)
+      .off('change.editNpMultipleEndUsers', '#editNpMultipleEndUserCheckBox')
+      .on('change.editNpMultipleEndUsers', '#editNpMultipleEndUserCheckBox', function () {
+        npDetailState.useMultipleEndUsers = $(this).is(':checked') && npDetailState.items.length > 1;
+        npDetailRenderEndUserRows();
+      });
+
+    $(document)
+      .off('change.editNpEmployeeSelect', '#editNpEndUserRows .edit-np-emp-select, #edit_np_emp_single')
+      .on('change.editNpEmployeeSelect', '#editNpEndUserRows .edit-np-emp-select, #edit_np_emp_single', function () {
+        var $field = $(this);
+        var selectedValue = String($field.val() || '').trim();
+        var selectedLabel = $field.find('option:selected').text().trim();
+        npDetailToggleNewEmployeeRow($field);
+
+        if ($field.is('#edit_np_emp_single')) {
+          if (npDetailState.items.length === 1) {
+            npDetailState.items[0].emp_id = selectedValue;
+            npDetailState.items[0].emp_name = selectedLabel;
+          } else if (!npDetailState.useMultipleEndUsers && selectedValue !== '__keep_existing__') {
+            $.each(npDetailState.items, function (_, item) {
+              item.emp_id = selectedValue;
+              item.emp_name = selectedLabel;
+            });
+          }
+        } else {
+          var itemId = String($field.data('itemId') || '');
+          var item = npDetailFindItem(itemId);
+          if (item) {
+            item.emp_id = selectedValue;
+            item.emp_name = selectedLabel;
+          }
+        }
+
+        if ($field.is('#edit_np_emp_single')) {
+          var isAddNew = String($field.val() || '').toLowerCase() === 'add_new_emp';
+          $('#edit_np_new_emp').prop('disabled', !isAddNew);
+          $('#edit_np_position').prop('disabled', !isAddNew);
+          if (isAddNew) {
+            $('#edit_np_add_new_employee').show();
+          } else {
+            $('#edit_np_add_new_employee').hide();
+            $('#edit_np_new_emp').val('');
+            $('#edit_np_position').val('');
+          }
+        }
+      });
+
+    $(document)
+      .off('input.editNpSetCount change.editNpSetCount blur.editNpSetCount', '#edit_np_set_count')
+      .on('input.editNpSetCount change.editNpSetCount blur.editNpSetCount', '#edit_np_set_count', function () {
+        var count = npDetailNormalizeSetCount($(this).val());
+        $(this).val(count);
+        npDetailAdjustSetCount(count);
+      });
+
+    $(document)
+      .off('click.editNpRemoveSet', '#editNpItemRows .edit-np-remove-set')
+      .on('click.editNpRemoveSet', '#editNpItemRows .edit-np-remove-set', function () {
+        if (npDetailState.items.length <= 1) { return; }
+        var itemKey = String($(this).data('itemId') || '');
+        npDetailState.items = $.grep(npDetailState.items, function (item) {
+          return String(item.key || '') !== itemKey;
+        });
+        npDetailResetSetNumbers();
+        npDetailRenderItemRows();
+        npDetailRenderEndUserRows();
+        npDetailRefreshAllProperties();
+      });
+
+    $(document)
+      .off('input.editNpItemQuantity change.editNpItemQuantity blur.editNpItemQuantity', '#editNpItemRows .edit-np-item-quantity')
+      .on('input.editNpItemQuantity change.editNpItemQuantity blur.editNpItemQuantity', '#editNpItemRows .edit-np-item-quantity', function () {
+        var $field = $(this);
+        var itemKey = String($field.data('itemId') || '');
+        var item = npDetailFindItem(itemKey);
+        var quantity = npDetailNormalizeItemQuantity($field.val());
+        var $card = $field.closest('.item-set-card');
+        var serials1 = [];
+        var serials2 = [];
+
+        $field.val(quantity);
+        $card.find('.edit-np-serial-primary').each(function () { serials1.push(String($(this).val() || '')); });
+        $card.find('.edit-np-serial-secondary').each(function () { serials2.push(String($(this).val() || '')); });
+
+        if (item) {
+          item.item_quantity = quantity;
+          item.serial_numbers = serials1;
+          item.serial_numbers_2 = serials2;
+        }
+
+        $card.find('.edit-np-serial-table-wrap').html(npDetailBuildSerialRows(item || {
+          key: itemKey,
+          item_quantity: quantity,
+          serial_numbers: serials1,
+          serial_numbers_2: serials2
+        }));
+        npDetailApplySerialVisibilityState($card, false);
+        npDetailSyncTotalAmount($card.find('.edit-np-unit-value'));
+        npDetailRefreshProperty(itemKey);
+      });
+
+    $(document)
+      .off('change.editNpSerialToggle', '#editNpItemRows .edit-np-add-serial')
+      .on('change.editNpSerialToggle', '#editNpItemRows .edit-np-add-serial', function () {
+        var $card = $(this).closest('.item-set-card');
+        var itemKey = String($card.data('itemId') || '');
+        var item = npDetailFindItem(itemKey);
+        if (item) {
+          item.add_serial = $(this).is(':checked');
+        }
+        npDetailApplySerialVisibilityState($card, true);
+      });
+
+    $(document)
+      .off('input.editNpUnitValue', '#editNpItemRows .edit-np-unit-value')
+      .on('input.editNpUnitValue', '#editNpItemRows .edit-np-unit-value', function () {
+        var cursorAtEnd = this.selectionStart === this.value.length;
+        this.value = npDetailFormatMoney(this.value);
+        npDetailSyncTotalAmount($(this));
+        if (cursorAtEnd && this.setSelectionRange) {
+          this.setSelectionRange(this.value.length, this.value.length);
+        }
+      })
+      .off('blur.editNpUnitValue', '#editNpItemRows .edit-np-unit-value')
+      .on('blur.editNpUnitValue', '#editNpItemRows .edit-np-unit-value', function () {
+        this.value = npDetailFormatMoney(this.value, true);
+        npDetailSyncTotalAmount($(this));
+      });
+
+    $(document)
+      .off('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_category, #edit_np_year')
+      .on('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_category, #edit_np_year', npDetailRefreshAllProperties);
+
+    $(document)
+      .off('change.editNpPropertyAccount', '#editNpItemRows .edit-np-account-code')
+      .on('change.editNpPropertyAccount', '#editNpItemRows .edit-np-account-code', function () {
+        npDetailRefreshProperty($(this).data('itemId'));
+      });
+
+    $(document)
+      .off('submit.editNpDetailForm', '#editNpDetailForm')
+      .on('submit.editNpDetailForm', '#editNpDetailForm', function (e) {
+        e.preventDefault();
+
+        var deptCode = npDetailFindDeptCodeByName($('#editNpDeptSearch').val()) || npDetailCurrentDeptCode();
+        if (!deptCode) {
+          Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'Please select a valid department from the list.' }) : alert('Please select a valid department from the list.');
+          return;
+        }
+        $('#edit_np_dept').val(deptCode);
+
+        var useMultipleEndUsers = npDetailState.items.length > 1 && npDetailState.useMultipleEndUsers;
+        var singleEmployeeValue = String($('#edit_np_emp_single').val() || '').trim();
+
+        if (!useMultipleEndUsers && npDetailState.items.length > 1) {
+          if (singleEmployeeValue === 'add_new_emp') {
+            var sharedNewEmployeeName = String($('#edit_np_new_emp').val() || '').trim();
+            var sharedNewEmployeePosition = String($('#edit_np_position').val() || '').trim();
+            if (!sharedNewEmployeeName || !sharedNewEmployeePosition) {
+              Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'New employee name and position are required.' }) : alert('New employee name and position are required.');
+              return;
+            }
+          }
+        }
+
+        var missingEmployeeRows = [];
+        if (useMultipleEndUsers) {
+          $('#editNpEndUserRows .edit-np-emp-select').each(function () {
+            var itemId = $(this).data('itemId');
+            if (String($(this).val() || '').toLowerCase() === 'add_new_emp') {
+              var name = $('.edit-np-emp-new-name[data-item-id="' + itemId + '"]').val();
+              var position = $('.edit-np-emp-new-position[data-item-id="' + itemId + '"]').val();
+              if (!String(name || '').trim() || !String(position || '').trim()) {
+                missingEmployeeRows.push(($('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"] strong').text() || ('Set ' + itemId)));
+              }
+            }
+          });
+        }
+        if (missingEmployeeRows.length) {
+          Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'New employee name and position are required for: ' + missingEmployeeRows.join(', ') + '.' }) : alert('New employee name and position are required.');
+          return;
+        }
+
+        var $btn = $('#editNpDetailSaveBtn').prop('disabled', true);
+        var formData = new FormData(this);
+        formData.set('dept_id', deptCode);
+
+        if (!useMultipleEndUsers && npDetailState.items.length > 1) {
+          $.each(npDetailState.items, function (_, item) {
+            var itemKey = String(item.key || '');
+            var employeeValue = singleEmployeeValue || String(item.emp_id || '').trim();
+
+            formData.set('emp_id[' + itemKey + ']', employeeValue);
+
+            if (singleEmployeeValue === 'add_new_emp') {
+              formData.set('emp_new_name[' + itemKey + ']', String($('#edit_np_new_emp').val() || '').trim());
+              formData.set('emp_new_position[' + itemKey + ']', String($('#edit_np_position').val() || '').trim());
+            } else {
+              formData.delete('emp_new_name[' + itemKey + ']');
+              formData.delete('emp_new_position[' + itemKey + ']');
+            }
+          });
+        }
+
+        $.ajax({
+          url: '../auth/auth.php',
+          type: 'POST',
+          cache: false,
+          data: formData,
+          processData: false,
+          contentType: false,
+          dataType: 'json',
+          success: function (resp) {
+            if (!resp || Number(resp.status) !== 200) {
+              var message = (resp && resp.message) ? resp.message : 'Update failed.';
+              Swal ? Swal.fire({ icon: 'error', title: message }) : alert(message);
+              return;
+            }
+            $('#editNpDetailModal').modal('hide');
+            if (Swal) {
+              Swal.fire({ icon: 'success', title: resp.message || 'Updated successfully.' })
+                .then(function () { window.location.reload(); });
+            } else {
+              alert(resp.message || 'Updated successfully.');
+              window.location.reload();
+            }
+          },
+          error: function () {
+            Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
+          },
+          complete: function () {
+            $btn.prop('disabled', false);
+          }
+        });
+      });
+
+    $('#editNpDetailModal')
+      .off('hidden.bs.modal.editNpDetail')
+      .on('hidden.bs.modal.editNpDetail', function () {
+        npDetailState.group = null;
+        npDetailState.items = [];
+        npDetailState.employeeOptionsHtml = '<option value="">-SELECT-</option><option value="add_new_emp"> + ADD NEW EMPLOYEE </option>';
+        npDetailState.useMultipleEndUsers = false;
+        $('#editNpDetailForm')[0].reset();
+        $('#editNpItemRows').html('<div class="text-center text-muted py-4">Select a purchase to view details.</div>');
+        $('#editNpEndUserRows').html('<tr><td colspan="4" class="text-center text-muted">Select a purchase to view details.</td></tr>');
+        $('#edit_np_set_count').val(0);
+        npDetailPopulateDeptDatalist();
+      });
+
+    npDetailPopulateDeptDatalist();
+  })();
 
   // ============================================================
   // New Purchase Items page: datatable with Excel/Print/Re-Print
@@ -6021,7 +6931,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   function buildSerialRowsHtml(setIndex, state){
     var itemQty = Math.max(1, parseInt(state.itemQuantity, 10) || 1);
     var html = ''
-      + '<div class="table-responsive">'
+      + '<div class="table-responsive gso-serial-table-scroll">'
       + '<table class="table table-sm table-bordered mb-0">'
       + '<thead class="bg-light">'
       + '<tr>'
