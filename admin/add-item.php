@@ -201,7 +201,7 @@ if(!isset($_SESSION['alogin'])){
               </div>
               <div class="card-body">
                 <div class="form-row">
-                  <div class="form-group col-md-4">
+                  <div class="form-group col-md-6">
                     <label>Condition</label>
                     <select name="condition" id="condition" class="form-control" required>
                       <option value="">-SELECT-</option>
@@ -209,15 +209,7 @@ if(!isset($_SESSION['alogin'])){
                       <option value="EXISTING">EXISTING</option>
                     </select>
                   </div>
-                  <div class="form-group col-md-4">
-                    <label>Category</label>
-                    <select name="category" id="category" class="form-control" required>
-                      <option value="">-SELECT-</option>
-                      <option value="PAR">PAR</option>
-                      <option value="ICS">ICS</option>
-                    </select>
-                  </div>
-                  <div class="form-group col-md-4">
+                  <div class="form-group col-md-6">
                     <label>Year Acquired</label>
                     <select class="form-control" id="year" name="year" required disabled>
                       <option value="">-SELECT-</option>
@@ -233,7 +225,7 @@ if(!isset($_SESSION['alogin'])){
                   </div>
                 </div>
                 <div class="form-row">
-                  <div class="form-group col-md-4">
+                  <div class="form-group col-md-6">
                     <label>Fund</label>
                     <select name="fund" id="fund" class="form-control" required>
                       <option value="">-SELECT-</option>
@@ -243,12 +235,7 @@ if(!isset($_SESSION['alogin'])){
                       <option value="DONATION">DONATION</option>
                     </select>
                   </div>
-                  <div class="form-group col-md-4">
-                    <label>PAR/ICS NO. <span class="ml-2"><input type="checkbox" id="par_ics_auto" checked> <small>Auto</small></span></label>
-                    <input type="text" class="form-control" id="par_ics_no" name="par_ics_no" placeholder="Enter PAR/ICS No." required readonly>
-                    <small id="par-ics-help" class="form-text" style="display:none"></small>
-                  </div>
-                  <div class="form-group col-md-4">
+                  <div class="form-group col-md-6">
                     <label>P.R</label>
                     <input type="text" class="form-control" id="pr" name="pr" placeholder="Enter purchase request no.">
                   </div>
@@ -670,21 +657,13 @@ if(!isset($_SESSION['alogin'])){
                   </div>
                   <div class="card-body">
                     <div class="form-row">
-                      <div class="form-group col-md-4">
+                      <div class="form-group col-md-6">
                         <label>Condition</label>
                         <select class="form-control" id="edit_np_condition" disabled>
                           <option value="NEW" selected>NEW</option>
                         </select>
                       </div>
-                      <div class="form-group col-md-4">
-                        <label>Category</label>
-                        <select class="form-control" id="edit_np_category" name="category" required>
-                          <option value="">-SELECT-</option>
-                          <option value="PAR">PAR</option>
-                          <option value="ICS">ICS</option>
-                        </select>
-                      </div>
-                      <div class="form-group col-md-4">
+                      <div class="form-group col-md-6">
                         <label>Year Acquired</label>
                         <select class="form-control" id="edit_np_year" name="year" required>
                           <option value="">-SELECT-</option>
@@ -700,7 +679,7 @@ if(!isset($_SESSION['alogin'])){
                       </div>
                     </div>
                     <div class="form-row">
-                      <div class="form-group col-md-4">
+                      <div class="form-group col-md-6">
                         <label>Fund</label>
                         <select class="form-control" id="edit_np_fund" name="fund" required>
                           <option value="">-SELECT-</option>
@@ -710,12 +689,7 @@ if(!isset($_SESSION['alogin'])){
                           <option value="DONATION">DONATION</option>
                         </select>
                       </div>
-                      <div class="form-group col-md-4">
-                        <label>PAR/ICS NO. <span class="ml-2"><input type="checkbox" checked disabled> <small>Auto</small></span></label>
-                        <input type="text" class="form-control text-uppercase" id="edit_np_paricsno" name="par_ics_number" placeholder="Enter PAR/ICS No.">
-                        <small id="edit-np-par-ics-help" class="form-text" style="display:none"></small>
-                      </div>
-                      <div class="form-group col-md-4">
+                      <div class="form-group col-md-6">
                         <label>P.R</label>
                         <input type="text" class="form-control text-uppercase" id="edit_np_pr" name="purchase_request" placeholder="Enter purchase request no.">
                       </div>

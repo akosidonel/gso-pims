@@ -168,7 +168,20 @@ if (!function_exists('gso_new_purchase_group_rows')) {
             return [];
         }
 
-        $where = $rowId > 0 ? 'np.id = ?' : 'np.purchase_order = ?';
+        if ($po === '' && $rowId > 0) {
+            $lookupStmt = $conn->prepare('SELECT purchase_order FROM new_purchase WHERE id = ? LIMIT 1');
+            if ($lookupStmt) {
+                $lookupStmt->bind_param('i', $rowId);
+                $lookupStmt->execute();
+                $lookupResult = $lookupStmt->get_result();
+                if ($lookupResult && ($lookupRow = mysqli_fetch_assoc($lookupResult))) {
+                    $po = trim((string)($lookupRow['purchase_order'] ?? ''));
+                }
+                $lookupStmt->close();
+            }
+        }
+
+        $where = $po !== '' ? 'np.purchase_order = ?' : 'np.id = ?';
         $sql = "
             SELECT
                 np.id,
@@ -196,24 +209,15 @@ if (!function_exists('gso_new_purchase_group_rows')) {
             LEFT JOIN department AS d_by_code ON d_by_code.department_code = h.dept_id
             LEFT JOIN employee AS e ON e.emp_id = h.emp_id
             WHERE {$where}
-              AND (
-                np.property_number IS NULL
-                OR np.property_number = ''
-                OR np.id = (
-                    SELECT MIN(np2.id)
-                    FROM new_purchase AS np2
-                    WHERE np2.property_number = np.property_number
-                )
-              )
             ORDER BY np.id ASC
         ";
 
         $stmt = $conn->prepare($sql);
         if (!$stmt) { return []; }
-        if ($rowId > 0) {
-            $stmt->bind_param('i', $rowId);
-        } else {
+        if ($po !== '') {
             $stmt->bind_param('s', $po);
+        } else {
+            $stmt->bind_param('i', $rowId);
         }
         $stmt->execute();
         $result = $stmt->get_result();
@@ -225,6 +229,74 @@ if (!function_exists('gso_new_purchase_group_rows')) {
         }
         $stmt->close();
         return $rows;
+    }
+}
+
+if (!function_exists('gso_new_purchase_group_modal_items')) {
+    function gso_new_purchase_group_modal_items(array $rows): array {
+        $grouped = [];
+        foreach ($rows as $row) {
+            $signatureParts = [
+                strtoupper(trim((string)($row['category'] ?? ''))),
+                strtoupper(trim((string)($row['unit'] ?? ''))),
+                strtoupper(trim((string)($row['item'] ?? ''))),
+                strtoupper(trim((string)($row['model'] ?? ''))),
+                strtoupper(trim((string)($row['description'] ?? ''))),
+                strtoupper(trim((string)($row['unit_value'] ?? ''))),
+                strtoupper(trim((string)($row['account_code'] ?? ''))),
+                strtoupper(trim((string)($row['remarks'] ?? ''))),
+                strtoupper(trim((string)($row['emp_id'] ?? ''))),
+                strtoupper(trim((string)($row['dept_id'] ?? ''))),
+                strtoupper(trim((string)($row['par_ics_number'] ?? ''))),
+            ];
+            $signature = implode('|', $signatureParts);
+
+            if (!isset($grouped[$signature])) {
+                $grouped[$signature] = [
+                    'id' => (int)($row['id'] ?? 0),
+                    'category' => (string)($row['category'] ?? ''),
+                    'unit' => (string)($row['unit'] ?? ''),
+                    'item' => (string)($row['item'] ?? ''),
+                    'model' => (string)($row['model'] ?? ''),
+                    'description' => (string)($row['description'] ?? ''),
+                    'property_number' => '',
+                    'par_ics_number' => (string)($row['par_ics_number'] ?? ''),
+                    'unit_value' => (string)($row['unit_value'] ?? ''),
+                    'account_code' => (string)($row['account_code'] ?? ''),
+                    'remarks' => (string)($row['remarks'] ?? ''),
+                    'emp_id' => (string)($row['emp_id'] ?? ''),
+                    'emp_name' => (string)($row['emp_name'] ?? ''),
+                    'item_quantity' => 0,
+                    'serial_numbers' => [],
+                    'serial_numbers_2' => [],
+                    'property_numbers' => [],
+                ];
+            }
+
+            $grouped[$signature]['item_quantity']++;
+            $grouped[$signature]['serial_numbers'][] = (string)($row['serial_number'] ?? '');
+            $grouped[$signature]['serial_numbers_2'][] = (string)($row['serial_number_2'] ?? '');
+
+            $propertyNumber = trim((string)($row['property_number'] ?? ''));
+            if ($propertyNumber !== '') {
+                if ($grouped[$signature]['property_number'] === '') {
+                    $grouped[$signature]['property_number'] = $propertyNumber;
+                }
+                $grouped[$signature]['property_numbers'][] = $propertyNumber;
+            }
+        }
+
+        $items = [];
+        $setNo = 1;
+        foreach ($grouped as $item) {
+            $item['set_no'] = $setNo++;
+            $item['serial_number'] = $item['serial_numbers'][0] ?? '';
+            $item['serial_number_2'] = $item['serial_numbers_2'][0] ?? '';
+            $item['property_number_preview'] = implode(', ', $item['property_numbers']);
+            $items[] = $item;
+        }
+
+        return $items;
     }
 }
 
@@ -6434,26 +6506,7 @@ if (isset($_POST['fetch_new_purchase_group'])) {
     }
 
     $first = $rows[0];
-    $items = [];
-    $setNo = 1;
-    foreach ($rows as $row) {
-        $items[] = [
-            'set_no' => $setNo++,
-            'id' => (int)($row['id'] ?? 0),
-            'unit' => (string)($row['unit'] ?? ''),
-            'item' => (string)($row['item'] ?? ''),
-            'model' => (string)($row['model'] ?? ''),
-            'description' => (string)($row['description'] ?? ''),
-            'serial_number' => (string)($row['serial_number'] ?? ''),
-            'serial_number_2' => (string)($row['serial_number_2'] ?? ''),
-            'property_number' => (string)($row['property_number'] ?? ''),
-            'unit_value' => (string)($row['unit_value'] ?? ''),
-            'account_code' => (string)($row['account_code'] ?? ''),
-            'remarks' => (string)($row['remarks'] ?? ''),
-            'emp_id' => (string)($row['emp_id'] ?? ''),
-            'emp_name' => (string)($row['emp_name'] ?? ''),
-        ];
-    }
+    $items = gso_new_purchase_group_modal_items($rows);
 
     echo json_encode([
         'status' => 200,
@@ -6523,18 +6576,16 @@ if (isset($_POST['update_new_purchase_group'])) {
     }
 
     $fund = strtoupper(trim((string)($_POST['fund'] ?? '')));
-    $category = strtoupper(trim((string)($_POST['category'] ?? '')));
     $year = trim((string)($_POST['year'] ?? ''));
     $purchaseOrder = strtoupper(trim((string)($_POST['purchase_order'] ?? '')));
     $purchaseRequest = strtoupper(trim((string)($_POST['purchase_request'] ?? '')));
     $obrNumber = strtoupper(trim((string)($_POST['obr_number'] ?? '')));
     $jevNumber = strtoupper(trim((string)($_POST['jev_number'] ?? '')));
     $supplier = strtoupper(trim((string)($_POST['supplier'] ?? '')));
-    $parIcsNumber = strtoupper(trim((string)($_POST['par_ics_number'] ?? '')));
     $deptInput = trim((string)($_POST['dept_id'] ?? ''));
 
-    if ($fund === '' || $category === '' || $year === '' || $deptInput === '') {
-        echo json_encode(['status' => 422, 'message' => 'Fund, category, year, and department are required.']);
+    if ($fund === '' || $year === '' || $deptInput === '') {
+        echo json_encode(['status' => 422, 'message' => 'Fund, year, and department are required.']);
         return false;
     }
 
@@ -6598,6 +6649,10 @@ if (isset($_POST['update_new_purchase_group'])) {
         if ($qty > 5000) { $qty = 5000; }
         return $qty;
     };
+    $normalizeCategory = function ($value) {
+        $category = strtoupper(trim((string)$value));
+        return in_array($category, ['PAR', 'ICS'], true) ? $category : '';
+    };
     $nextPropertyNumber = function ($current) {
         $parts = explode('-', (string)$current);
         if (count($parts) < 4) { return (string)$current; }
@@ -6605,6 +6660,48 @@ if (isset($_POST['update_new_purchase_group'])) {
         $seq = $parts[$seqIndex];
         $parts[$seqIndex] = str_pad((string)(((int)$seq) + 1), strlen($seq), '0', STR_PAD_LEFT);
         return implode('-', $parts);
+    };
+    $generatedParIcsByCategory = [];
+    $currentParIcsByCategory = [];
+    foreach ($currentRows as $row) {
+        $rowCategory = $normalizeCategory($row['category'] ?? '');
+        $rowParIcs = strtoupper(trim((string)($row['par_ics_number'] ?? '')));
+        if ($rowCategory !== '' && $rowParIcs !== '' && !isset($currentParIcsByCategory[$rowCategory])) {
+            $currentParIcsByCategory[$rowCategory] = $rowParIcs;
+        }
+    }
+    $getParIcsForCategory = function ($rowCategory) use ($conn, &$generatedParIcsByCategory, $currentParIcsByCategory, $normalizeCategory) {
+        $rowCategory = $normalizeCategory($rowCategory);
+        if ($rowCategory === '') {
+            throw new RuntimeException('Each set must include a valid category.');
+        }
+        if (isset($generatedParIcsByCategory[$rowCategory])) {
+            return $generatedParIcsByCategory[$rowCategory];
+        }
+        if (isset($currentParIcsByCategory[$rowCategory])) {
+            $generatedParIcsByCategory[$rowCategory] = $currentParIcsByCategory[$rowCategory];
+            return $generatedParIcsByCategory[$rowCategory];
+        }
+        $ym = date('Ym');
+        $letter = ($rowCategory === 'ICS') ? 'I' : 'P';
+        $prefix = $ym . '-' . $letter;
+        $prefixEsc = mysqli_real_escape_string($conn, $prefix);
+        $max = 0;
+        foreach (['new_purchase', 'par_gen_fund', 'property_sef', 'trust_fund', 'donation'] as $tableName) {
+            $tableName = preg_replace('/[^A-Za-z0-9_]/', '', $tableName);
+            $sql = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefixEsc') + 1) AS UNSIGNED)) AS max_sfx
+                    FROM {$tableName}
+                    WHERE par_ics_number LIKE CONCAT('$prefixEsc','%')";
+            $result = mysqli_query($conn, $sql);
+            if ($result && mysqli_num_rows($result) === 1) {
+                $row = mysqli_fetch_assoc($result);
+                if ($row && $row['max_sfx'] !== null) {
+                    $max = max($max, (int)$row['max_sfx']);
+                }
+            }
+        }
+        $generatedParIcsByCategory[$rowCategory] = $prefix . sprintf('%04d', ($max + 1));
+        return $generatedParIcsByCategory[$rowCategory];
     };
     $totalRequestedItems = 0;
     foreach ($setKeys as $setKey) {
@@ -6686,23 +6783,26 @@ if (isset($_POST['update_new_purchase_group'])) {
 
             $unit = strtoupper(trim($getPostedMapValue('unit', $setKey)));
             $item = strtoupper(trim($getPostedMapValue('item', $setKey)));
+            $category = $normalizeCategory($getPostedMapValue('category', $setKey, $currentRow['category'] ?? ''));
             $model = strtoupper(trim($getPostedMapValue('model', $setKey)));
             $description = strtoupper(trim($getPostedMapValue('description', $setKey)));
             $accountCode = strtoupper(trim($getPostedMapValue('account_code', $setKey)));
             $remarks = strtoupper(trim($getPostedMapValue('remarks', $setKey)));
             $propertyNumber = strtoupper(trim($getPostedMapValue('property_number', $setKey)));
             $unitValue = (float)preg_replace('/[^0-9.]/', '', $getPostedMapValue('unit_value', $setKey, '0'));
+            $skipAccountAndProperty = in_array(strtoupper(trim($getPostedMapValue('item_no_account_property', $setKey, '0'))), ['1', 'ON', 'YES', 'TRUE'], true);
             $employeeRaw = trim($getPostedMapValue('emp_id', $setKey));
             $newEmployeeName = strtoupper(trim($getPostedMapValue('emp_new_name', $setKey)));
             $newEmployeePosition = strtoupper(trim($getPostedMapValue('emp_new_position', $setKey)));
             $itemQuantity = $normalizeItemQuantity($getPostedMapValue('item_quantity', $setKey, '1'));
 
-            if ($item === '' || $unit === '') {
-                throw new RuntimeException('Each set must include at least a unit and asset class.');
+            if ($item === '' || $unit === '' || $category === '') {
+                throw new RuntimeException('Each set must include category, unit, and asset class.');
             }
-            if ($accountCode === '' && !$propertyNumberOptionalFund) {
+            if ($accountCode === '' && !$propertyNumberOptionalFund && !$skipAccountAndProperty) {
                 throw new RuntimeException('Account code is required for each set.');
             }
+            $parIcsNumber = $getParIcsForCategory($category);
 
             $employeeId = 0;
             if (strtolower($employeeRaw) === 'add_new_emp') {
@@ -6725,14 +6825,14 @@ if (isset($_POST['update_new_purchase_group'])) {
                 $serial2Values[$copyIndex] = strtoupper(trim($getPostedNestedMapValue('serial_number_2', $setKey, $copyIndex)));
             }
 
-            $currentPropertyNumber = $propertyNumberOptionalFund ? '' : $propertyNumber;
-            if (!$propertyNumberOptionalFund && $currentPropertyNumber === '') {
+            $currentPropertyNumber = ($propertyNumberOptionalFund || $skipAccountAndProperty) ? '' : $propertyNumber;
+            if (!$propertyNumberOptionalFund && !$skipAccountAndProperty && $currentPropertyNumber === '') {
                 throw new RuntimeException('Property number is required for each set.');
             }
 
             for ($copyIndex = 1; $copyIndex <= $itemQuantity; $copyIndex++) {
-                $copyPropertyNumber = $propertyNumberOptionalFund ? '' : $currentPropertyNumber;
-                if (!$propertyNumberOptionalFund && $copyPropertyNumber !== '') {
+                $copyPropertyNumber = ($propertyNumberOptionalFund || $skipAccountAndProperty) ? '' : $currentPropertyNumber;
+                if (!$propertyNumberOptionalFund && !$skipAccountAndProperty && $copyPropertyNumber !== '') {
                     $checkId = ($copyIndex === 1 && $existingId > 0) ? $existingId : 0;
                     $checkOld = ($copyIndex === 1) ? $oldPropNum : '';
                     if (gso_new_purchase_property_number_in_use($conn, $copyPropertyNumber, $checkId, $checkOld)) {
@@ -6942,7 +7042,7 @@ if (isset($_POST['save_item'])) {
     }
     $noEndUser = ($conditionRaw === 'NEW' && isset($_POST['endUserNoneCheckBox']) && (string)$_POST['endUserNoneCheckBox'] === '1');
 
-    $categoryInput = isset($_POST['category']) ? (string)$_POST['category'] : '';
+    $categoryInput = (isset($_POST['category']) && !is_array($_POST['category'])) ? (string)$_POST['category'] : '';
     $yearInput = isset($_POST['year']) ? (string)$_POST['year'] : '';
     $assetInput = (isset($_POST['asset']) && !is_array($_POST['asset'])) ? (string)$_POST['asset'] : '';
     $brandInput = (isset($_POST['brand']) && !is_array($_POST['brand'])) ? (string)$_POST['brand'] : '';
@@ -6972,6 +7072,7 @@ if (isset($_POST['save_item'])) {
     $itemAssetRows = (isset($_POST['asset']) && is_array($_POST['asset'])) ? $_POST['asset'] : null;
     $itemBrandRows = (isset($_POST['brand']) && is_array($_POST['brand'])) ? $_POST['brand'] : null;
     $itemDescriptionRows = (isset($_POST['description']) && is_array($_POST['description'])) ? $_POST['description'] : null;
+    $itemCategoryRows = (isset($_POST['category']) && is_array($_POST['category'])) ? $_POST['category'] : null;
     $itemQuantityRows = (isset($_POST['item_quantity']) && is_array($_POST['item_quantity'])) ? $_POST['item_quantity'] : null;
     $itemUnitvalueRows = (isset($_POST['unitvalue']) && is_array($_POST['unitvalue'])) ? $_POST['unitvalue'] : null;
     $itemRemarksRows = (isset($_POST['remarks']) && is_array($_POST['remarks'])) ? $_POST['remarks'] : null;
@@ -7023,6 +7124,10 @@ if (isset($_POST['save_item'])) {
             }
         }
         return $fallback;
+    };
+    $resolveRowCategory = function (?array $rows, int $rowIndex, string $fallback = '') use ($resolveRowInput): string {
+        $value = strtoupper(trim($resolveRowInput($rows, $rowIndex, $fallback)));
+        return in_array($value, ['PAR', 'ICS'], true) ? $value : '';
     };
     $totalRequestedItems = 0;
     for ($rowIndex = 1; $rowIndex <= $quantity; $rowIndex++) {
@@ -7158,28 +7263,27 @@ if (isset($_POST['save_item'])) {
 
         // PAR/ICS number generation (single MAX lookup per request)
         $manualProvided = ($par_ics_input_raw !== '' && strtoupper($par_ics_input_raw) !== 'NULL');
-        $parIcsPrefix = null;
-        $parIcsNext = null;
-        if (!$manualProvided) {
-            $ym = date('Ym');
-            $letter = (strpos(strtoupper($category), 'ICS') !== false) ? 'I' : 'P';
-            $parIcsPrefix = $ym . '-' . $letter;
-            $prefEsc = mysqli_real_escape_string($conn, $parIcsPrefix);
-            $max = 0;
-            // NOTE (per requirement): for condition=NEW, PAR/ICS sequencing + duplication checks
-            // are based ONLY on new_purchase.
-            $sqlMax = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM new_purchase WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
-            $resMax = mysqli_query($conn, $sqlMax);
-            if ($resMax && mysqli_num_rows($resMax) === 1) {
-                $row = mysqli_fetch_assoc($resMax);
-                if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
+        $parIcsCodeByCategory = [];
+        $getParIcsForCategory = function($rowCategory) use (&$parIcsCodeByCategory, $conn) {
+            $rowCategory = strtoupper(trim((string)$rowCategory));
+            if (!in_array($rowCategory, ['PAR', 'ICS'], true)) {
+                throw new RuntimeException('Invalid category for PAR/ICS number generation.');
             }
-            $parIcsNext = $max + 1;
-        }
-        $nextParIcs = function() use (&$parIcsNext, $parIcsPrefix) {
-            $num = (int)$parIcsNext;
-            $parIcsNext = $num + 1;
-            return $parIcsPrefix . sprintf('%04d', $num);
+            if (!isset($parIcsCodeByCategory[$rowCategory])) {
+                $ym = date('Ym');
+                $letter = ($rowCategory === 'ICS') ? 'I' : 'P';
+                $prefix = $ym . '-' . $letter;
+                $prefEsc = mysqli_real_escape_string($conn, $prefix);
+                $max = 0;
+                $sqlMax = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM new_purchase WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
+                $resMax = mysqli_query($conn, $sqlMax);
+                if ($resMax && mysqli_num_rows($resMax) === 1) {
+                    $row = mysqli_fetch_assoc($resMax);
+                    if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
+                }
+                $parIcsCodeByCategory[$rowCategory] = $prefix . sprintf('%04d', ($max + 1));
+            }
+            return $parIcsCodeByCategory[$rowCategory];
         };
 
         $deptCode = strtoupper(trim((string)$dept));
@@ -7259,6 +7363,7 @@ if (isset($_POST['save_item'])) {
         $parentPropertyNumbers = [];
         $parentEmpIds = [];
         $insertedCount = 0;
+        $printRefs = ['PAR' => [], 'ICS' => []];
 
         mysqli_begin_transaction($conn);
         try {
@@ -7318,6 +7423,10 @@ if (isset($_POST['save_item'])) {
                     throw new Exception('End user is required.');
                 }
 
+                $categoryForRow = $resolveRowCategory($itemCategoryRows, $i, $categoryInput);
+                if ($categoryForRow === '') {
+                    throw new Exception('Category is required for row ' . $i . '.');
+                }
                 $omitAccountPropertyForRow = $resolveRowBool($itemNoAccountPropertyRows, $i, false);
                 $skipPropertyNumberForRow = $propertyNumberOptionalFund || $omitAccountPropertyForRow;
                 $accountCodeForRow = $resolveRowUpper($itemAccountCodeRows, $i, $accountCodeInput);
@@ -7371,7 +7480,7 @@ if (isset($_POST['save_item'])) {
                     if ($manualProvided) {
                         $parIcsForRow = strtoupper($par_ics_input_raw);
                     } else {
-                        $parIcsForRow = $nextParIcs();
+                        $parIcsForRow = $getParIcsForCategory($categoryForRow);
                     }
 
                     $fundForPurchase = strtoupper(trim((string)($_POST['fund'] ?? '')));
@@ -7392,7 +7501,7 @@ if (isset($_POST['save_item'])) {
                         $stmtNewPurchase,
                         'sssssssssdssssssssss',
                         $fundForPurchase,
-                        $category,
+                        $categoryForRow,
                         $unitForPurchase,
                         $itemForRow,
                         $brandForRow,
@@ -7429,7 +7538,7 @@ if (isset($_POST['save_item'])) {
                         $historyParNumber,
                         $referenceNumber,
                         $statusActive,
-                        $category,
+                        $categoryForRow,
                         $createdAt
                     );
                     if (!mysqli_stmt_execute($stmtNewPurchaseHist)) {
@@ -7437,6 +7546,9 @@ if (isset($_POST['save_item'])) {
                     }
 
                     $insertedCount++;
+                    if (!in_array($referenceNumber, $printRefs[$categoryForRow], true)) {
+                        $printRefs[$categoryForRow][] = $referenceNumber;
+                    }
                 }
 
                 $parentPropertyNumbers[$i] = $firstParNumberForSet;
@@ -7488,7 +7600,7 @@ if (isset($_POST['save_item'])) {
                     if ($manualProvided) {
                         $parIcsForBundle = strtoupper($par_ics_input_raw);
                     } else {
-                        $parIcsForBundle = $nextParIcs();
+                        $parIcsForBundle = $getParIcsForCategory($bCat);
                     }
                     // (No inventory-table inserts for NEW condition)
 
@@ -7530,9 +7642,10 @@ if (isset($_POST['save_item'])) {
                 'count' => $insertedCount,
                 'data' => [
                     'condition' => 'NEW',
-                    'category' => strtoupper(trim((string)$_POST['category'] ?? '')),
                     'reference_number' => $referenceNumber,
                     'should_print' => true,
+                    'par_refs' => $printRefs['PAR'],
+                    'ics_refs' => $printRefs['ICS'],
                 ]
             ]);
             return false;
@@ -7603,41 +7716,41 @@ if (isset($_POST['save_item'])) {
 
     // PAR/ICS generator optimization:
     // The old generateParIcsNumber() scans MAX() each call; for bulk adds this becomes very slow.
-    $parIcsPrefix = null;
-    $parIcsNext = null;
-    if (!$manualProvided) {
-        $ym = date('Ym');
-        $letter = (strpos(strtoupper($category), 'ICS') !== false) ? 'I' : 'P';
-        $parIcsPrefix = $ym . '-' . $letter;
-
-        $prefEsc = mysqli_real_escape_string($conn, $parIcsPrefix);
-        $max = 0;
-        $sqlGf = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM par_gen_fund WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
-        $resGf = mysqli_query($conn, $sqlGf);
-        if ($resGf && mysqli_num_rows($resGf) === 1) {
-            $row = mysqli_fetch_assoc($resGf);
-            if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
+    $parIcsCodeByCategory = [];
+    $getParIcsForCategory = function($rowCategory) use (&$parIcsCodeByCategory, $conn) {
+        $rowCategory = strtoupper(trim((string)$rowCategory));
+        if (!in_array($rowCategory, ['PAR', 'ICS'], true)) {
+            throw new RuntimeException('Invalid category for PAR/ICS number generation.');
         }
-        $sqlSef = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM property_sef WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
-        $resSef = mysqli_query($conn, $sqlSef);
-        if ($resSef && mysqli_num_rows($resSef) === 1) {
-            $row = mysqli_fetch_assoc($resSef);
-            if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
-        }
-        foreach (['trust_fund', 'donation'] as $fundTable) {
-            $sqlFund = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM {$fundTable} WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
-            $resFund = mysqli_query($conn, $sqlFund);
-            if ($resFund && mysqli_num_rows($resFund) === 1) {
-                $row = mysqli_fetch_assoc($resFund);
+        if (!isset($parIcsCodeByCategory[$rowCategory])) {
+            $ym = date('Ym');
+            $letter = ($rowCategory === 'ICS') ? 'I' : 'P';
+            $prefix = $ym . '-' . $letter;
+            $prefEsc = mysqli_real_escape_string($conn, $prefix);
+            $max = 0;
+            $sqlGf = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM par_gen_fund WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
+            $resGf = mysqli_query($conn, $sqlGf);
+            if ($resGf && mysqli_num_rows($resGf) === 1) {
+                $row = mysqli_fetch_assoc($resGf);
                 if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
             }
+            $sqlSef = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM property_sef WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
+            $resSef = mysqli_query($conn, $sqlSef);
+            if ($resSef && mysqli_num_rows($resSef) === 1) {
+                $row = mysqli_fetch_assoc($resSef);
+                if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
+            }
+            foreach (['trust_fund', 'donation'] as $fundTable) {
+                $sqlFund = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM {$fundTable} WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
+                $resFund = mysqli_query($conn, $sqlFund);
+                if ($resFund && mysqli_num_rows($resFund) === 1) {
+                    $row = mysqli_fetch_assoc($resFund);
+                    if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
+                }
+            }
+            $parIcsCodeByCategory[$rowCategory] = $prefix . sprintf('%04d', ($max + 1));
         }
-        $parIcsNext = $max + 1;
-    }
-    $nextParIcs = function() use (&$parIcsNext, $parIcsPrefix) {
-        $num = (int)$parIcsNext;
-        $parIcsNext = $num + 1;
-        return $parIcsPrefix . sprintf('%04d', $num);
+        return $parIcsCodeByCategory[$rowCategory];
     };
 
     // Build and execute inserts per quantity using batching + transaction
@@ -7742,6 +7855,12 @@ if (isset($_POST['save_item'])) {
         }
 
         $accountCodeForRow = $resolveRowUpper($itemAccountCodeRows, $i, $accountCodeInput);
+        $categoryForRow = $resolveRowCategory($itemCategoryRows, $i, $categoryInput);
+        if ($categoryForRow === '') {
+            mysqli_rollback($conn);
+            echo json_encode(['status'=>422,'message'=>'Category is required for row '.$i.'.']);
+            return false;
+        }
         if ($accountCodeForRow === '') {
             mysqli_rollback($conn);
             echo json_encode(['status'=>422,'message'=>'Account code is required for row '.$i.'.']);
@@ -7797,7 +7916,7 @@ if (isset($_POST['save_item'])) {
             if ($manualProvided) {
                 $parIcsForRow = strtoupper($par_ics_input_raw);
             } else {
-                $parIcsForRow = $nextParIcs();
+                $parIcsForRow = $getParIcsForCategory($categoryForRow);
             }
             $par_ics_sql = ($parIcsForRow === '' ? 'NULL' : "'" . mysqli_real_escape_string($conn, $parIcsForRow) . "'");
             $serial1ForCopy = $resolveSerialValue($serialArr, $i, $copyIndex);
@@ -7808,23 +7927,23 @@ if (isset($_POST['save_item'])) {
             $s2 = ($serial2ForCopy === null) ? 'NULL' : "'" . mysqli_real_escape_string($conn, $serial2ForCopy) . "'";
 
             if ($isGF) {
-                $multi .= "INSERT INTO par_gen_fund(category,item,model,description,serial_number,serial_number_2,par_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$category."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
-                $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,status,category) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".$status."','".$category."');";
+                $multi .= "INSERT INTO par_gen_fund(category,item,model,description,serial_number,serial_number_2,par_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
+                $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,status,category) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".$status."','".$categoryForRow."');";
             } elseif ($isSEF) {
-                $multi .= "INSERT INTO property_sef(category,item,model,description,serial_number,serial_number_2,property_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$category."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
-                $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,status,category) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".$status."','".$category."');";
+                $multi .= "INSERT INTO property_sef(category,item,model,description,serial_number,serial_number_2,property_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
+                $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,status,category) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".$status."','".$categoryForRow."');";
             } elseif ($isTrustFund) {
                 $fundRecordId = $nextTrustFundId;
                 $nextTrustFundId--;
                 $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
-                $multi .= "INSERT INTO trust_fund(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','TRUST FUND','".$category."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
-                $multi .= "INSERT INTO trust_fund_history(id,emp_id,dept_id,par_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".$status."','".$category."','".$today."');";
+                $multi .= "INSERT INTO trust_fund(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','TRUST FUND','".$categoryForRow."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
+                $multi .= "INSERT INTO trust_fund_history(id,emp_id,dept_id,par_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".$status."','".$categoryForRow."','".$today."');";
             } else {
                 $fundRecordId = $nextDonationId;
                 $nextDonationId--;
                 $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
-                $multi .= "INSERT INTO donation(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','DONATION','".$category."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
-                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".$status."','".$category."','".$today."');";
+                $multi .= "INSERT INTO donation(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','DONATION','".$categoryForRow."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
+                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".$status."','".$categoryForRow."','".$today."');";
             }
 
             $batchItems++;

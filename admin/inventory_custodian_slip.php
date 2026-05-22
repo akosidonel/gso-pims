@@ -569,12 +569,6 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
         $rowHeights[] = $rowHeight;
         $usedBodyHeight += $rowHeight;
     }
-    if (count($rowHeights) > 0 && $usedBodyHeight < $bodyHeight) {
-        $extraHeight = ($bodyHeight - $usedBodyHeight) / count($rowHeights);
-        foreach ($rowHeights as $heightIndex => $heightValue) {
-            $rowHeights[$heightIndex] = $heightValue + $extraHeight;
-        }
-    }
 
     $pdf->SetXY($startX, $startY + 14);
     $rowIndex = 0;
@@ -597,6 +591,14 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
         $pdf->MultiCell($colWidths[5], $rowHeight, '', 'LR', 'C', false, 0, '', '', true, 0, false, true, $rowHeight, 'T', true);
         $pdf->MultiCell($colWidths[6], $rowHeight, '', 'LR', 'C', false, 1, '', '', true, 0, false, true, $rowHeight, 'T');
         $rowIndex++;
+    }
+
+    $remainingBodyHeight = max(0.0, $bodyHeight - $usedBodyHeight);
+    if ($remainingBodyHeight > 0.01) {
+        foreach ($colWidths as $columnIndex => $columnWidth) {
+            $isLastColumn = ($columnIndex === (count($colWidths) - 1));
+            $pdf->Cell($columnWidth, $remainingBodyHeight, '', 'LR', $isLastColumn ? 1 : 0, 'L');
+        }
     }
 
     $pdf->SetFont('dejavusans', '', 10);

@@ -3242,6 +3242,125 @@ $(function(){
       $total.val(npDetailFormatMoney(unitValue, true));
     }
 
+    function npDetailApplyNoBrandState($card) {
+      var $brand = $card.find('.edit-np-brand');
+      var $toggle = $card.find('.edit-np-no-brand');
+      if (!$brand.length || !$toggle.length) { return; }
+
+      if ($toggle.is(':checked')) {
+        if ($brand.data('prevUserValueCaptured') !== true) {
+          $brand.data('prevUserValue', String($brand.val() || ''));
+          $brand.data('prevUserValueCaptured', true);
+        }
+        $brand.val('NO BRAND/MODEL').prop('readonly', true).prop('required', false);
+        return;
+      }
+
+      if (String($brand.val() || '').trim().toUpperCase() === 'NO BRAND/MODEL') {
+        $brand.val(String($brand.data('prevUserValue') || ''));
+      }
+      $brand.prop('readonly', false).prop('required', true);
+      $brand.data('prevUserValueCaptured', false);
+    }
+
+    function npDetailApplyNoAmountState($card) {
+      var $input = $card.find('.edit-np-unit-value');
+      var $toggle = $card.find('.edit-np-no-amount');
+      if (!$input.length || !$toggle.length) { return; }
+
+      if ($toggle.is(':checked')) {
+        if (!String($input.val() || '').trim()) {
+          $input.val('0.00');
+        }
+        $input.prop('readonly', true).prop('required', false);
+      } else {
+        $input.prop('readonly', false).prop('required', true);
+      }
+
+      npDetailSyncTotalAmount($input);
+    }
+
+    function npDetailApplyNoAccountPropertyState($card) {
+      var $toggle = $card.find('.edit-np-no-account-property');
+      var $account = $card.find('.edit-np-account-code');
+      if (!$toggle.length || !$account.length) { return; }
+
+      if ($toggle.is(':checked')) {
+        $account.val('').prop('disabled', true).prop('required', false);
+      } else {
+        $account.prop('disabled', false).prop('required', !npDetailPropertyOptionalFund());
+      }
+    }
+
+    function npDetailSetParIcs(itemId, value) {
+      var $card = $('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"]');
+      var code = String(value || '').trim();
+      var item = npDetailFindItem(itemId);
+      if (item) {
+        item.par_ics_number = code;
+      }
+      $card.find('.edit-np-par-ics-value').val(code);
+      $card.find('.edit-np-par-ics-preview').val(code);
+    }
+
+    function npDetailRefreshParIcsNumbers() {
+      if (!npDetailState.items.length) { return; }
+
+      var codeByCategory = {};
+      $.each(npDetailState.items, function (_, item) {
+        var category = String(item.category || '').trim().toUpperCase();
+        var code = String(item.par_ics_number || '').trim().toUpperCase();
+        if (category && code && !codeByCategory[category]) {
+          codeByCategory[category] = code;
+        }
+      });
+
+      var pendingCategories = [];
+      $('#editNpItemRows .item-set-card').each(function () {
+        var $card = $(this);
+        var itemId = String($card.data('itemId') || '');
+        var category = String($card.find('.edit-np-item-category').val() || '').trim().toUpperCase();
+        var item = npDetailFindItem(itemId);
+        if (item) {
+          item.category = category;
+        }
+
+        if (!category) {
+          npDetailSetParIcs(itemId, '');
+        } else if (codeByCategory[category]) {
+          npDetailSetParIcs(itemId, codeByCategory[category]);
+        } else if ($.inArray(category, pendingCategories) === -1) {
+          pendingCategories.push(category);
+        }
+      });
+
+      $.each(pendingCategories, function (_, category) {
+        $.ajax({
+          url: '../auth/auth.php',
+          type: 'POST',
+          cache: false,
+          dataType: 'json',
+          data: {
+            generate_par_ics_code: 1,
+            category: category,
+            condition: 'NEW'
+          },
+          success: function (resp) {
+            var code = (resp && Number(resp.status) === 200 && resp.code) ? String(resp.code).trim().toUpperCase() : '';
+            if (!code) { return; }
+            codeByCategory[category] = code;
+            $('#editNpItemRows .item-set-card').each(function () {
+              var $card = $(this);
+              var itemId = String($card.data('itemId') || '');
+              if (String($card.find('.edit-np-item-category').val() || '').trim().toUpperCase() === category) {
+                npDetailSetParIcs(itemId, code);
+              }
+            });
+          }
+        });
+      });
+    }
+
     function npDetailSelectedOptions(templateSelector, selectedValue) {
       var $wrap = $('<select>' + String($(templateSelector).html() || '<option value="">-SELECT-</option>') + '</select>');
       var selectedText = String(selectedValue || '').trim();
@@ -3458,20 +3577,34 @@ $(function(){
           + '      <input type="number" class="form-control edit-np-item-quantity" name="item_quantity[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" value="' + npDetailEsc(item.item_quantity || 1) + '" min="1" step="1">'
           + '    </div>'
           + '    <div class="form-group col-md-2">'
+          + '      <label>Category</label>'
+          + '      <select class="form-control edit-np-item-category" name="category[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" required>'
+          + '        <option value="">-SELECT-</option>'
+          + '        <option value="PAR"' + (String(item.category || '').trim().toUpperCase() === 'PAR' ? ' selected' : '') + '>PAR</option>'
+          + '        <option value="ICS"' + (String(item.category || '').trim().toUpperCase() === 'ICS' ? ' selected' : '') + '>ICS</option>'
+          + '      </select>'
+          + '    </div>'
+          + '    <div class="form-group col-md-2">'
           + '      <label>Unit</label>'
           + '      <select class="form-control" name="unit[' + npDetailEsc(itemKey) + ']" required>'
           +          npDetailSelectedOptions('#editNpItemUnitOptionsTemplate', item.unit)
           + '      </select>'
           + '    </div>'
-          + '    <div class="form-group col-md-4">'
+          + '    <div class="form-group col-md-3">'
           + '      <label>Asset Class</label>'
           + '      <select class="form-control" name="item[' + npDetailEsc(itemKey) + ']" required>'
           +          npDetailSelectedOptions('#editNpItemAssetOptionsTemplate', item.item)
           + '      </select>'
           + '    </div>'
-          + '    <div class="form-group col-md-4">'
-          + '      <label>Brand/Model</label>'
-          + '      <input type="text" class="form-control text-uppercase" name="model[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(item.model) + '" placeholder="Enter Brand and model">'
+          + '    <div class="form-group col-md-3">'
+          + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+          + '        <label class="mb-0">Brand/Model</label>'
+          + '        <div class="form-check form-check-inline mb-0 text-muted">'
+          + '          <input type="checkbox" class="form-check-input edit-np-no-brand" name="item_no_brand[' + npDetailEsc(itemKey) + ']" value="1"' + (item.no_brand ? ' checked' : '') + '>'
+          + '          <label class="form-check-label">none</label>'
+          + '        </div>'
+          + '      </div>'
+          + '      <input type="text" class="form-control text-uppercase edit-np-brand" name="model[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(item.model) + '" placeholder="Enter Brand and model" required>'
           + '    </div>'
           + '  </div>'
           + '  <div class="form-row">'
@@ -3493,15 +3626,25 @@ $(function(){
           + '  </div>'
           + '  <div class="form-row">'
           + '    <div class="form-group col-md-3">'
-          + '      <label>Unit Value</label>'
-          + '      <input type="text" class="form-control text-right edit-np-unit-value" name="unit_value[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(npDetailFormatMoney(item.unit_value, true)) + '" placeholder="0.00" autocomplete="off">'
+          + '      <label>Unit Value <span class="text-muted">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'
+          + '        <input type="checkbox" class="form-check-input edit-np-no-amount" name="item_no_amount[' + npDetailEsc(itemKey) + ']" value="1"' + (item.no_amount ? ' checked' : '') + '>'
+          + '        <label class="form-check-label">no amount value</label>'
+          + '      </span></label>'
+          + '      <input type="text" class="form-control text-right edit-np-unit-value" name="unit_value[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(npDetailFormatMoney(item.unit_value, true)) + '" placeholder="0.00" autocomplete="off" required>'
+          + '      <div class="text-danger edit-np-unitvalue-error" style="display:none;font-size:13px;"></div>'
           + '    </div>'
           + '    <div class="form-group col-md-3">'
           + '      <label>Total Amount</label>'
           + '      <input type="text" class="form-control edit-np-total-amount" value="' + npDetailEsc(npDetailFormatMoney((Number(item.unit_value || 0) * Number(item.item_quantity || 1)), true)) + '" readonly>'
           + '    </div>'
           + '    <div class="form-group col-md-6">'
-          + '      <label>Account Code</label>'
+          + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+          + '        <label class="mb-0">Account Code</label>'
+          + '        <div class="form-check form-check-inline mb-0 text-muted">'
+          + '          <input type="checkbox" class="form-check-input edit-np-no-account-property" name="item_no_account_property[' + npDetailEsc(itemKey) + ']" value="1"' + (item.no_account_property ? ' checked' : '') + '>'
+          + '          <label class="form-check-label">none</label>'
+          + '        </div>'
+          + '      </div>'
           + '      <select class="form-control edit-np-account-code" name="account_code[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '">'
           +          npDetailSelectedOptions('#editNpItemAccountCodeOptionsTemplate', item.account_code)
           + '      </select>'
@@ -3509,11 +3652,18 @@ $(function(){
           + '  </div>'
           + '  <div class="form-row mb-0">'
           + '    <div class="form-group col-md-6">'
+          + '      <label>PAR/ICS No.</label>'
+          + '      <input type="hidden" name="par_ics_number_preview_value[' + npDetailEsc(itemKey) + ']" class="edit-np-par-ics-value" value="' + npDetailEsc(item.par_ics_number || '') + '">'
+          + '      <textarea class="form-control edit-np-par-ics-preview" rows="3" readonly>' + npDetailEsc(item.par_ics_number || '') + '</textarea>'
+          + '    </div>'
+          + '    <div class="form-group col-md-6">'
           + '      <label>Property Number</label>'
           + '      <input type="hidden" name="property_number[' + npDetailEsc(itemKey) + ']" class="edit-np-property-value" value="' + npDetailEsc(item.property_number) + '">'
           + '      <textarea class="form-control edit-np-property-preview" rows="3" readonly>' + npDetailEsc(item.property_number_preview || item.property_number) + '</textarea>'
           + '    </div>'
-          + '    <div class="form-group col-md-6 mb-0">'
+          + '  </div>'
+          + '  <div class="form-row mb-0">'
+          + '    <div class="form-group col-md-12 mb-0">'
           + '      <label>Remarks</label>'
           + '      <textarea class="form-control text-uppercase" name="remarks[' + npDetailEsc(itemKey) + ']" rows="3" placeholder="Enter remarks">' + npDetailEsc(item.remarks) + '</textarea>'
           + '    </div>'
@@ -3524,8 +3674,12 @@ $(function(){
       $wrap.html(html);
       $wrap.find('.item-set-card').each(function () {
         npDetailApplySerialVisibilityState($(this), false);
+        npDetailApplyNoBrandState($(this));
+        npDetailApplyNoAmountState($(this));
+        npDetailApplyNoAccountPropertyState($(this));
       });
       $('#edit_np_set_count').val(npDetailState.items.length);
+      npDetailRefreshParIcsNumbers();
     }
 
     function npDetailSetProperty(itemId, value, message, type) {
@@ -3552,7 +3706,7 @@ $(function(){
       if (!item || !$card.length) { return; }
 
       var fund = npDetailNormalizeFund($('#edit_np_fund').val());
-      var category = String($('#edit_np_category').val() || '').trim().toUpperCase();
+      var category = String($card.find('.edit-np-item-category').val() || '').trim().toUpperCase();
       var year = npDetailGetYear($('#edit_np_year').val());
       var dept = npDetailCurrentDeptCode();
       var accountCode = String($card.find('.edit-np-account-code').val() || '').trim();
@@ -3570,6 +3724,11 @@ $(function(){
 
       if (npDetailPropertyOptionalFund()) {
         npDetailSetProperty(itemId, '', 'Property number is not generated for ' + fund + '.', 'info');
+        return;
+      }
+
+      if ($card.find('.edit-np-no-account-property').is(':checked')) {
+        npDetailSetProperty(itemId, '', 'No property number.', 'info');
         return;
       }
 
@@ -3622,6 +3781,40 @@ $(function(){
       });
     }
 
+    function npDetailValidateUnitValues() {
+      var year = npDetailGetYear($('#edit_np_year').val());
+      var isValid = true;
+
+      $('#editNpItemRows .item-set-card').each(function () {
+        var $card = $(this);
+        var $error = $card.find('.edit-np-unitvalue-error');
+        var category = String($card.find('.edit-np-item-category').val() || '').trim().toUpperCase();
+        var unitValue = parseFloat(String($card.find('.edit-np-unit-value').val() || '0').replace(/,/g, '')) || 0;
+        var error = '';
+
+        if ($card.find('.edit-np-no-amount').is(':checked')) {
+          $error.hide().text('');
+          return;
+        }
+        if (year === 'RFS' && unitValue !== 0) {
+          error = 'Unit Value must be 0.00 for Found at Station.';
+        } else if (category === 'ICS' && unitValue >= 50001) {
+          error = 'Unit Value for ICS must be less than 50,000.00.';
+        } else if (category === 'PAR' && unitValue < 50001) {
+          error = 'Unit Value for PAR must be 50,000.00 or above.';
+        }
+
+        if (error) {
+          $error.text(error).show();
+          isValid = false;
+        } else {
+          $error.hide().text('');
+        }
+      });
+
+      return isValid;
+    }
+
     function npDetailToggleNewEmployeeRow($select) {
       var itemId = String($select.data('itemId') || '');
       var isAddNew = String($select.val() || '').toLowerCase() === 'add_new_emp';
@@ -3669,19 +3862,27 @@ $(function(){
       npDetailState.items = $.map(items, function (item) {
         var originalYear = npDetailGetYear(group.year || '');
         var originalFund = npDetailNormalizeFund(group.fund || '');
-        var originalCategory = String(group.category || '').trim().toUpperCase();
+        var originalCategory = String(item.category || group.category || '').trim().toUpperCase();
         var originalDept = String(group.department_code || '').trim();
         var key = String(item.id || ('tmp_' + (++npDetailTempIndex)));
         var itemQuantity = npDetailNormalizeItemQuantity(item.item_quantity || 1);
         var propertyNumber = String(item.property_number || '');
+        var serialNumbers = $.isArray(item.serial_numbers) ? item.serial_numbers : [String(item.serial_number || '')];
+        var serialNumbers2 = $.isArray(item.serial_numbers_2) ? item.serial_numbers_2 : [String(item.serial_number_2 || '')];
+        var propertyNumbers = $.isArray(item.property_numbers) ? item.property_numbers : [];
         return $.extend({}, item, {
           key: key,
           item_quantity: itemQuantity,
-          serial_numbers: [String(item.serial_number || '')],
-          serial_numbers_2: [String(item.serial_number_2 || '')],
+          serial_numbers: serialNumbers,
+          serial_numbers_2: serialNumbers2,
           add_serial: false,
+          no_brand: String(item.model || '').trim().toUpperCase() === 'NO BRAND/MODEL',
+          no_amount: Number(item.unit_value || 0) === 0,
+          no_account_property: String(item.account_code || '').trim() === '',
           property_number: propertyNumber,
-          property_number_preview: npDetailPropertyCopies(propertyNumber, itemQuantity).join(', '),
+          property_numbers: propertyNumbers,
+          property_number_preview: String(item.property_number_preview || propertyNumbers.join(', ') || npDetailPropertyCopies(propertyNumber, itemQuantity).join(', ')),
+          par_ics_number: String(item.par_ics_number || ''),
           original_property_number: String(item.property_number || ''),
           original_account_code: String(item.account_code || ''),
           original_year: originalYear,
@@ -3700,10 +3901,8 @@ $(function(){
 
       $('#edit_np_group_po').val(group.po || '');
       $('#edit_np_group_row_id').val(group.row_id || '');
-      $('#edit_np_category').val(String(group.category || '').trim().toUpperCase());
       $('#edit_np_year').val(npDetailGetYear(group.year || ''));
       $('#edit_np_fund').val(npDetailNormalizeFund(group.fund || ''));
-      $('#edit_np_paricsno').val(group.par_ics_number || '');
       $('#edit_np_pr').val(group.purchase_request || '');
       $('#edit_np_supplier').val(group.supplier || '');
       $('#edit_np_po').val(group.po || '');
@@ -3752,11 +3951,11 @@ $(function(){
         original_account_code: '',
         original_year: npDetailGetYear($('#edit_np_year').val()),
         original_fund: npDetailNormalizeFund($('#edit_np_fund').val()),
-        original_category: String($('#edit_np_category').val() || '').trim().toUpperCase(),
+        original_category: '',
         original_dept: String($('#edit_np_dept').val() || '').trim(),
         year: npDetailGetYear($('#edit_np_year').val()),
         fund: npDetailNormalizeFund($('#edit_np_fund').val()),
-        category: String($('#edit_np_category').val() || '').trim().toUpperCase(),
+        category: '',
         dept: String($('#edit_np_dept').val() || '').trim()
       };
     }
@@ -3928,6 +4127,7 @@ $(function(){
         }));
         npDetailApplySerialVisibilityState($card, false);
         npDetailSyncTotalAmount($card.find('.edit-np-unit-value'));
+        npDetailRefreshParIcsNumbers();
         npDetailRefreshProperty(itemKey);
       });
 
@@ -3941,6 +4141,38 @@ $(function(){
           item.add_serial = $(this).is(':checked');
         }
         npDetailApplySerialVisibilityState($card, true);
+      });
+
+    $(document)
+      .off('change.editNpNoBrand', '#editNpItemRows .edit-np-no-brand')
+      .on('change.editNpNoBrand', '#editNpItemRows .edit-np-no-brand', function () {
+        npDetailApplyNoBrandState($(this).closest('.item-set-card'));
+      });
+
+    $(document)
+      .off('change.editNpNoAmount', '#editNpItemRows .edit-np-no-amount')
+      .on('change.editNpNoAmount', '#editNpItemRows .edit-np-no-amount', function () {
+        npDetailApplyNoAmountState($(this).closest('.item-set-card'));
+      });
+
+    $(document)
+      .off('change.editNpCategory', '#editNpItemRows .edit-np-item-category')
+      .on('change.editNpCategory', '#editNpItemRows .edit-np-item-category', function () {
+        var $card = $(this).closest('.item-set-card');
+        var item = npDetailFindItem(String($card.data('itemId') || ''));
+        if (item) {
+          item.category = String($(this).val() || '').trim().toUpperCase();
+        }
+        npDetailRefreshParIcsNumbers();
+        npDetailRefreshProperty($card.data('itemId'));
+      });
+
+    $(document)
+      .off('change.editNpNoAccountProperty', '#editNpItemRows .edit-np-no-account-property')
+      .on('change.editNpNoAccountProperty', '#editNpItemRows .edit-np-no-account-property', function () {
+        var $card = $(this).closest('.item-set-card');
+        npDetailApplyNoAccountPropertyState($card);
+        npDetailRefreshProperty($card.data('itemId'));
       });
 
     $(document)
@@ -3960,8 +4192,14 @@ $(function(){
       });
 
     $(document)
-      .off('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_category, #edit_np_year')
-      .on('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_category, #edit_np_year', npDetailRefreshAllProperties);
+      .off('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_year')
+      .on('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_year', function () {
+        $('#editNpItemRows .item-set-card').each(function () {
+          npDetailApplyNoAccountPropertyState($(this));
+        });
+        npDetailRefreshParIcsNumbers();
+        npDetailRefreshAllProperties();
+      });
 
     $(document)
       .off('change.editNpPropertyAccount', '#editNpItemRows .edit-np-account-code')
@@ -3973,6 +4211,11 @@ $(function(){
       .off('submit.editNpDetailForm', '#editNpDetailForm')
       .on('submit.editNpDetailForm', '#editNpDetailForm', function (e) {
         e.preventDefault();
+
+        if (!npDetailValidateUnitValues()) {
+          Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'Please review the unit value rules for each set.' }) : alert('Please review the unit value rules for each set.');
+          return;
+        }
 
         var deptCode = npDetailFindDeptCodeByName($('#editNpDeptSearch').val()) || npDetailCurrentDeptCode();
         if (!deptCode) {
@@ -6283,9 +6526,13 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
   }
 
   function getBundleCategoryOptionsHtml(){
-    var html = String($('#category').html() || '');
-    if (!html || !html.trim()) { html = '<option value="">-SELECT-</option>'; }
-    return html;
+    return getItemCategoryOptionsHtml();
+  }
+
+  function getParentSetCategory(setIndex){
+    var index = parseInt(setIndex, 10) || 0;
+    if (index < 1) { return ''; }
+    return String($('#itemSetRows .item-set-card[data-set-index="' + index + '"] .js-item-category').val() || '').trim().toUpperCase();
   }
 
   function addBundleRow(){
@@ -6352,8 +6599,8 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
 
     $('#bundleRows').append(row).show();
     syncBundleSetSelectors();
-    // Default bundle category to the parent category if available
-    var pCat = String($('#category').val() || '').trim();
+    // Default bundle category to the first parent category if available
+    var pCat = getParentSetCategory(1);
     if (pCat) {
       try {
         var $last = $('#bundleRows .bundle-row').last();
@@ -6417,6 +6664,14 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     });
 
     $(document).off('change.bundleSet', 'select[name="bundle_parent_index[]"]').on('change.bundleSet', 'select[name="bundle_parent_index[]"]', function(){
+      var $row = $(this).closest('.bundle-row');
+      var $category = $row.find('select[name="bundle_category[]"]');
+      if ($category.length && !$category.val()) {
+        var parentCategory = getParentSetCategory($(this).val());
+        if (parentCategory && $category.find('option[value="' + parentCategory + '"]').length) {
+          $category.val(parentCategory);
+        }
+      }
       scheduleRefresh();
     });
 
@@ -6454,16 +6709,16 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
       scheduleRefresh();
     });
 
-    // Parent category: if bundle rows have no category selected yet, default them.
-    $(document).off('change.bundleParentCat', '#category').on('change.bundleParentCat', '#category', function(){
-      var pCat = String($('#category').val() || '').trim();
-      if (!pCat) { scheduleRefresh(); return; }
+    // Parent category: if bundle rows have no category selected yet, default them from the chosen parent set.
+    $(document).off('change.bundleParentCat', '.js-item-category').on('change.bundleParentCat', '.js-item-category', function(){
       bundleRowEls().each(function(){
-        var $sel = $(this).find('select[name="bundle_category[]"]');
-        if (!$sel.length) { return; }
+        var $row = $(this);
+        var $sel = $row.find('select[name="bundle_category[]"]');
         var cur = String($sel.val() || '').trim();
-        if (!cur && $sel.find('option[value="' + pCat + '"]').length) {
-          $sel.val(pCat);
+        if (cur) { return; }
+        var parentCategory = getParentSetCategory($row.find('select[name="bundle_parent_index[]"]').val());
+        if (parentCategory && $sel.find('option[value="' + parentCategory + '"]').length) {
+          $sel.val(parentCategory);
         }
       });
       scheduleRefresh();
@@ -6487,12 +6742,11 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
 })();
 
 // ==========================================================
-// Add Item: Year Acquired + PAR/ICS No auto-generate
+// Add Item: Year Acquired
 // ==========================================================
 window.GSO = window.GSO || {};
 window.GSO.AddItemMeta = window.GSO.AddItemMeta || (function(){
   var inited = false;
-  var lastGenReq = 0;
 
   function hasUI(){
     return $('#addItemModal').length && $('#addItem').length;
@@ -6513,31 +6767,6 @@ window.GSO.AddItemMeta = window.GSO.AddItemMeta || (function(){
     }
     options += "<option value='RFS'>Found at Station</option>";
     $year.html(options);
-  }
-
-  function setParIcsHelp(msg, kind){
-    var $h = $('#par-ics-help');
-    if (!$h.length) { return; }
-    if (!msg) { $h.hide().text(''); return; }
-    $h.show().text(String(msg));
-    $h.removeClass('text-muted text-success text-danger');
-    if (kind === 'success') { $h.addClass('text-success'); }
-    else if (kind === 'error') { $h.addClass('text-danger'); }
-    else { $h.addClass('text-muted'); }
-  }
-
-  function isAutoParIcs(){
-    return $('#par_ics_auto').is(':checked');
-  }
-
-  function currentCategory(){
-    return String($('#category').val() || '').trim().toUpperCase();
-  }
-
-  function lockParIcsInput(locked){
-    var $inp = $('#par_ics_no');
-    if (!$inp.length) { return; }
-    $inp.prop('readonly', !!locked);
   }
 
   function syncYearLockWithCondition(){
@@ -6565,90 +6794,9 @@ window.GSO.AddItemMeta = window.GSO.AddItemMeta || (function(){
     }
   }
 
-  function generateParIcs(){
-    if (!hasUI()) { return; }
-    if (!isAutoParIcs()) { return; }
-    var cat = currentCategory();
-    var cond = String($('#condition').val() || '').trim().toUpperCase();
-    if (cat !== 'PAR' && cat !== 'ICS') {
-      // Keep it readonly in NEW mode; just guide the user to pick the category.
-      lockParIcsInput(true);
-      $('#par_ics_no').val('');
-      setParIcsHelp('', 'muted');
-      return;
-    }
-
-    lockParIcsInput(true);
-    setParIcsHelp('Generating...', 'muted');
-
-    var reqId = ++lastGenReq;
-    $.ajax({
-      url: '../auth/auth.php',
-      method: 'POST',
-      dataType: 'json',
-      data: { generate_par_ics_code: 1, category: cat, condition: cond },
-      success: function(res){
-        if (reqId !== lastGenReq) { return; }
-        if (res && res.status === 200 && res.code) {
-          $('#par_ics_no').val(String(res.code));
-          setParIcsHelp('', 'muted');
-        } else {
-          setParIcsHelp((res && (res.error || res.message)) ? (res.error || res.message) : 'Failed to auto-generate.', 'error');
-        }
-      },
-      error: function(){
-        if (reqId !== lastGenReq) { return; }
-        setParIcsHelp('Failed to auto-generate (network/server error).', 'error');
-      }
-    });
-  }
-
-  function validateParIcsUnique(){
-    if (!hasUI()) { return; }
-    if (isAutoParIcs()) { return; }
-    var val = String($('#par_ics_no').val() || '').trim().toUpperCase();
-    var cond = String($('#condition').val() || '').trim().toUpperCase();
-    var po = String($('#po').val() || '').trim().toUpperCase();
-    if (!val) {
-      setParIcsHelp('', 'muted');
-      return;
-    }
-
-    $.ajax({
-      url: '../auth/auth.php',
-      method: 'POST',
-      dataType: 'json',
-      data: { validate_par_ics_unique: 1, par_ics_no: val, condition: cond, purchase_order: po },
-      success: function(res){
-        if (res && res.status === 200) {
-          if (res.exists && res.po_match) {
-            setParIcsHelp('', 'muted');
-          } else if (res.exists) {
-            setParIcsHelp('Already exists', 'error');
-          } else {
-            setParIcsHelp('PAR/ICS No. is available.', 'success');
-          }
-        }
-      }
-    });
-  }
-
   function onConditionChange(){
     if (!hasUI()) { return; }
     syncYearLockWithCondition();
-    applyParIcsMode();
-  }
-
-  function applyParIcsMode(){
-    if (!hasUI()) { return; }
-    if (isAutoParIcs()) {
-      lockParIcsInput(true);
-      generateParIcs();
-    } else {
-      lockParIcsInput(false);
-      $('#par_ics_no').val('');
-      setParIcsHelp('', 'muted');
-    }
   }
 
   function init(){
@@ -6664,27 +6812,11 @@ window.GSO.AddItemMeta = window.GSO.AddItemMeta || (function(){
         syncYearLockWithCondition();
         // Enforce NEW-condition default behavior on open (browser may restore previous selection).
         onConditionChange();
-        // If in NEW mode, ensure code is generated
-        if (isAutoParIcs()) { generateParIcs(); }
       });
 
     $(document)
       .off('change.addItemMetaCond', '#condition')
       .on('change.addItemMetaCond', '#condition', onConditionChange);
-
-    $(document)
-      .off('change.addItemMetaCat', '#category')
-      .on('change.addItemMetaCat', '#category', function(){
-        if (isAutoParIcs()) { generateParIcs(); }
-      });
-
-    $(document)
-      .off('blur.addItemMetaUnique', '#par_ics_no')
-      .on('blur.addItemMetaUnique', '#par_ics_no', validateParIcsUnique);
-
-    $(document)
-      .off('change.addItemAutoChk', '#par_ics_auto')
-      .on('change.addItemAutoChk', '#par_ics_auto', applyParIcsMode);
 
     // Best-effort: populate year even if modal isn't opened yet
     fillYearOptions();
@@ -6692,7 +6824,7 @@ window.GSO.AddItemMeta = window.GSO.AddItemMeta || (function(){
   }
 
   $(function(){ init(); });
-  return { init: init, fillYearOptions: fillYearOptions, generateParIcs: generateParIcs, syncYearLockWithCondition: syncYearLockWithCondition };
+  return { init: init, fillYearOptions: fillYearOptions, syncYearLockWithCondition: syncYearLockWithCondition };
 })();
 
 // ==========================================================
@@ -6712,6 +6844,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   var reqFundDepts = null;
   var debFundDepts = null;
   var debPropNum = null;
+  var debParIcsNum = null;
 
   function hasUI(){
     return $('#addItemModal').length && $('#addItem').length;
@@ -6749,6 +6882,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   function defaultItemSetState(){
     return {
       itemQuantity: 1,
+      category: '',
       unit: '',
       asset: '',
       accountCode: '',
@@ -6778,6 +6912,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   function setPrimaryId(fieldName, setIndex){
     if (setIndex !== 1) { return ''; }
     var idMap = {
+      category: 'item_category',
       unit: 'unit',
       asset: 'asset',
       brand: 'brand',
@@ -6796,6 +6931,13 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
   function getItemUnitOptionsHtml(){
     return String($('#itemUnitOptionsTemplate').html() || '<option value="">-SELECT-</option>');
+  }
+
+  function getItemCategoryOptionsHtml(){
+    return ''
+      + '<option value="">-SELECT-</option>'
+      + '<option value="PAR">PAR</option>'
+      + '<option value="ICS">ICS</option>';
   }
 
   function getItemAccountCodeOptionsHtml(){
@@ -6846,6 +6988,14 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
+  function applyParIcsPreview(list){
+    $('#itemSetRows .item-set-card').each(function(index){
+      var value = String(list[index] || '').trim().toUpperCase();
+      $(this).find('.js-item-par-ics').val(value);
+      $(this).find('.js-item-par-ics-value').val(value);
+    });
+  }
+
   function snapshotItemSetInputsIntoCache(){
     $('#itemSetRows .item-set-card').each(function(){
       var $row = $(this);
@@ -6862,6 +7012,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       });
       itemSetByRow[idxKey] = {
         itemQuantity: Math.max(1, parseInt($row.find('.js-item-quantity').val(), 10) || 1),
+        category: String($row.find('.js-item-category').val() || ''),
         unit: String($row.find('.js-item-unit').val() || ''),
         asset: String($row.find('.js-item-asset').val() || ''),
         accountCode: String($row.find('.js-item-account-code').val() || ''),
@@ -6977,14 +7128,18 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       + '      <input type="number" class="form-control js-item-quantity" name="item_quantity[' + setIndex + ']" value="' + esc(state.itemQuantity || 1) + '" min="1" step="1">'
       + '    </div>'
       + '    <div class="form-group col-md-2">'
+      + '      <label>Category</label>'
+      + '      <select class="form-control js-item-category" name="category[' + setIndex + ']" required' + setPrimaryId('category', setIndex) + '>' + withSelectedOption(getItemCategoryOptionsHtml(), state.category) + '</select>'
+      + '    </div>'
+      + '    <div class="form-group col-md-2">'
       + '      <label>Unit</label>'
       + '      <select class="form-control js-item-unit" name="unit[' + setIndex + ']" required' + setPrimaryId('unit', setIndex) + '>' + withSelectedOption(getItemUnitOptionsHtml(), state.unit) + '</select>'
       + '    </div>'
-      + '    <div class="form-group col-md-4">'
+      + '    <div class="form-group col-md-3">'
       + '      <label>Asset Class</label>'
       + '      <select class="form-control js-item-asset" name="asset[' + setIndex + ']" required' + setPrimaryId('asset', setIndex) + '>' + withSelectedOption(getItemAssetOptionsHtml(), state.asset) + '</select>'
       + '    </div>'
-      + '    <div class="form-group col-md-4">'
+      + '    <div class="form-group col-md-3">'
       + '      <div class="d-flex align-items-center justify-content-between mb-2">'
       + '        <label class="mb-0">Brand/Model</label>'
       + '        <div class="form-check form-check-inline mb-0 text-muted">'
@@ -7038,11 +7193,18 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       + '  </div>'
       + '  <div class="form-row mb-0">'
       + '    <div class="form-group col-md-6 mb-0">'
+      + '      <label>PAR/ICS No.</label>'
+      + '      <input type="hidden" class="js-item-par-ics-value" name="par_ics_number_preview_value[' + setIndex + ']" value="">'
+      + '      <textarea class="form-control js-item-par-ics" name="par_ics_number_preview[' + setIndex + ']" rows="3" readonly></textarea>'
+      + '    </div>'
+      + '    <div class="form-group col-md-6 mb-0">'
       + '      <label>Property Number</label>'
       + '      <input type="hidden" class="js-item-property-number-value" name="property_numbers[' + setIndex + ']" value="">'
       + '      <textarea class="form-control js-item-property-number" name="property_number_preview[' + setIndex + ']" rows="3" readonly></textarea>'
       + '    </div>'
-      + '    <div class="form-group col-md-6 mb-0">'
+      + '  </div>'
+      + '  <div class="form-row mb-0">'
+      + '    <div class="form-group col-md-12 mb-0">'
       + '      <label>Remarks</label>'
       + '      <textarea class="form-control text-uppercase js-item-remarks" name="remarks[' + setIndex + ']" rows="3" placeholder="Enter remarks"' + setPrimaryId('remarks', setIndex) + '>' + esc(state.remarks) + '</textarea>'
       + '    </div>'
@@ -7420,7 +7582,6 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   }
 
   function validateUnitValue() {
-    var category = $('#category').val();
     var year = $('#year').val();
     var isValid = true;
 
@@ -7428,6 +7589,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       var $row = $(this);
       var $error = $row.find('.item-unitvalue-error');
       var unitvalue = parseMoneyValue($row.find('.js-item-unitvalue').val());
+      var category = String($row.find('.js-item-category').val() || '').trim().toUpperCase();
       var error = '';
 
       if($row.find('.js-item-no-amount').is(':checked')) {
@@ -7520,7 +7682,6 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   }
 
   function updatePropertyNumber() {
-    var category = $('#category').val();
     var year = $('#year').val();
     var dept = $('#dept').val();
     var fund = $('#fund').val();
@@ -7531,7 +7692,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       return;
     }
 
-    if (!(category && year && dept && fund) || !rows.length) {
+    if (!(year && dept && fund) || !rows.length) {
       applyPropertyNumberPreview([]);
       return;
     }
@@ -7554,6 +7715,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
       var $row = $(rows[index]);
       if (isNewCondition() && $row.find('.js-item-no-account-property').is(':checked')) {
+        list[index] = [];
+        generateRow(index + 1);
+        return;
+      }
+      var category = String($row.find('.js-item-category').val() || '').trim().toUpperCase();
+      if (!category) {
         list[index] = [];
         generateRow(index + 1);
         return;
@@ -7601,9 +7768,74 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     generateRow(0);
   }
 
+  function updateParIcsNumbers() {
+    var rows = $('#itemSetRows .item-set-card').toArray();
+    if (!rows.length) {
+      applyParIcsPreview([]);
+      return;
+    }
+
+    var reqId = Date.now() + Math.random();
+    updateParIcsNumbers.lastReqId = reqId;
+    var list = [];
+    var codeByCategory = {};
+
+    function generateRow(index){
+      if (reqId !== updateParIcsNumbers.lastReqId) { return; }
+      if (index >= rows.length) {
+        applyParIcsPreview(list);
+        return;
+      }
+
+      var $row = $(rows[index]);
+      var category = String($row.find('.js-item-category').val() || '').trim().toUpperCase();
+      if (!category) {
+        list[index] = '';
+        generateRow(index + 1);
+        return;
+      }
+
+      if (codeByCategory[category]) {
+        list[index] = codeByCategory[category];
+        generateRow(index + 1);
+        return;
+      }
+
+      $.ajax({
+        url: '../auth/auth.php',
+        method: 'POST',
+        dataType: 'json',
+        data: { generate_par_ics_code: 1, category: category, condition: String($('#condition').val() || '').trim().toUpperCase() },
+        success: function(res){
+          if (reqId !== updateParIcsNumbers.lastReqId) { return; }
+          var code = (res && res.status === 200 && res.code) ? String(res.code).trim().toUpperCase() : '';
+          if (code) {
+            codeByCategory[category] = code;
+            list[index] = code;
+          } else {
+            list[index] = '';
+          }
+          generateRow(index + 1);
+        },
+        error: function(){
+          if (reqId !== updateParIcsNumbers.lastReqId) { return; }
+          list[index] = '';
+          generateRow(index + 1);
+        }
+      });
+    }
+
+    generateRow(0);
+  }
+
   function scheduleUpdatePropertyNumber(){
     clearTimeout(debPropNum);
     debPropNum = setTimeout(function(){ updatePropertyNumber(); }, 300);
+  }
+
+  function scheduleUpdateParIcsNumber(){
+    clearTimeout(debParIcsNum);
+    debParIcsNum = setTimeout(function(){ updateParIcsNumbers(); }, 300);
   }
 
   function findDeptCodeByExactName(name) {
@@ -7735,6 +7967,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         $('#quantity').val(currentCount - 1);
         renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
         renderEndUserRows();
+        scheduleUpdateParIcsNumber();
         scheduleUpdatePropertyNumber();
       });
 
@@ -7786,6 +8019,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         var fund = String($(this).val() || '').trim();
         snapshotItemSetInputsIntoCache();
         renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
+        scheduleUpdateParIcsNumber();
         resetDepartmentAndEmployeeFields();
         if(!fund){ return; }
 
@@ -7815,6 +8049,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         renderItemSetRows();
         renderEndUserRows();
         updateTotalAmount();
+        scheduleUpdateParIcsNumber();
       });
 
     $(document)
@@ -7826,6 +8061,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         var $row = $(this).closest('.item-set-card');
         updateItemSetTotal($row);
         refreshSerialRowsForItemSet($row);
+        scheduleUpdateParIcsNumber();
         scheduleUpdatePropertyNumber();
       });
 
@@ -7957,8 +8193,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .off('input.gsoAddItemPageTotal change.gsoAddItemPageTotal blur.gsoAddItemPageTotal', '.js-item-unitvalue, #quantity')
       .on('input.gsoAddItemPageTotal change.gsoAddItemPageTotal blur.gsoAddItemPageTotal', '.js-item-unitvalue, #quantity', updateTotalAmount);
     $(document)
-      .off('change.gsoAddItemPageUnit', '#category, #year')
-      .on('change.gsoAddItemPageUnit', '#category, #year', validateUnitValue);
+      .off('change.gsoAddItemPageUnit', '.js-item-category, #year')
+      .on('change.gsoAddItemPageUnit', '.js-item-category, #year', validateUnitValue);
 
     $(document)
       .off('input.gsoAddItemPageUnitFmt', '.js-item-unitvalue')
@@ -7978,8 +8214,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       });
 
     $(document)
-      .off('change.gsoAddItemPageProp input.gsoAddItemPageProp', '#category, .js-item-account-code, #dept, #year, #quantity')
-      .on('change.gsoAddItemPageProp input.gsoAddItemPageProp', '#category, .js-item-account-code, #dept, #year, #quantity', scheduleUpdatePropertyNumber);
+      .off('change.gsoAddItemPageProp input.gsoAddItemPageProp', '.js-item-category, .js-item-account-code, #dept, #year, #quantity')
+      .on('change.gsoAddItemPageProp input.gsoAddItemPageProp', '.js-item-category, .js-item-account-code, #dept, #year, #quantity', scheduleUpdatePropertyNumber);
+
+    $(document)
+      .off('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #quantity')
+      .on('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #quantity', scheduleUpdateParIcsNumber);
 
     $(document)
       .off('input.gsoAddItemPageTrustAcct', 'input.js-item-account-code')
@@ -8008,6 +8248,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         renderItemSetRows();
         syncYearAcquiredWithCondition();
         applyNoAccountPropertyStateToAll();
+        updateParIcsNumbers();
         updatePropertyNumber();
         var dept = String($('#dept').val() || '').trim();
         if(dept){ loadEmployeesForDept(dept); }
@@ -8182,10 +8423,21 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
 
   // If this is a NEW purchase, open a window now to avoid popup blockers.
   var formCondition = String($('#condition').val() || '').toUpperCase();
-  var formCategory = String($('#category').val() || '').toUpperCase();
-  var printWin = null;
-  if(formCondition === 'NEW' && (formCategory === 'PAR' || formCategory === 'ICS')){
-    try { printWin = window.open('', '_blank'); } catch(e) { printWin = null; }
+  var printWins = { par: null, ics: null };
+  if(formCondition === 'NEW'){
+    var hasPar = false;
+    var hasIcs = false;
+    $('#itemSetRows .js-item-category').each(function(){
+      var value = String($(this).val() || '').trim().toUpperCase();
+      if (value === 'PAR') { hasPar = true; }
+      if (value === 'ICS') { hasIcs = true; }
+    });
+    if (hasPar) {
+      try { printWins.par = window.open('', '_blank'); } catch(e) { printWins.par = null; }
+    }
+    if (hasIcs) {
+      try { printWins.ics = window.open('', '_blank'); } catch(e) { printWins.ics = null; }
+    }
   }
 
   var fd = new FormData(this);
@@ -8307,27 +8559,44 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
         try {
           var data = (res && res.data) ? res.data : null;
           if(data && data.should_print && String(data.condition || '').toUpperCase() === 'NEW'){
-            var ref = String(data.reference_number || '').trim();
-            var cat = String(data.category || '').toUpperCase();
-            if(ref && (cat === 'PAR' || cat === 'ICS')){
-              var url = (cat === 'PAR')
-                ? ('printpar.php?refnumber=' + encodeURIComponent(ref))
-                : ('inventory_custodian_slip.php?reference_number=' + encodeURIComponent(ref));
-              if(printWin && !printWin.closed){
-                printWin.location = url;
-              } else {
-                window.open(url, '_blank');
-              }
-            } else if(printWin && !printWin.closed){
-              // Nothing to print; close blank window.
-              printWin.close();
+            var parRefs = Array.isArray(data.par_refs) ? data.par_refs : [];
+            var icsRefs = Array.isArray(data.ics_refs) ? data.ics_refs : [];
+
+            if (!parRefs.length && !icsRefs.length) {
+              var fallbackRef = String(data.reference_number || '').trim();
+              var fallbackCategory = String(data.category || '').trim().toUpperCase();
+              if (fallbackRef && fallbackCategory === 'PAR') { parRefs = [fallbackRef]; }
+              if (fallbackRef && fallbackCategory === 'ICS') { icsRefs = [fallbackRef]; }
             }
-          } else if(printWin && !printWin.closed) {
-            // EXISTING: no printing
-            printWin.close();
+
+            if (parRefs.length) {
+              var parUrl = 'printpar.php?refnumber=' + encodeURIComponent(parRefs[0]);
+              if (printWins.par && !printWins.par.closed) {
+                printWins.par.location = parUrl;
+              } else {
+                window.open(parUrl, '_blank');
+              }
+            } else if (printWins.par && !printWins.par.closed) {
+              printWins.par.close();
+            }
+
+            if (icsRefs.length) {
+              var icsUrl = 'inventory_custodian_slip.php?refs=' + icsRefs.map(encodeURIComponent).join(',');
+              if (printWins.ics && !printWins.ics.closed) {
+                printWins.ics.location = icsUrl;
+              } else {
+                window.open(icsUrl, '_blank');
+              }
+            } else if (printWins.ics && !printWins.ics.closed) {
+              printWins.ics.close();
+            }
+          } else {
+            if(printWins.par && !printWins.par.closed) { printWins.par.close(); }
+            if(printWins.ics && !printWins.ics.closed) { printWins.ics.close(); }
           }
         } catch(e) {
-          if(printWin && !printWin.closed){ try { printWin.close(); } catch(_){} }
+          if(printWins.par && !printWins.par.closed){ try { printWins.par.close(); } catch(_){} }
+          if(printWins.ics && !printWins.ics.closed){ try { printWins.ics.close(); } catch(_){} }
         }
 
         Swal.fire({
