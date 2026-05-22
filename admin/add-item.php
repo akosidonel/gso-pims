@@ -333,7 +333,7 @@ if(!isset($_SESSION['alogin'])){
                   <h3 class="card-title mb-0"><i class="fas fa-file-alt"></i>&nbsp; Item Information</h3>
                   <div class="form-group mb-0">
                     <label class="mb-1" for="quantity">Sets</label>
-                    <input type="number" class="form-control" id="quantity" name="quantity" value="1" min="1" max="10" step="1" required>
+                    <input type="number" class="form-control" id="quantity" name="quantity" value="1" min="1" max="100" step="1" required>
                   </div>
                 </div>
               </div>

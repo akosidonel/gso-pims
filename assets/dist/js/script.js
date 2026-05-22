@@ -7027,7 +7027,7 @@ window.GSO.AddItemMeta = window.GSO.AddItemMeta || (function(){
 window.GSO = window.GSO || {};
 window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   var inited = false;
-  var MAX_ITEM_SETS = 10;
+  var MAX_ITEM_SETS = 100;
 
   var empOptionsAll = '';
   var itemSetByRow = {};
@@ -8625,16 +8625,63 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 //par general fund
 $(document).on('submit','#addItem',function(e){//to save p.a.r general fund information
   e.preventDefault();
+
+  var $form = $(this);
+  var formCondition = String($('#condition').val() || '').toUpperCase();
+  var printPreference = String($form.data('printPreference') || '').toLowerCase();
+  var hasPrintableCategory = false;
+
+  $('#itemSetRows .js-item-category').each(function(){
+    var value = String($(this).val() || '').trim().toUpperCase();
+    if (value === 'PAR' || value === 'ICS') {
+      hasPrintableCategory = true;
+      return false;
+    }
+  });
+
+  if (formCondition === 'NEW' && hasPrintableCategory && printPreference !== 'now' && printPreference !== 'later') {
+    if (window.Swal && Swal.fire) {
+      Swal.fire({
+        icon: 'question',
+        title: 'What do you want to do with this item?',
+        text: 'Choose whether to print the PAR/ICS right after saving or print it later.',
+        showCancelButton: true,
+        showDenyButton: true,
+        confirmButtonText: 'Print and Save',
+        denyButtonText: 'Save and Print Later',
+        cancelButtonText: 'Cancel',
+        reverseButtons: true
+      }).then(function(result){
+        if (result && result.isConfirmed) {
+          $form.data('printPreference', 'now');
+          $form.trigger('submit');
+        } else if (result && result.isDenied) {
+          $form.data('printPreference', 'later');
+          $form.trigger('submit');
+        } else {
+          $form.removeData('printPreference');
+        }
+      });
+      return;
+    }
+
+    if (window.confirm('Select OK to print after saving, or Cancel to stop.')) {
+      $form.data('printPreference', 'now');
+      $form.trigger('submit');
+    } else {
+      $form.removeData('printPreference');
+    }
+    return;
+  }
+
+  var shouldPrintAfterSave = (formCondition === 'NEW' && hasPrintableCategory && printPreference === 'now');
   var $btn = $('#addItemSubmitBtn');
   if($btn.data('submitting')){ return; }
   $btn.data('submitting', true);
-  var originalHtml = $btn.html();
   $btn.prop('disabled', true).html('<i class="fas fa-circle-notch fa-spin"></i>&nbsp;Saving...');
 
-  // If this is a NEW purchase, open a window now to avoid popup blockers.
-  var formCondition = String($('#condition').val() || '').toUpperCase();
   var printWins = { par: null, ics: null };
-  if(formCondition === 'NEW'){
+  if(shouldPrintAfterSave){
     var hasPar = false;
     var hasIcs = false;
     $('#itemSetRows .js-item-category').each(function(){
@@ -8690,6 +8737,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     if(missingSets.length){
       Swal.fire({ icon:'warning', title:'Validation error', text:'End user is required for set(s): ' + missingSets.join(', ') + '.' });
       // Restore button state and allow user to fix inputs without reload
+      $form.removeData('printPreference');
       $btn.data('submitting', false);
       $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
       if (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.syncAddItemSubmitButton === 'function') {
@@ -8699,6 +8747,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     }
     if(missingNewEmpSets.length){
       Swal.fire({ icon:'warning', title:'Validation error', text:'New employee name and position are required for set(s): ' + missingNewEmpSets.join(', ') + '.' });
+      $form.removeData('printPreference');
       $btn.data('submitting', false);
       $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
       if (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.syncAddItemSubmitButton === 'function') {
@@ -8750,6 +8799,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
         ? 'Bundle equipment requires Bundle Set, Category, and Asset Class for row(s): '
         : 'Bundle equipment requires Bundle Set, Category, Asset Class, and Property Number for row(s): ';
       Swal.fire({ icon:'warning', title:'Validation error', text: bundleMessage + bundleMissing.join(', ') + '.' });
+      $form.removeData('printPreference');
       $btn.data('submitting', false);
       $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
       if (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.syncAddItemSubmitButton === 'function') {
@@ -8777,7 +8827,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
         // Print only when the backend explicitly requests it (NEW purchases).
         try {
           var data = (res && res.data) ? res.data : null;
-          if(data && data.should_print && String(data.condition || '').toUpperCase() === 'NEW'){
+          if(shouldPrintAfterSave && data && data.should_print && String(data.condition || '').toUpperCase() === 'NEW'){
             var parRefs = Array.isArray(data.par_refs) ? data.par_refs : [];
             var icsRefs = Array.isArray(data.ics_refs) ? data.ics_refs : [];
 
@@ -8828,6 +8878,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
         setTimeout(function(){
           $('#addItemModal').modal('hide');
           $('#addItem')[0].reset();
+          $('#addItem').removeData('printPreference');
           // Force fresh token by reloading page (simplest approach)
           location.reload();
         }, 1700);
@@ -8871,6 +8922,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     },
     complete: function(){
       var $btn = $('#addItemSubmitBtn');
+      $('#addItem').removeData('printPreference');
       // Restore button to avoid hanging if no reload happens
       $btn.data('submitting', false);
       $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');

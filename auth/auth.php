@@ -7223,8 +7223,8 @@ if (isset($_POST['save_item'])) {
     // Quantity (bulk rows)
     $quantity = isset($_POST['quantity']) ? (int)$_POST['quantity'] : 1;
     if ($quantity < 1) { $quantity = 1; }
-    if ($quantity > 10) {
-        echo json_encode(['status' => 422, 'message' => 'A maximum of 10 item sets is allowed per submission.']);
+    if ($quantity > 100) {
+        echo json_encode(['status' => 422, 'message' => 'A maximum of 100 item sets is allowed per submission.']);
         return false;
     }
 
