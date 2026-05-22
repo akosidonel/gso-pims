@@ -10,17 +10,9 @@ if (!isset($_SESSION['alogin'])) {
 
 $returnVersionArray = true;
 $versionMeta = include('../include/version.php');
+$syncState = pims_release_sync_changelog_snapshot();
 $releaseEntries = pims_release_parse_changelog();
-$pendingRelease = pims_release_pending_summary();
-$pendingSections = pims_release_grouped_sections($pendingRelease['commits']);
-
-if ($pendingRelease['commits']) {
-  array_unshift($releaseEntries, [
-    'tag' => $pendingRelease['next_tag'],
-    'date' => date('F j, Y'),
-    'sections' => $pendingSections,
-  ]);
-}
+$pendingRelease = $syncState['pending'];
 ?>
 <?php include('../include/header.php') ?><!--Header-->
 <?php include('../include/navbar.php') ?><!-- Navbar -->

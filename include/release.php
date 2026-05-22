@@ -251,6 +251,19 @@ function pims_release_changelog_template(): string {
   ]);
 }
 
+function pims_release_strip_unreleased_section(string $content): string {
+  $content = trim($content);
+  if ($content === '') {
+    return '';
+  }
+
+  return trim((string) preg_replace(
+    '/## Unreleased(?:\s*\(planned [^)]+\))?\s*-\s*[^\n]+(?:\n(?!## ).*)*/s',
+    '',
+    $content
+  ));
+}
+
 function pims_release_prepare_changelog(string $entry): string {
   $path = pims_release_changelog_path();
   $existing = is_readable($path) ? (string) file_get_contents($path) : pims_release_changelog_template();
@@ -265,6 +278,8 @@ function pims_release_prepare_changelog(string $entry): string {
   if (pims_release_starts_with($existing, $template)) {
     $tail = trim(substr($existing, strlen($template)));
   }
+
+  $tail = pims_release_strip_unreleased_section($tail);
 
   if ($tail === 'No tagged releases yet.') {
     $tail = '';
@@ -296,7 +311,7 @@ function pims_release_parse_changelog(?string $path = null): array {
   foreach ($lines as $line) {
     $trimmed = trim($line);
 
-    if (preg_match('/^##\s+(v\d+\.\d+\.\d+)\s*-\s*(.+)$/', $trimmed, $matches)) {
+    if (preg_match('/^##\s+(.+?)\s*-\s*(.+)$/', $trimmed, $matches)) {
       if ($currentEntry) {
         $entries[] = $currentEntry;
       }
@@ -355,5 +370,82 @@ function pims_release_pending_summary(): array {
     'commits' => $commits,
     'bump' => $bump,
     'next_tag' => pims_release_format_tag($nextVersion),
+  ];
+}
+
+function pims_release_render_unreleased_entry(string $label, string $date, array $sections): string {
+  $lines = [
+    '## ' . $label . ' - ' . $date,
+    '',
+  ];
+
+  foreach ($sections as $title => $items) {
+    $lines[] = '### ' . $title;
+    foreach ($items as $item) {
+      $lines[] = '- ' . $item;
+    }
+    $lines[] = '';
+  }
+
+  if ($lines && end($lines) === '') {
+    array_pop($lines);
+  }
+
+  return implode(PHP_EOL, $lines);
+}
+
+function pims_release_sync_changelog_snapshot(): array {
+  $path = pims_release_changelog_path();
+  $template = rtrim(pims_release_changelog_template());
+  $existing = is_readable($path) ? (string) file_get_contents($path) : $template;
+  $existing = trim($existing);
+  if ($existing === '') {
+    $existing = $template;
+  }
+
+  $pending = pims_release_pending_summary();
+  $pendingSections = pims_release_grouped_sections($pending['commits']);
+  $content = pims_release_strip_unreleased_section($existing);
+  $content = trim($content);
+
+  if ($content === '' || $content === '# Changelog') {
+    $content = $template;
+  }
+
+  $tail = $content;
+  if (pims_release_starts_with($content, $template)) {
+    $tail = trim(substr($content, strlen($template)));
+  }
+
+  if ($tail === 'No tagged releases yet.') {
+    $tail = '';
+  }
+
+  $parts = [$template];
+
+  if ($pendingSections) {
+    $parts[] = pims_release_render_unreleased_entry(
+      'Unreleased (planned ' . $pending['next_tag'] . ')',
+      date('F j, Y'),
+      $pendingSections
+    );
+  }
+
+  if ($tail !== '') {
+    $parts[] = $tail;
+  } elseif (!$pendingSections) {
+    $parts[] = 'No recorded entries yet.';
+  }
+
+  $final = implode(PHP_EOL . PHP_EOL, array_filter($parts, static function($part) {
+    return trim((string) $part) !== '';
+  })) . PHP_EOL;
+
+  @file_put_contents($path, $final);
+
+  return [
+    'pending' => $pending,
+    'sections' => $pendingSections,
+    'content' => $final,
   ];
 }
