@@ -6587,6 +6587,115 @@ if (isset($_POST['fetch_new_purchase_group'])) {
     return false;
 }
 
+if (isset($_POST['delete_new_purchase_group_set'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!isset($_SESSION['alogin']) || trim((string)$_SESSION['alogin']) === '') {
+        echo json_encode(['status' => 401, 'message' => 'Unauthorized.']);
+        return false;
+    }
+
+    $po = trim((string)($_POST['po'] ?? ''));
+    $rowId = (int)($_POST['row_id'] ?? 0);
+    $postedItemIdsRaw = $_POST['item_ids'] ?? ($_POST['item_ids_raw'] ?? []);
+    $postedItemIds = [];
+    if (is_array($postedItemIdsRaw)) {
+        $postedItemIds = $postedItemIdsRaw;
+    } elseif ($postedItemIdsRaw !== null && $postedItemIdsRaw !== '') {
+        $postedItemIds = preg_split('/\s*,\s*/', (string)$postedItemIdsRaw, -1, PREG_SPLIT_NO_EMPTY);
+    }
+    $currentRows = gso_new_purchase_group_rows($conn, $po, $rowId);
+
+    if (empty($currentRows)) {
+        echo json_encode(['status' => 404, 'message' => 'No matching purchase details found.']);
+        return false;
+    }
+
+    $currentById = [];
+    foreach ($currentRows as $row) {
+        $id = (int)($row['id'] ?? 0);
+        if ($id > 0) {
+            $currentById[$id] = $row;
+        }
+    }
+
+    $deleteIds = [];
+    foreach ($postedItemIds as $postedItemId) {
+        $itemId = (int)$postedItemId;
+        if ($itemId > 0 && isset($currentById[$itemId]) && !in_array($itemId, $deleteIds, true)) {
+            $deleteIds[] = $itemId;
+        }
+    }
+
+    if (empty($deleteIds)) {
+        echo json_encode(['status' => 422, 'message' => 'No valid set items were selected for deletion.']);
+        return false;
+    }
+
+    mysqli_begin_transaction($conn);
+
+    try {
+        $deleteItemStmt = $conn->prepare('DELETE FROM new_purchase WHERE id = ?');
+        $deleteHistoryStmt = $conn->prepare('DELETE FROM new_purchase_history WHERE par_number = ? OR par_number = ?');
+        $clearBundleStmt = $conn->prepare('DELETE FROM new_bundle_purchase WHERE property_number = ? OR bundle_with = ?');
+
+        if (!$deleteItemStmt || !$deleteHistoryStmt || !$clearBundleStmt) {
+            throw new RuntimeException('Unable to prepare delete statements.');
+        }
+
+        foreach ($deleteIds as $deleteId) {
+            $row = $currentById[$deleteId];
+            $propertyNumber = strtoupper(trim((string)($row['property_number'] ?? '')));
+            $historyLink = 'NPID:' . $deleteId;
+
+            if ($propertyNumber !== '') {
+                $clearBundleStmt->bind_param('ss', $propertyNumber, $propertyNumber);
+                if (!$clearBundleStmt->execute()) {
+                    throw new RuntimeException('Unable to delete linked bundle records.');
+                }
+            }
+
+            $deleteHistoryStmt->bind_param('ss', $propertyNumber, $historyLink);
+            if (!$deleteHistoryStmt->execute()) {
+                throw new RuntimeException('Unable to delete linked history records.');
+            }
+
+            $deleteItemStmt->bind_param('i', $deleteId);
+            if (!$deleteItemStmt->execute()) {
+                throw new RuntimeException('Unable to delete set item #' . $deleteId . '.');
+            }
+        }
+
+        $deleteItemStmt->close();
+        $deleteHistoryStmt->close();
+        $clearBundleStmt->close();
+        mysqli_commit($conn);
+
+        echo json_encode([
+            'status' => 200,
+            'message' => 'Set deleted permanently.',
+            'data' => [
+                'deleted_item_ids' => $deleteIds,
+                'remaining_items' => max(0, count($currentById) - count($deleteIds)),
+            ],
+        ]);
+        return false;
+    } catch (Throwable $e) {
+        if (isset($deleteItemStmt) && $deleteItemStmt instanceof mysqli_stmt) {
+            $deleteItemStmt->close();
+        }
+        if (isset($deleteHistoryStmt) && $deleteHistoryStmt instanceof mysqli_stmt) {
+            $deleteHistoryStmt->close();
+        }
+        if (isset($clearBundleStmt) && $clearBundleStmt instanceof mysqli_stmt) {
+            $clearBundleStmt->close();
+        }
+        mysqli_rollback($conn);
+        echo json_encode(['status' => 500, 'message' => $e->getMessage()]);
+        return false;
+    }
+}
+
 if (isset($_POST['update_new_purchase_group'])) {
     header('Content-Type: application/json; charset=utf-8');
 

@@ -360,20 +360,7 @@
 }
 
 .gso-changelog-timeline {
-  position: relative;
-  margin-left: 4px;
-  padding-left: 42px;
-}
-
-.gso-changelog-timeline::before {
-  content: '';
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 0;
-  width: 3px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #22c55e, #16a34a);
+  padding-left: 0;
 }
 
 .gso-changelog-group + .gso-changelog-group {
@@ -383,22 +370,12 @@
 .gso-changelog-grouphead {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
+  gap: 0;
   margin-bottom: 10px;
 }
 
 .gso-changelog-dot {
-  width: 42px;
-  height: 42px;
-  margin-left: -1px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #22c55e, #16a34a);
-  color: #fff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 12px 26px rgba(22, 163, 74, 0.22);
-  flex: 0 0 auto;
+  display: none;
 }
 
 .gso-changelog-grouptitle {
@@ -410,7 +387,7 @@
 }
 
 .gso-changelog-list {
-  margin: 0 0 0 58px;
+  margin: 0;
   padding-left: 24px;
   color: #334155;
 }
@@ -493,16 +470,11 @@
   }
 
   .gso-changelog-timeline {
-    padding-left: 28px;
+    padding-left: 0;
   }
 
   .gso-changelog-grouphead {
-    gap: 12px;
-  }
-
-  .gso-changelog-dot {
-    width: 34px;
-    height: 34px;
+    gap: 0;
   }
 
   .gso-changelog-grouptitle {
@@ -510,7 +482,7 @@
   }
 
   .gso-changelog-list {
-    margin-left: 46px;
+    margin-left: 0;
     padding-left: 18px;
   }
 }

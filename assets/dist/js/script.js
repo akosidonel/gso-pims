@@ -4103,7 +4103,9 @@ $(function(){
           text: config.text || '',
           showCancelButton: true,
           confirmButtonText: config.confirmButtonText || 'Yes',
-          cancelButtonText: config.cancelButtonText || 'Cancel'
+          cancelButtonText: config.cancelButtonText || 'Cancel',
+          confirmButtonColor: config.confirmButtonColor || undefined,
+          cancelButtonColor: config.cancelButtonColor || undefined
         }).then(function (result) {
           if (result && result.isConfirmed && typeof onConfirm === 'function') {
             onConfirm();
@@ -4128,6 +4130,51 @@ $(function(){
       npDetailRenderItemRows();
       npDetailRenderEndUserRows();
       npDetailRefreshAllProperties();
+    }
+
+    function npDetailReloadTable() {
+      if (!($.fn.dataTable && $.fn.dataTable.isDataTable('#addItemNewPurchaseTable'))) { return; }
+
+      var table = $('#addItemNewPurchaseTable').DataTable();
+      var settings = table.settings()[0] || {};
+
+      if (settings.ajax) {
+        table.ajax.reload(null, false);
+        return;
+      }
+
+      table.rows().invalidate().draw(false);
+      if (table.columns && table.columns.adjust) {
+        table.columns.adjust();
+      }
+      if (table.responsive && table.responsive.recalc) {
+        table.responsive.recalc();
+      }
+    }
+
+    function npDetailReloadGroup(onDone) {
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        cache: false,
+        dataType: 'json',
+        data: {
+          fetch_new_purchase_group: 1,
+          po: String($('#edit_np_po').val() || $('#edit_np_group_po').val() || '').trim(),
+          row_id: parseInt($('#edit_np_group_row_id').val(), 10) || 0
+        },
+        success: function (resp) {
+          if (resp && Number(resp.status) === 200 && resp.data) {
+            npDetailFillModal(resp.data);
+            if (typeof onDone === 'function') { onDone(true, resp); }
+            return;
+          }
+          if (typeof onDone === 'function') { onDone(false, resp); }
+        },
+        error: function () {
+          if (typeof onDone === 'function') { onDone(false, null); }
+        }
+      });
     }
 
     $(document)
@@ -4243,15 +4290,74 @@ $(function(){
     $(document)
       .off('click.editNpRemoveSet', '#editNpItemRows .edit-np-remove-set')
       .on('click.editNpRemoveSet', '#editNpItemRows .edit-np-remove-set', function () {
-        if (npDetailState.items.length <= 1) { return; }
+        var $button = $(this);
         var itemKey = String($(this).data('itemId') || '');
-        npDetailState.items = $.grep(npDetailState.items, function (item) {
-          return String(item.key || '') !== itemKey;
+        var item = npDetailFindItem(itemKey);
+        var setLabel = item ? ('Set ' + item.set_no) : 'this set';
+        var existingItemIds = item && $.isArray(item.existing_item_ids) ? item.existing_item_ids : [];
+        var deleteItemIds = $.map(existingItemIds, function (value) {
+          var itemId = parseInt(value, 10) || 0;
+          return itemId > 0 ? itemId : null;
         });
-        npDetailResetSetNumbers();
-        npDetailRenderItemRows();
-        npDetailRenderEndUserRows();
-        npDetailRefreshAllProperties();
+
+        npDetailConfirmAction({
+          icon: 'warning',
+          title: 'Delete ' + setLabel + '?',
+          text: 'This will permanently delete all data under ' + setLabel + ' from the database.',
+          confirmButtonText: 'Yes, delete set',
+          cancelButtonText: 'Cancel',
+          confirmButtonColor: '#dc3545'
+        }, function () {
+          if (!deleteItemIds.length) {
+            npDetailState.items = $.grep(npDetailState.items, function (currentItem) {
+              return String(currentItem.key || '') !== itemKey;
+            });
+            npDetailResetSetNumbers();
+            npDetailRenderItemRows();
+            npDetailRenderEndUserRows();
+            npDetailRefreshAllProperties();
+            return;
+          }
+
+          $button.prop('disabled', true);
+          $.ajax({
+            url: '../auth/auth.php',
+            type: 'POST',
+            cache: false,
+            dataType: 'json',
+            data: {
+              delete_new_purchase_group_set: 1,
+              po: String($('#edit_np_group_po').val() || '').trim(),
+              row_id: parseInt($('#edit_np_group_row_id').val(), 10) || 0,
+              item_ids: deleteItemIds,
+              item_ids_raw: deleteItemIds.join(',')
+            },
+            success: function (resp) {
+              if (!resp || Number(resp.status) !== 200) {
+                var message = (resp && resp.message) ? resp.message : 'Unable to delete the selected set.';
+                Swal ? Swal.fire({ icon: 'error', title: message }) : alert(message);
+                return;
+              }
+
+              npDetailReloadGroup(function (hasGroup) {
+                npDetailReloadTable();
+                if (hasGroup) {
+                  Swal ? Swal.fire({ icon: 'success', title: resp.message || 'Set deleted permanently.' }) : alert(resp.message || 'Set deleted permanently.');
+                  return;
+                }
+
+                $('#editNpDetailModal').modal('hide');
+                Swal ? Swal.fire({ icon: 'success', title: resp.message || 'Set deleted permanently.' }) : alert(resp.message || 'Set deleted permanently.');
+              });
+            },
+            error: function () {
+              Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
+            },
+            complete: function () {
+              $button.prop('disabled', false);
+            }
+          });
+        });
       });
 
     $(document)
@@ -4462,33 +4568,13 @@ $(function(){
                 Swal ? Swal.fire({ icon: 'error', title: message }) : alert(message);
                 return;
               }
-              $.ajax({
-                url: '../auth/auth.php',
-                type: 'POST',
-                cache: false,
-                dataType: 'json',
-                data: {
-                  fetch_new_purchase_group: 1,
-                  po: String($('#edit_np_po').val() || $('#edit_np_group_po').val() || '').trim(),
-                  row_id: parseInt($('#edit_np_group_row_id').val(), 10) || 0
-                },
-                success: function (fetchResp) {
-                  if (fetchResp && Number(fetchResp.status) === 200 && fetchResp.data) {
-                    npDetailFillModal(fetchResp.data);
-                  }
-                  if (Swal) {
-                    Swal.fire({ icon: 'success', title: resp.message || 'Updated successfully.' });
-                  } else {
-                    alert(resp.message || 'Updated successfully.');
-                  }
-                },
-                error: function () {
-                  if (Swal) {
-                    Swal.fire({ icon: 'success', title: resp.message || 'Updated successfully.' });
-                  } else {
-                    alert(resp.message || 'Updated successfully.');
-                  }
+              npDetailReloadGroup(function () {
+                if (Swal) {
+                  Swal.fire({ icon: 'success', title: resp.message || 'Updated successfully.' });
+                } else {
+                  alert(resp.message || 'Updated successfully.');
                 }
+                npDetailReloadTable();
               });
             },
             error: function () {
