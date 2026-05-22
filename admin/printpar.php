@@ -603,6 +603,45 @@ function gso_split_rendered_lines($pdf, $text, $widthMm, $maxLines) {
 
 class PDF extends TCPDF  
 {
+    protected function fitTextFontSize($text, $width, $baseSize = 10, $minSize = 7, $maxLines = 2) {
+        $text = trim((string)$text);
+        if ($text === '') { return $baseSize; }
+
+        for ($size = $baseSize; $size >= $minSize; $size -= 0.25) {
+            $this->SetFont('dejavusans', '', $size);
+            if ((int)$this->getNumLines($text, $width) <= $maxLines) {
+                return $size;
+            }
+        }
+
+        return $minSize;
+    }
+
+    protected function drawWrappedFooterText($x, $y, $width, $text, $baseSize = 10, $minSize = 7, $align = 'C') {
+        $lineHeight = 5;
+        $maxLines = 2;
+        $fontSize = $this->fitTextFontSize($text, $width, $baseSize, $minSize, $maxLines);
+
+        $this->SetFont('dejavusans', '', $fontSize);
+        $this->MultiCell(
+            $width,
+            $lineHeight,
+            trim((string)$text),
+            0,
+            $align,
+            false,
+            1,
+            $x,
+            $y,
+            true,
+            0,
+            false,
+            true,
+            $lineHeight * $maxLines,
+            'M'
+        );
+    }
+
     public function header(){
         $this->Ln(42);
         $this->SetFont('dejavusans','',10);
@@ -754,17 +793,19 @@ class PDF extends TCPDF
 
     public function Footer(){
         $this->SetY(-102);
-      $this->SetFont('dejavusans','',8);
-        $this->SetY(-66);
-        $this->SetX(35);
-        $this->SetFont('dejavusans','',10);
-        $this->Cell(95,5,$this->employee,0,0);//end user
-        $this->Cell(10,5,"ATTY. ARVIN Q. TAPIA ",0,0);
-        $this->Ln(13);
-        $this->SetX(35);
-        $this->SetFont('dejavusans','',10);
-        $this->Cell(95,5,$this->dept,0,0);//dept
-        $this->Cell(10,5,"OIC - General Services Office ",0,0);
+        $this->SetFont('dejavusans','',8);
+
+        $leftX = 30;
+        $rightX = 112;
+        $columnWidth = 74;
+        $nameY = $this->getPageHeight() - 68;
+        $officeY = $this->getPageHeight() - 54;
+
+        $this->drawWrappedFooterText($leftX, $nameY, $columnWidth, (string)$this->employee, 10, 7.5, 'C');
+        $this->drawWrappedFooterText($rightX, $nameY, $columnWidth, 'ATTY. ARVIN Q. TAPIA', 10, 8, 'C');
+        $this->drawWrappedFooterText($leftX, $officeY, $columnWidth, (string)$this->dept, 10, 7, 'C');
+        $this->drawWrappedFooterText($rightX, $officeY, $columnWidth, 'OIC - General Services Office', 10, 8, 'C');
+
         // Page number (scoped to this end user's page group)
         $this->SetY(-25);
         $this->SetFont('dejavusans','',9.5);
@@ -779,16 +820,16 @@ class PDF extends TCPDF
       $this->SetX(130);
       $this->MultiCell(62, 5, $this->supplier, 0, 'L', false, 1);
       $this->SetX(130);
-      $this->Cell(62,5,$this->po,0,1);//po
+      $this->MultiCell(62, 5, $this->po, 0, 'L', false, 1);
       $this->SetX(130);
-      $this->Cell(62,5,$this->pr,0,1);//pr
+      $this->MultiCell(62, 5, $this->pr, 0, 'L', false, 1);//pr
       $this->SetX(130);
-      $this->Cell(62,5,$this->obr,0,1);//obr
+      $this->MultiCell(62, 5, $this->obr, 0, 'L', false, 1);//obr
       $this->SetX(130);
-      $this->Cell(62,5,$this->code,0,1);//code
+      $this->MultiCell(62, 5, $this->code, 0, 'L', false, 1);//code
       $this->SetAutoPageBreak(true, 82);
     }
-  }
+}
 
 
 $pdf = new PDF('P','mm','A4',true,'UTF-8',false);
