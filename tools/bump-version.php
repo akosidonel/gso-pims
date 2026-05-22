@@ -1,9 +1,9 @@
 #!/usr/bin/env php
 <?php
 /**
- * Deprecated: Manual bump script no longer required.
- * Version is now derived automatically from git metadata (see include/version.php).
+ * Backward-compatible stub.
+ * Use tools/release.php for changelog generation and release tagging.
  * This stub remains only to avoid breaking old tooling references.
  */
-fwrite(STDOUT, "Manual version bumping deprecated. Version is auto-generated from git tags & commits.\n");
+fwrite(STDOUT, "Use: php tools/release.php [auto|major|minor|patch] [--dry-run]\n");
 exit(0);

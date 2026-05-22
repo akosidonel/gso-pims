@@ -212,6 +212,14 @@
                         </a>
                     </li>
                 <?php endif; ?>
+                <?php if (hasRole(['SYSTEM-ADMIN'])): ?>
+                    <li class="nav-item">
+                        <a href="../admin/change-log.php" class="nav-link <?= isActivePage(['change-log.php']) ?>">
+                            <i class='fas fa-code-branch nav-icon text-white'></i>
+                            <p>Change Log</p>
+                        </a>
+                    </li>
+                <?php endif; ?>
                 <!--logout -->
                 <li class="nav-item">
                     <a href="../logout.php" class="nav-link">

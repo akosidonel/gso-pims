@@ -1,4 +1,8 @@
 {
+    "scripts": {
+        "release": "@php tools/release.php",
+        "release:dry-run": "@php tools/release.php --dry-run"
+    },
     "require": {
         "phpmailer/phpmailer": "^6.7"
     }

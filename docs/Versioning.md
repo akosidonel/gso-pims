@@ -1,102 +1,78 @@
-# Automatic Versioning (Commit Count Segmentation)
+# Automatic Versioning And Changelog
 
-The application uses a fully automatic, tag‑free version scheme derived only from the total number of commits on the current `HEAD`. No manual editing or git tags are required.
+The project now uses release tags as the source of truth for versions.
 
-## Summary
-Version format (default, when not overridden):
+## Version Format
 
-  MAJOR.MINOR.PATCH+<shortHash>[.dirty]
+- Released build: `v1.20.1`
+- Work in progress after a release: `v1.20.2-dev.3`
+- Local uncommitted changes: `v1.20.2-dev.3.dirty`
 
-Where:
-- MAJOR = fixed seed (currently 1) – can be changed in code later if you intentionally start a new era.
-- MINOR = floor(total_commits / 100)
-- PATCH = total_commits % 100
-- +<shortHash> = 7‑character git commit hash (for uniqueness / traceability)
-- .dirty (optional) = appended when the working tree has uncommitted changes
+This keeps the public version simple while still showing when the local copy is ahead of the last release.
 
-Example progression (commit count → version):
-- 0 commits (fresh repo with first commit counted as 1) → 1.0.1+abc1234
-- 7 commits → 1.0.7+1f09e2d
-- 99 commits → 1.0.99+77aa001
-- 100 commits → 1.1.0+55bb220 (MINOR increments)
-- 275 commits → 1.2.75+9c0d4ef
+## How The Next Version Is Chosen
 
-This guarantees a monotonically increasing version without relying on tags or manual bumps. Every new commit maps deterministically to exactly one version.
+`php tools/release.php` looks at commit messages since the latest `vX.Y.Z` tag.
 
-## Precedence / Overrides
-`include/version.php` applies this precedence:
-1. If environment variable `APP_VERSION` is set: use it verbatim (skips git logic) – useful for CI pipelines.
-2. Else if git metadata is available: compute commit count segmentation (algorithm above).
-3. Else (no `.git` directory): fallback to `0.0.0+YYYYMMDDHHMM` timestamp.
+- `major`: commit message contains `breaking change`, `breaking:`, or starts with `major:`
+- `minor`: commit message starts with `feat`, `feature`, `add`, `added`, `new`, `create`, or `created`
+- `patch`: everything else
 
-## Programmatic Access
-```php
-$meta = include __DIR__.'/../include/version.php';
-echo $meta['full'];          // e.g. 1.2.75+9c0d4ef
-echo $meta['version'];       // e.g. 1.2.75
-```
+If there is no existing release tag yet, the first release starts at `v1.0.0`.
 
-## HTML Badge
-Simply including the file echoes a small badge:
-```php
-include __DIR__.'/../include/version.php';
-```
-When sourced from git it shows: `v1.2.75+9c0d4ef (275)` where the number in parentheses is the total commit count.
+## Changelog Rules
 
-## Returned Array Fields
-| Key | Meaning |
-|-----|---------|
-| name | Application name label |
-| version | MAJOR.MINOR.PATCH (commit-count segmentation) |
-| full | version plus +hash and optional .dirty |
-| hash | Short commit hash (if git present) |
-| total_commits | Integer total commits on HEAD |
-| dirty | Boolean: working tree has uncommitted changes |
-| source | 'git', 'env', or 'fallback' |
-| date | Last commit date (git) or current date fallback |
-| tag | Always null in this scheme (legacy compatibility) |
-| commits_since_tag | Always null (legacy compatibility) |
+`CHANGELOG.md` is generated from commit history during release.
 
-## Dirty Working Tree
-If you see `.dirty` at the end of `full`, commit or stash changes to remove it. This helps ensure production builds are traceable to a clean commit.
+Entries are grouped into:
 
-## Environment Override (`APP_VERSION`)
-Set before PHP starts (web server env, `.env`, or CI export):
+- `Added`
+- `Changed`
+- `Fixed`
+- `Removed`
+
+Because the changelog is generated from commit messages, short and clear commit messages will give the best result.
+
+## Release Commands
+
+Preview the next release without changing anything:
+
 ```bash
-export APP_VERSION=2.0.0-rc1
+php tools/release.php --dry-run
 ```
-All requests will then report exactly `2.0.0-rc1` with `source = env`.
 
-## Caching
-For performance a small JSON cache (keyed by current commit hash) is stored in the system temp directory. A recompute only happens when HEAD changes or cache is missing/invalid.
+Create the next release automatically:
 
-## CI / Build Without .git
-If you deploy without the `.git` folder, the fallback value `0.0.0+YYYYMMDDHHMM` is used. To keep the commit-based version in such environments you can:
-1. Retain `.git` in the artifact (simplest), or
-2. Bake the computed version into an environment variable (set `APP_VERSION` during build), or
-3. Pre-run `include/version.php` in a build step and write its array to a PHP file you then include (advanced scenario).
+```bash
+php tools/release.php
+```
 
-## Rationale
-- Deterministic: every commit has one version.
-- Monotonic: lexical and semantic ordering track commit chronology (except for `.dirty` transient suffix).
-- Zero manual work: just commit.
-- Tag independence: no need to manage or push tags.
+Force a specific bump:
 
-## Changing the MAJOR Seed
-Currently hard-coded to 1. If you want to declare a major conceptual rewrite, you can bump the seed in the code (look for `$majorSeed`). This does not retroactively change historic versions; it simply starts producing `2.x.y`, `3.x.y`, etc., from that commit onward.
+```bash
+php tools/release.php patch
+php tools/release.php minor
+php tools/release.php major
+```
 
-## Legacy Artifacts
-`VERSION` file and `tools/bump-version.php` (now a stub) remain only for backward compatibility. They are not used by the active algorithm.
+Composer shortcuts are also available:
 
-## Troubleshooting
-- Shows `0.0.0+<timestamp>`: `.git` not present and no `APP_VERSION` set.
-- Shows `.dirty`: You have uncommitted changes.
-- Commit count seems off: Ensure repository isn't shallow (remove `--depth` clone) and that you're on the expected branch.
+```bash
+composer release:dry-run
+composer release
+```
 
-## Recommended Workflow
-- Commit normally.
-- (Optional) Set `APP_VERSION` in CI for release candidates or marketing versions.
-- Avoid manual editing—let commit count drive patch/minor changes.
+## What The Release Script Does
 
----
-Automatic, commit-count based versioning keeps things simple and always up to date.
+When you run `php tools/release.php`:
+
+1. It checks that the git working tree is clean.
+2. It collects commits since the latest release tag.
+3. It chooses the next version.
+4. It prepends a new release section to `CHANGELOG.md`.
+5. It creates a commit like `release: v1.20.1`.
+6. It creates the matching git tag `v1.20.1`.
+
+## Deployment Note
+
+If a deployment does not include `.git`, set `APP_VERSION` so the app can still show the correct release number.

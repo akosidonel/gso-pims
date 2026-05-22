@@ -231,6 +231,200 @@
   will-change: transform, opacity;
 }
 
+.gso-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.gso-history-card {
+  border: 1px solid var(--gso-border);
+  border-radius: var(--gso-radius);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
+  box-shadow: var(--gso-shadow-soft);
+  overflow: hidden;
+}
+
+.gso-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.gso-history-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(22, 163, 74, 0.10);
+  color: #065f46;
+  font-weight: 800;
+}
+
+.gso-history-date {
+  color: var(--gso-muted);
+  font-size: 13px;
+}
+
+.gso-history-body {
+  padding: 18px 20px 20px;
+}
+
+.gso-history-section + .gso-history-section {
+  margin-top: 18px;
+}
+
+.gso-history-section h6 {
+  margin-bottom: 10px;
+  color: var(--gso-text);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.gso-history-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--gso-text);
+}
+
+.gso-history-list li + li {
+  margin-top: 8px;
+}
+
+.gso-commit-list {
+  display: grid;
+  gap: 12px;
+}
+
+.gso-commit-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.gso-commit-text {
+  color: var(--gso-text);
+  font-weight: 600;
+}
+
+.gso-commit-hash {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--gso-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.gso-note {
+  color: var(--gso-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.gso-changelog-shell {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 28px 0 40px;
+}
+
+.gso-changelog-title {
+  margin: 0 0 28px;
+  color: var(--gso-text);
+  font-size: 56px;
+  font-weight: 300;
+  letter-spacing: -0.04em;
+}
+
+.gso-changelog-release + .gso-changelog-release {
+  margin-top: 48px;
+}
+
+.gso-changelog-version {
+  margin: 0 0 18px;
+  color: var(--gso-text);
+  font-size: 28px;
+  font-weight: 400;
+  letter-spacing: -0.03em;
+}
+
+.gso-changelog-timeline {
+  position: relative;
+  margin-left: 4px;
+  padding-left: 42px;
+}
+
+.gso-changelog-timeline::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 3px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #4f46e5, #4338ca);
+}
+
+.gso-changelog-group + .gso-changelog-group {
+  margin-top: 28px;
+}
+
+.gso-changelog-grouphead {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.gso-changelog-dot {
+  width: 42px;
+  height: 42px;
+  margin-left: -1px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 26px rgba(79, 70, 229, 0.22);
+  flex: 0 0 auto;
+}
+
+.gso-changelog-grouptitle {
+  margin: 2px 0 0;
+  color: var(--gso-text);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.gso-changelog-list {
+  margin: 0 0 0 58px;
+  padding-left: 24px;
+  color: #334155;
+}
+
+.gso-changelog-list li {
+  margin-bottom: 10px;
+  line-height: 1.6;
+}
+
+.gso-changelog-empty {
+  color: var(--gso-muted);
+  font-size: 15px;
+}
+
 .gso-stat-card::after {
   content: '';
   position: absolute;
@@ -276,6 +470,48 @@
 @media (prefers-reduced-motion: reduce) {
   .gso-stat-card {
     transition: none !important;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .gso-history-head,
+  .gso-commit-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .gso-changelog-shell {
+    padding-top: 16px;
+  }
+
+  .gso-changelog-title {
+    font-size: 40px;
+  }
+
+  .gso-changelog-version {
+    font-size: 24px;
+  }
+
+  .gso-changelog-timeline {
+    padding-left: 28px;
+  }
+
+  .gso-changelog-grouphead {
+    gap: 12px;
+  }
+
+  .gso-changelog-dot {
+    width: 34px;
+    height: 34px;
+  }
+
+  .gso-changelog-grouptitle {
+    font-size: 20px;
+  }
+
+  .gso-changelog-list {
+    margin-left: 46px;
+    padding-left: 18px;
   }
 }
 

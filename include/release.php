@@ -1,0 +1,359 @@
+<?php
+
+const PIMS_RELEASE_NAME = 'P.I.M.S';
+const PIMS_RELEASE_INITIAL_MAJOR = 1;
+const PIMS_RELEASE_INITIAL_MINOR = 0;
+const PIMS_RELEASE_INITIAL_PATCH = 0;
+const PIMS_RELEASE_ROOT = __DIR__ . '/..';
+
+function pims_release_git_available(): bool {
+  return trim((string) @shell_exec('git -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' rev-parse --is-inside-work-tree 2>/dev/null')) === 'true';
+}
+
+function pims_release_git(string $command): string {
+  return trim((string) @shell_exec('git -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' ' . $command . ' 2>/dev/null'));
+}
+
+function pims_release_parse_tag(?string $tag): ?array {
+  if (!$tag || !preg_match('/^v(\d+)\.(\d+)\.(\d+)$/', $tag, $matches)) {
+    return null;
+  }
+
+  return [
+    'major' => (int) $matches[1],
+    'minor' => (int) $matches[2],
+    'patch' => (int) $matches[3],
+  ];
+}
+
+function pims_release_starts_with(string $value, string $prefix): bool {
+  return strpos($value, $prefix) === 0;
+}
+
+function pims_release_format_version(array $version): string {
+  return $version['major'] . '.' . $version['minor'] . '.' . $version['patch'];
+}
+
+function pims_release_format_tag(array $version): string {
+  return 'v' . pims_release_format_version($version);
+}
+
+function pims_release_initial_version(): array {
+  return [
+    'major' => PIMS_RELEASE_INITIAL_MAJOR,
+    'minor' => PIMS_RELEASE_INITIAL_MINOR,
+    'patch' => PIMS_RELEASE_INITIAL_PATCH,
+  ];
+}
+
+function pims_release_latest_tag(): ?string {
+  $tag = pims_release_git('tag --list "v[0-9]*" --sort=-version:refname | head -n 1');
+  return $tag !== '' ? $tag : null;
+}
+
+function pims_release_exact_tag(): ?string {
+  $tag = pims_release_git('describe --tags --exact-match --match "v[0-9]*" HEAD');
+  return $tag !== '' ? $tag : null;
+}
+
+function pims_release_commit_count(?string $tag): int {
+  $range = $tag ? escapeshellarg($tag . '..HEAD') : 'HEAD';
+  return (int) pims_release_git('rev-list --count ' . $range);
+}
+
+function pims_release_commit_subjects(?string $tag): array {
+  $range = $tag ? escapeshellarg($tag . '..HEAD') : 'HEAD';
+  $output = pims_release_git('log --reverse --pretty=format:%s ' . $range);
+
+  if ($output === '') {
+    return [];
+  }
+
+  return array_values(array_filter(array_map('trim', explode("\n", $output))));
+}
+
+function pims_release_commits(?string $tag): array {
+  $range = $tag ? escapeshellarg($tag . '..HEAD') : 'HEAD';
+  $output = pims_release_git('log --reverse --pretty=format:%H%x1f%h%x1f%s ' . $range);
+
+  if ($output === '') {
+    return [];
+  }
+
+  $commits = [];
+  foreach (explode("\n", $output) as $line) {
+    $parts = explode("\x1f", $line);
+    if (count($parts) !== 3) {
+      continue;
+    }
+
+    $commits[] = [
+      'hash' => trim($parts[0]),
+      'short_hash' => trim($parts[1]),
+      'subject' => pims_release_pretty_subject($parts[2]),
+      'raw_subject' => trim($parts[2]),
+    ];
+  }
+
+  return $commits;
+}
+
+function pims_release_pretty_subject(string $subject): string {
+  $subject = preg_replace('/\s+/', ' ', trim($subject));
+  $subject = rtrim($subject, '.');
+
+  if ($subject === '') {
+    return 'Updated project files';
+  }
+
+  if (preg_match('/^file udpated$/i', $subject) || preg_match('/^file updated$/i', $subject)) {
+    return 'Updated internal project files';
+  }
+
+  if (preg_match('/^(minor )?bug fixes? and (system )?improvements?( and updates)?$/i', $subject)) {
+    return 'General bug fixes and maintenance improvements';
+  }
+
+  if (preg_match('/^minor update and bug fixes$/i', $subject)) {
+    return 'General maintenance updates and bug fixes';
+  }
+
+  return ucfirst($subject);
+}
+
+function pims_release_detect_bump(array $subjects): string {
+  foreach ($subjects as $subject) {
+    $normalized = strtolower(trim($subject));
+    if (
+      pims_release_starts_with($normalized, 'major:') ||
+      strpos($normalized, 'breaking change') !== false ||
+      strpos($normalized, 'breaking:') !== false
+    ) {
+      return 'major';
+    }
+  }
+
+  foreach ($subjects as $subject) {
+    $normalized = strtolower(trim($subject));
+    if (preg_match('/^(feat|feature|add|added|new|create|created)\b/', $normalized)) {
+      return 'minor';
+    }
+  }
+
+  return 'patch';
+}
+
+function pims_release_next_version(?string $latestTag, string $bump): array {
+  $current = $latestTag ? pims_release_parse_tag($latestTag) : null;
+  if (!$current) {
+    return pims_release_initial_version();
+  }
+
+  $next = $current;
+  if ($bump === 'major') {
+    $next['major']++;
+    $next['minor'] = 0;
+    $next['patch'] = 0;
+    return $next;
+  }
+
+  if ($bump === 'minor') {
+    $next['minor']++;
+    $next['patch'] = 0;
+    return $next;
+  }
+
+  $next['patch']++;
+  return $next;
+}
+
+function pims_release_group_name(string $subject): string {
+  $normalized = strtolower(trim($subject));
+
+  if (preg_match('/^(feat|feature|add|added|new|create|created)\b/', $normalized)) {
+    return 'Added';
+  }
+
+  if (preg_match('/^(fix|fixed|bug|hotfix|repair)\b/', $normalized) || strpos($normalized, 'bug fix') !== false) {
+    return 'Fixed';
+  }
+
+  if (preg_match('/^(remove|removed|delete|deleted|drop)\b/', $normalized)) {
+    return 'Removed';
+  }
+
+  return 'Changed';
+}
+
+function pims_release_section_lines(array $commits): array {
+  $sections = pims_release_grouped_sections($commits);
+  $lines = [];
+
+  foreach ($sections as $title => $items) {
+    $lines[] = '### ' . $title;
+    foreach ($items as $item) {
+      $lines[] = '- ' . $item;
+    }
+    $lines[] = '';
+  }
+
+  if ($lines && end($lines) === '') {
+    array_pop($lines);
+  }
+
+  return $lines;
+}
+
+function pims_release_grouped_sections(array $commits): array {
+  $sections = [
+    'Added' => [],
+    'Changed' => [],
+    'Fixed' => [],
+    'Removed' => [],
+  ];
+
+  foreach ($commits as $commit) {
+    $sections[pims_release_group_name($commit['raw_subject'])][] = $commit['subject'];
+  }
+
+  foreach ($sections as $title => $items) {
+    $counts = array_count_values($items);
+    $deduped = [];
+    foreach ($counts as $item => $count) {
+      $deduped[] = $count > 1 ? $item . ' (' . $count . ' times)' : $item;
+    }
+    $sections[$title] = $deduped;
+  }
+
+  return array_filter($sections);
+}
+
+function pims_release_render_entry(string $tag, string $date, array $commits): string {
+  $lines = [
+    '## ' . $tag . ' - ' . $date,
+    '',
+  ];
+
+  $lines = array_merge($lines, pims_release_section_lines($commits), ['']);
+  return implode(PHP_EOL, $lines);
+}
+
+function pims_release_changelog_path(): string {
+  return dirname(__DIR__) . DIRECTORY_SEPARATOR . 'CHANGELOG.md';
+}
+
+function pims_release_changelog_template(): string {
+  return implode(PHP_EOL, [
+    '# Changelog',
+    '',
+    'This file is generated from git history by `php tools/release.php`.',
+    '',
+  ]);
+}
+
+function pims_release_prepare_changelog(string $entry): string {
+  $path = pims_release_changelog_path();
+  $existing = is_readable($path) ? (string) file_get_contents($path) : pims_release_changelog_template();
+  $existing = rtrim($existing);
+  $template = rtrim(pims_release_changelog_template());
+
+  if ($existing === '') {
+    $existing = $template;
+  }
+
+  $tail = $existing;
+  if (pims_release_starts_with($existing, $template)) {
+    $tail = trim(substr($existing, strlen($template)));
+  }
+
+  if ($tail === 'No tagged releases yet.') {
+    $tail = '';
+  }
+
+  $content = $template . PHP_EOL . PHP_EOL . trim($entry);
+  if ($tail !== '') {
+    $content .= PHP_EOL . PHP_EOL . $tail;
+  }
+
+  return $content . PHP_EOL;
+}
+
+function pims_release_parse_changelog(?string $path = null): array {
+  $path = $path ?: pims_release_changelog_path();
+  if (!is_readable($path)) {
+    return [];
+  }
+
+  $lines = file($path, FILE_IGNORE_NEW_LINES);
+  if (!is_array($lines)) {
+    return [];
+  }
+
+  $entries = [];
+  $currentEntry = null;
+  $currentSection = null;
+
+  foreach ($lines as $line) {
+    $trimmed = trim($line);
+
+    if (preg_match('/^##\s+(v\d+\.\d+\.\d+)\s*-\s*(.+)$/', $trimmed, $matches)) {
+      if ($currentEntry) {
+        $entries[] = $currentEntry;
+      }
+
+      $currentEntry = [
+        'tag' => $matches[1],
+        'date' => trim($matches[2]),
+        'sections' => [],
+      ];
+      $currentSection = null;
+      continue;
+    }
+
+    if (!$currentEntry) {
+      continue;
+    }
+
+    if (preg_match('/^###\s+(.+)$/', $trimmed, $matches)) {
+      $currentSection = trim($matches[1]);
+      if (!isset($currentEntry['sections'][$currentSection])) {
+        $currentEntry['sections'][$currentSection] = [];
+      }
+      continue;
+    }
+
+    if ($currentSection && preg_match('/^-+\s+(.+)$/', $trimmed, $matches)) {
+      $currentEntry['sections'][$currentSection][] = trim($matches[1]);
+    }
+  }
+
+  if ($currentEntry) {
+    $entries[] = $currentEntry;
+  }
+
+  return $entries;
+}
+
+function pims_release_pending_summary(): array {
+  if (!pims_release_git_available()) {
+    return [
+      'latest_tag' => null,
+      'commits' => [],
+      'bump' => 'patch',
+      'next_tag' => pims_release_format_tag(pims_release_initial_version()),
+    ];
+  }
+
+  $latestTag = pims_release_latest_tag();
+  $commits = pims_release_commits($latestTag);
+  $subjects = array_column($commits, 'raw_subject');
+  $bump = pims_release_detect_bump($subjects);
+  $nextVersion = pims_release_next_version($latestTag, $bump);
+
+  return [
+    'latest_tag' => $latestTag,
+    'commits' => $commits,
+    'bump' => $bump,
+    'next_tag' => pims_release_format_tag($nextVersion),
+  ];
+}
