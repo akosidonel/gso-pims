@@ -6,3 +6,6 @@ This file is generated from git history by `php tools/release.php`.
 
 ### Changed
 - Change the color style of change log to green
+
+### Fixed
+- Fix the changelog and add git hooks
