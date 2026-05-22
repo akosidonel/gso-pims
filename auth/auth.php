@@ -267,12 +267,17 @@ if (!function_exists('gso_new_purchase_group_modal_items')) {
                     'emp_id' => (string)($row['emp_id'] ?? ''),
                     'emp_name' => (string)($row['emp_name'] ?? ''),
                     'item_quantity' => 0,
+                    'existing_item_ids' => [],
                     'serial_numbers' => [],
                     'serial_numbers_2' => [],
                     'property_numbers' => [],
                 ];
             }
 
+            $rowId = (int)($row['id'] ?? 0);
+            if ($rowId > 0) {
+                $grouped[$signature]['existing_item_ids'][] = $rowId;
+            }
             $grouped[$signature]['item_quantity']++;
             $grouped[$signature]['serial_numbers'][] = (string)($row['serial_number'] ?? '');
             $grouped[$signature]['serial_numbers_2'][] = (string)($row['serial_number_2'] ?? '');
@@ -4326,9 +4331,57 @@ if (!function_exists('gso_propnum_table_col_for_fund')) {
 
 if (!function_exists('gso_propnum_exists')) {
     function gso_propnum_exists($conn, $table, $col, $candidate) {
-        $cand = mysqli_real_escape_string($conn, (string)$candidate);
-        $q = mysqli_query($conn, "SELECT 1 FROM {$table} WHERE {$col}='{$cand}' LIMIT 1");
-        return ($q && mysqli_num_rows($q) > 0);
+        $candidate = strtoupper(trim((string)$candidate));
+        if ($candidate === '') {
+            return false;
+        }
+
+        $checks = [
+            ['table' => 'new_purchase', 'col' => 'property_number'],
+            ['table' => 'new_purchase_history', 'col' => 'par_number'],
+            ['table' => 'new_bundle_purchase', 'col' => 'property_number'],
+            ['table' => 'new_bundle_purchase', 'col' => 'bundle_with'],
+            ['table' => 'par_gen_fund', 'col' => 'par_number'],
+            ['table' => 'property_sef', 'col' => 'property_number'],
+            ['table' => 'trust_fund', 'col' => 'property_number'],
+            ['table' => 'donation', 'col' => 'property_number'],
+        ];
+
+        $table = preg_replace('/[^A-Za-z0-9_]/', '', (string)$table);
+        $col = preg_replace('/[^A-Za-z0-9_]/', '', (string)$col);
+        if ($table !== '' && $col !== '') {
+            $alreadyIncluded = false;
+            foreach ($checks as $check) {
+                if ($check['table'] === $table && $check['col'] === $col) {
+                    $alreadyIncluded = true;
+                    break;
+                }
+            }
+            if (!$alreadyIncluded) {
+                $checks[] = ['table' => $table, 'col' => $col];
+            }
+        }
+
+        $sqlParts = [];
+        $types = '';
+        $params = [];
+        foreach ($checks as $check) {
+            $sqlParts[] = "SELECT 1 FROM {$check['table']} WHERE UPPER(TRIM(COALESCE({$check['col']}, ''))) = ?";
+            $types .= 's';
+            $params[] = $candidate;
+        }
+
+        $sql = 'SELECT 1 FROM (' . implode(' UNION ALL ', $sqlParts) . ') AS property_matches LIMIT 1';
+        $stmt = mysqli_prepare($conn, $sql);
+        if (!$stmt) {
+            return true;
+        }
+        gso_stmt_bind_params($stmt, $types, $params);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        $exists = $result && mysqli_num_rows($result) > 0;
+        mysqli_stmt_close($stmt);
+        return $exists;
     }
 }
 
@@ -6614,6 +6667,7 @@ if (isset($_POST['update_new_purchase_group'])) {
     }
 
     $existingItemIdMap = isset($_POST['existing_item_id']) && is_array($_POST['existing_item_id']) ? $_POST['existing_item_id'] : [];
+    $existingItemIdsMap = isset($_POST['existing_item_ids']) && is_array($_POST['existing_item_ids']) ? $_POST['existing_item_ids'] : [];
     $getPostedMapValue = function ($fieldName, $itemKey, $default = '') {
         $source = isset($_POST[$fieldName]) && is_array($_POST[$fieldName]) ? $_POST[$fieldName] : [];
         if (isset($source[$itemKey]) && !is_array($source[$itemKey])) {
@@ -6703,6 +6757,66 @@ if (isset($_POST['update_new_purchase_group'])) {
         $generatedParIcsByCategory[$rowCategory] = $prefix . sprintf('%04d', ($max + 1));
         return $generatedParIcsByCategory[$rowCategory];
     };
+    $generateAvailablePropertyNumber = function ($category, $accountCode, $existingId = 0, $oldPropertyNumber = '', array $exclude = [], $quantity = 1) use ($conn, $year, $departmentCode, $fund, $nextPropertyNumber) {
+        $category = strtoupper(trim((string)$category));
+        $accountCode = strtoupper(trim((string)$accountCode));
+        $existingId = (int)$existingId;
+        $oldPropertyNumber = strtoupper(trim((string)$oldPropertyNumber));
+        $quantity = max(1, min(5000, (int)$quantity));
+        $excludeList = [];
+
+        if ($oldPropertyNumber !== '') {
+            $excludeList[] = $oldPropertyNumber;
+        }
+        foreach ($exclude as $excludedNumber) {
+            $excludedNumber = strtoupper(trim((string)$excludedNumber));
+            if ($excludedNumber !== '' && !in_array($excludedNumber, $excludeList, true)) {
+                $excludeList[] = $excludedNumber;
+            }
+        }
+
+        for ($attempt = 0; $attempt < 50; $attempt++) {
+            $generated = gso_generate_one_property_number($conn, $category, $year, $accountCode, $departmentCode, $fund, $excludeList);
+            if (!isset($generated['ok']) || !$generated['ok']) {
+                throw new RuntimeException($generated['error'] ?? 'Unable to generate property number.');
+            }
+
+            $candidate = strtoupper(trim((string)($generated['property_number'] ?? '')));
+            if ($candidate === '') {
+                continue;
+            }
+
+            $candidateBlock = [];
+            $blockNumber = $candidate;
+            $blockAvailable = true;
+            for ($copyIndex = 1; $copyIndex <= $quantity; $copyIndex++) {
+                $blockKey = strtoupper(trim((string)$blockNumber));
+                $checkId = $copyIndex === 1 ? $existingId : 0;
+                $checkOld = $copyIndex === 1 ? $oldPropertyNumber : '';
+                if ($blockKey === '' || in_array($blockKey, $excludeList, true) || gso_new_purchase_property_number_in_use($conn, $blockKey, $checkId, $checkOld)) {
+                    $blockAvailable = false;
+                    break;
+                }
+                $candidateBlock[] = $blockKey;
+                $blockNumber = strtoupper(trim((string)$nextPropertyNumber($blockKey)));
+            }
+
+            if ($blockAvailable) {
+                return $candidate;
+            }
+
+            foreach ($candidateBlock as $blockKey) {
+                if (!in_array($blockKey, $excludeList, true)) {
+                    $excludeList[] = $blockKey;
+                }
+            }
+            if (!in_array($candidate, $excludeList, true)) {
+                $excludeList[] = $candidate;
+            }
+        }
+
+        throw new RuntimeException('Unable to allocate an available property number.');
+    };
     $totalRequestedItems = 0;
     foreach ($setKeys as $setKey) {
         $totalRequestedItems += $normalizeItemQuantity($getPostedMapValue('item_quantity', $setKey, '1'));
@@ -6777,6 +6891,17 @@ if (isset($_POST['update_new_purchase_group'])) {
             } elseif (isset($existingItemIdMap[(string)$setKey])) {
                 $existingId = (int)$existingItemIdMap[(string)$setKey];
             }
+            $existingIds = [];
+            $existingIdsRaw = $existingItemIdsMap[$setKey] ?? ($existingItemIdsMap[(string)$setKey] ?? '');
+            foreach (preg_split('/\s*,\s*/', (string)$existingIdsRaw, -1, PREG_SPLIT_NO_EMPTY) as $postedExistingId) {
+                $postedExistingId = (int)$postedExistingId;
+                if ($postedExistingId > 0 && isset($currentById[$postedExistingId]) && !in_array($postedExistingId, $existingIds, true)) {
+                    $existingIds[] = $postedExistingId;
+                }
+            }
+            if (empty($existingIds) && $existingId > 0 && isset($currentById[$existingId])) {
+                $existingIds[] = $existingId;
+            }
             $currentRow = ($existingId > 0 && isset($currentById[$existingId])) ? $currentById[$existingId] : null;
             $oldPropNum = strtoupper(trim((string)($currentRow['property_number'] ?? '')));
             $npidLink = $existingId > 0 ? ('NPID:' . $existingId) : '';
@@ -6804,6 +6929,18 @@ if (isset($_POST['update_new_purchase_group'])) {
             }
             $parIcsNumber = $getParIcsForCategory($category);
 
+            $oldYear = trim((string)($currentRow['date_aquired'] ?? ''));
+            if (preg_match('/^\d{4}/', $oldYear, $yearMatch)) {
+                $oldYear = $yearMatch[0];
+            }
+            $propertyInputsChanged = $currentRow && (
+                strtoupper(trim((string)($currentRow['account_code'] ?? ''))) !== $accountCode
+                || strtoupper(trim((string)($currentRow['category'] ?? ''))) !== $category
+                || strtoupper(trim((string)($currentRow['fund'] ?? ''))) !== $fund
+                || $oldYear !== $year
+                || trim((string)($currentRow['department_code'] ?? '')) !== $departmentCode
+            );
+
             $employeeId = 0;
             if (strtolower($employeeRaw) === 'add_new_emp') {
                 if ($newEmployeeName === '' || $newEmployeePosition === '') {
@@ -6826,17 +6963,39 @@ if (isset($_POST['update_new_purchase_group'])) {
             }
 
             $currentPropertyNumber = ($propertyNumberOptionalFund || $skipAccountAndProperty) ? '' : $propertyNumber;
+            if ($propertyInputsChanged && !$propertyNumberOptionalFund && !$skipAccountAndProperty) {
+                $currentPropertyNumber = '';
+            }
             if (!$propertyNumberOptionalFund && !$skipAccountAndProperty && $currentPropertyNumber === '') {
-                throw new RuntimeException('Property number is required for each set.');
+                $currentPropertyNumber = $generateAvailablePropertyNumber($category, $accountCode, $existingId, $oldPropNum, [], $itemQuantity);
             }
 
             for ($copyIndex = 1; $copyIndex <= $itemQuantity; $copyIndex++) {
+                $copyExistingId = (int)($existingIds[$copyIndex - 1] ?? 0);
+                $copyCurrentRow = ($copyExistingId > 0 && isset($currentById[$copyExistingId])) ? $currentById[$copyExistingId] : null;
+                $copyOldPropNum = strtoupper(trim((string)($copyCurrentRow['property_number'] ?? '')));
+                $copyNpidLink = $copyExistingId > 0 ? ('NPID:' . $copyExistingId) : '';
                 $copyPropertyNumber = ($propertyNumberOptionalFund || $skipAccountAndProperty) ? '' : $currentPropertyNumber;
                 if (!$propertyNumberOptionalFund && !$skipAccountAndProperty && $copyPropertyNumber !== '') {
-                    $checkId = ($copyIndex === 1 && $existingId > 0) ? $existingId : 0;
-                    $checkOld = ($copyIndex === 1) ? $oldPropNum : '';
-                    if (gso_new_purchase_property_number_in_use($conn, $copyPropertyNumber, $checkId, $checkOld)) {
-                        throw new RuntimeException('Property number already exists: ' . $copyPropertyNumber);
+                    $checkId = $copyExistingId > 0 ? $copyExistingId : 0;
+                    $checkOld = $copyOldPropNum;
+                    $guard = 0;
+                    while (gso_new_purchase_property_number_in_use($conn, $copyPropertyNumber, $checkId, $checkOld)) {
+                        $nextCandidate = strtoupper(trim($nextPropertyNumber($copyPropertyNumber)));
+                        if ($nextCandidate === '' || $nextCandidate === $copyPropertyNumber) {
+                            $copyPropertyNumber = $generateAvailablePropertyNumber($category, $accountCode, $checkId, $checkOld, [$copyPropertyNumber]);
+                            break;
+                        }
+                        $copyPropertyNumber = $nextCandidate;
+                        $checkId = 0;
+                        $checkOld = '';
+                        $guard++;
+                        if ($guard >= 5000) {
+                            throw new RuntimeException('Unable to allocate an available property number.');
+                        }
+                    }
+                    if ($copyIndex === 1) {
+                        $currentPropertyNumber = $copyPropertyNumber;
                     }
                 }
 
@@ -6853,7 +7012,7 @@ if (isset($_POST['update_new_purchase_group'])) {
                 $remarksDb = $remarks !== '' ? $remarks : null;
                 $propertyNumberDb = $copyPropertyNumber !== '' ? $copyPropertyNumber : null;
 
-                if ($copyIndex === 1 && $existingId > 0 && $currentRow) {
+                if ($copyExistingId > 0 && $copyCurrentRow) {
                     $itemStmt->bind_param(
                         'sssssssdsssssssssssi',
                         $unit,
@@ -6875,36 +7034,36 @@ if (isset($_POST['update_new_purchase_group'])) {
                         $remarksDb,
                         $fund,
                         $category,
-                        $existingId
+                        $copyExistingId
                     );
                     if (!$itemStmt->execute()) {
-                        throw new RuntimeException('Unable to update item #' . $existingId . ': ' . $itemStmt->error);
+                        throw new RuntimeException('Unable to update item #' . $copyExistingId . ': ' . $itemStmt->error);
                     }
 
-                    $historyParNumber = $propertyNumberOptionalFund ? $npidLink : ($copyPropertyNumber !== '' ? $copyPropertyNumber : $npidLink);
-                    if ($oldPropNum !== '') {
-                        $historyUpdateWithOldStmt->bind_param('ssiiiss', $historyParNumber, $category, $departmentPk, $employeeId, $employeeId, $oldPropNum, $npidLink);
+                    $historyParNumber = $propertyNumberOptionalFund ? $copyNpidLink : ($copyPropertyNumber !== '' ? $copyPropertyNumber : $copyNpidLink);
+                    if ($copyOldPropNum !== '') {
+                        $historyUpdateWithOldStmt->bind_param('ssiiiss', $historyParNumber, $category, $departmentPk, $employeeId, $employeeId, $copyOldPropNum, $copyNpidLink);
                         if (!$historyUpdateWithOldStmt->execute()) {
-                            throw new RuntimeException('Unable to update history for item #' . $existingId . '.');
+                            throw new RuntimeException('Unable to update history for item #' . $copyExistingId . '.');
                         }
                     } else {
-                        $historyUpdateLinkStmt->bind_param('ssiiis', $historyParNumber, $category, $departmentPk, $employeeId, $employeeId, $npidLink);
+                        $historyUpdateLinkStmt->bind_param('ssiiis', $historyParNumber, $category, $departmentPk, $employeeId, $employeeId, $copyNpidLink);
                         if (!$historyUpdateLinkStmt->execute()) {
-                            throw new RuntimeException('Unable to update history for item #' . $existingId . '.');
+                            throw new RuntimeException('Unable to update history for item #' . $copyExistingId . '.');
                         }
                     }
 
-                    if ($oldPropNum !== $copyPropertyNumber && $oldPropNum !== '') {
+                    if ($copyOldPropNum !== $copyPropertyNumber && $copyOldPropNum !== '') {
                         if ($copyPropertyNumber === '' && $bundleNullStmt) {
-                            $bundleNullStmt->bind_param('ssss', $oldPropNum, $oldPropNum, $oldPropNum, $oldPropNum);
+                            $bundleNullStmt->bind_param('ssss', $copyOldPropNum, $copyOldPropNum, $copyOldPropNum, $copyOldPropNum);
                             $bundleNullStmt->execute();
                         } elseif ($bundleMoveStmt) {
-                            $bundleMoveStmt->bind_param('ssssss', $oldPropNum, $copyPropertyNumber, $oldPropNum, $copyPropertyNumber, $oldPropNum, $oldPropNum);
+                            $bundleMoveStmt->bind_param('ssssss', $copyOldPropNum, $copyPropertyNumber, $copyOldPropNum, $copyPropertyNumber, $copyOldPropNum, $copyOldPropNum);
                             $bundleMoveStmt->execute();
                         }
                     }
 
-                    $keptExistingIds[] = $existingId;
+                    $keptExistingIds[] = $copyExistingId;
                 } else {
                     $createdAt = date('Y-m-d H:i:s');
                     $insertStmt->bind_param(
@@ -7178,9 +7337,14 @@ if (isset($_POST['save_item'])) {
         return false;
     }
     $account_code = mysqli_real_escape_string($conn, $accountCodeNormalized);
+    $purchaseOrderRaw = strtoupper(trim((string)($_POST['po'] ?? '')));
+    if ($purchaseOrderRaw === '') {
+        echo json_encode(['status' => 422, 'message' => 'P.O is required.']);
+        return false;
+    }
     $pr = empty($_POST['pr']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['pr'])) . "'";
     $supplier = empty($_POST['supplier']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['supplier'])) . "'";
-    $po = empty($_POST['po']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['po'])) . "'";
+    $po = "'" . mysqli_real_escape_string($conn, $purchaseOrderRaw) . "'";
     $obr = empty($_POST['obr']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['obr'])) . "'";
     $dept = mysqli_real_escape_string($conn,strtoupper($_POST['dept']));
     $parEmpRaw = isset($_POST['parEmp']) ? $_POST['parEmp'] : '';
@@ -12732,6 +12896,10 @@ if (isset($_POST['generate_new_purchase_edit_property_number'])) {
     $accountCode = strtoupper(trim((string)($_POST['account_code'] ?? '')));
     $dept = trim((string)($_POST['dept'] ?? ''));
     $fund = strtoupper(trim((string)($_POST['fund'] ?? '')));
+    $itemQuantity = max(1, min(5000, (int)($_POST['item_quantity'] ?? 1)));
+    $postedExcludedNumbers = isset($_POST['exclude_property_numbers']) && is_array($_POST['exclude_property_numbers'])
+        ? $_POST['exclude_property_numbers']
+        : [];
 
     if ($category === '' || $year === '' || $accountCode === '' || $dept === '' || $fund === '') {
         echo json_encode(['status' => 422, 'message' => 'Missing required property number details.']);
@@ -12739,8 +12907,23 @@ if (isset($_POST['generate_new_purchase_edit_property_number'])) {
     }
 
     $exclude = $oldPropertyNumber !== '' ? [$oldPropertyNumber] : [];
+    foreach ($postedExcludedNumbers as $excludedNumber) {
+        $excludedNumber = strtoupper(trim((string)$excludedNumber));
+        if ($excludedNumber !== '' && !in_array($excludedNumber, $exclude, true)) {
+            $exclude[] = $excludedNumber;
+        }
+    }
 
     try {
+        $nextPropertyNumber = function ($current) {
+            $parts = explode('-', (string)$current);
+            if (count($parts) < 4) { return (string)$current; }
+            $seqIndex = count($parts) - 2;
+            $seq = $parts[$seqIndex];
+            $parts[$seqIndex] = str_pad((string)(((int)$seq) + 1), strlen($seq), '0', STR_PAD_LEFT);
+            return implode('-', $parts);
+        };
+
         for ($attempt = 0; $attempt < 50; $attempt++) {
             $gen = gso_generate_one_property_number($conn, $category, $year, $accountCode, $dept, $fund, $exclude);
             if (!isset($gen['ok']) || !$gen['ok']) {
@@ -12749,11 +12932,31 @@ if (isset($_POST['generate_new_purchase_edit_property_number'])) {
             }
 
             $candidate = strtoupper(trim((string)($gen['property_number'] ?? '')));
-            if ($candidate !== '' && !gso_new_purchase_property_number_in_use($conn, $candidate, $newPurchaseId, $oldPropertyNumber)) {
+            $candidateBlock = [];
+            $blockNumber = $candidate;
+            $blockAvailable = $candidate !== '';
+            for ($copyIndex = 1; $copyIndex <= $itemQuantity && $blockAvailable; $copyIndex++) {
+                $blockKey = strtoupper(trim((string)$blockNumber));
+                $checkId = $copyIndex === 1 ? $newPurchaseId : 0;
+                $checkOld = $copyIndex === 1 ? $oldPropertyNumber : '';
+                if ($blockKey === '' || in_array($blockKey, $exclude, true) || gso_new_purchase_property_number_in_use($conn, $blockKey, $checkId, $checkOld)) {
+                    $blockAvailable = false;
+                    break;
+                }
+                $candidateBlock[] = $blockKey;
+                $blockNumber = strtoupper(trim((string)$nextPropertyNumber($blockKey)));
+            }
+
+            if ($blockAvailable) {
                 echo json_encode(['status' => 200, 'message' => 'Available property number generated.', 'data' => ['property_number' => $candidate]]);
                 return;
             }
 
+            foreach ($candidateBlock as $blockKey) {
+                if (!in_array($blockKey, $exclude, true)) {
+                    $exclude[] = $blockKey;
+                }
+            }
             if ($candidate !== '') {
                 $exclude[] = $candidate;
             }
@@ -12804,6 +13007,7 @@ if (isset($_POST['update_new_purchase_item'])) {
     if ($propertyNumberOptionalFundForUpdate) {
         $newPropNum = '';
     }
+    $yearForPropertyNumber = '';
 
     $stmtCurrent = $conn->prepare('SELECT property_number, category FROM new_purchase WHERE id = ? LIMIT 1');
     if (!$stmtCurrent) {
@@ -12822,6 +13026,12 @@ if (isset($_POST['update_new_purchase_item'])) {
 
     $oldPropNum = strtoupper(trim((string)($currentRow['property_number'] ?? '')));
     $oldCategory = strtoupper(trim((string)($currentRow['category'] ?? '')));
+    $yearForPropertyNumber = trim((string)($dateAquired !== '' ? $dateAquired : ''));
+    if ($yearForPropertyNumber === '') {
+        $yearForPropertyNumber = date('Y');
+    } elseif (preg_match('/^\d{4}/', $yearForPropertyNumber, $yearMatch)) {
+        $yearForPropertyNumber = $yearMatch[0];
+    }
     if ($propNum !== '' && $oldPropNum !== '' && $propNum !== $oldPropNum) {
         echo json_encode(['status' => 409, 'message' => 'This item was changed by another user. Please refresh and try again.']);
         return;
@@ -12836,8 +13046,46 @@ if (isset($_POST['update_new_purchase_item'])) {
         }
 
         if ($hasDuplicate) {
-            echo json_encode(['status' => 409, 'message' => 'Property number already exists.']);
-            return;
+            $deptForGeneration = '';
+            if ($oldPropNum !== '') {
+                $parts = explode('-', $oldPropNum);
+                $deptForGeneration = trim((string)end($parts));
+            }
+            if ($deptForGeneration === '' && $newPropNum !== '') {
+                $parts = explode('-', $newPropNum);
+                $deptForGeneration = trim((string)end($parts));
+            }
+            if ($deptForGeneration === '' || $accountCode === '' || $category === '' || $fund === '') {
+                echo json_encode(['status' => 409, 'message' => 'Property number already exists.']);
+                return;
+            }
+
+            try {
+                $exclude = array_values(array_filter([$oldPropNum, $newPropNum]));
+                for ($attempt = 0; $attempt < 50; $attempt++) {
+                    $generated = gso_generate_one_property_number($conn, $category, $yearForPropertyNumber, $accountCode, $deptForGeneration, $fund, $exclude);
+                    if (!isset($generated['ok']) || !$generated['ok']) {
+                        break;
+                    }
+                    $candidate = strtoupper(trim((string)($generated['property_number'] ?? '')));
+                    if ($candidate === '') {
+                        break;
+                    }
+                    if (!gso_new_purchase_property_number_in_use($conn, $candidate, $newPurchaseId, $oldPropNum)) {
+                        $newPropNum = $candidate;
+                        break;
+                    }
+                    $exclude[] = $candidate;
+                }
+            } catch (Throwable $e) {
+                echo json_encode(['status' => 500, 'message' => $e->getMessage()]);
+                return;
+            }
+
+            if ($newPropNum === '' || $newPropNum === strtoupper(trim((string)($_POST['new_property_number'] ?? $propNum)))) {
+                echo json_encode(['status' => 409, 'message' => 'Property number already exists.']);
+                return;
+            }
         }
     }
 

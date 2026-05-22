@@ -3567,6 +3567,7 @@ $(function(){
           + '<div class="border rounded p-3 item-set-card" data-item-id="' + npDetailEsc(itemKey) + '">'
           + '  <input type="hidden" name="set_keys[]" value="' + npDetailEsc(itemKey) + '">'
           + '  <input type="hidden" name="existing_item_id[' + npDetailEsc(itemKey) + ']" value="' + itemId + '">'
+          + '  <input type="hidden" name="existing_item_ids[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(($.isArray(item.existing_item_ids) ? item.existing_item_ids : [itemId]).join(',')) + '">'
           + '  <div class="d-flex justify-content-between align-items-center mb-3">'
           + '    <strong>Set ' + npDetailEsc(item.set_no) + '</strong>'
           + '    <button type="button" class="btn btn-sm btn-outline-danger edit-np-remove-set" data-item-id="' + npDetailEsc(itemKey) + '"' + (npDetailState.items.length === 1 ? ' style="visibility:hidden;"' : '') + '><i class="fas fa-trash"></i></button>'
@@ -3700,11 +3701,46 @@ $(function(){
       $preview.val(previewValue);
     }
 
-    function npDetailRefreshProperty(itemId) {
-      var item = npDetailFindItem(itemId);
-      var $card = $('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"]');
-      if (!item || !$card.length) { return; }
+    function npDetailIsUsablePropertyNumber(value) {
+      var text = String(value || '').trim().toUpperCase();
+      return text !== '' && text !== 'GENERATING...';
+    }
 
+    function npDetailCollectReservedPropertyNumbers(exceptItemId) {
+      var seen = {};
+      var reserved = [];
+      var exceptKey = String(exceptItemId || '').trim();
+
+      $('#editNpItemRows .item-set-card').each(function () {
+        var $card = $(this);
+        var itemId = String($card.data('itemId') || '').trim();
+        if (exceptKey && itemId === exceptKey) {
+          return;
+        }
+        if ($card.find('.edit-np-no-account-property').is(':checked')) {
+          return;
+        }
+
+        var firstValue = String($card.find('.edit-np-property-value').val() || '').trim();
+        if (!npDetailIsUsablePropertyNumber(firstValue)) {
+          return;
+        }
+
+        var quantity = npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val());
+        $.each(npDetailPropertyCopies(firstValue, quantity), function (_, propertyNumber) {
+          var candidate = String(propertyNumber || '').trim().toUpperCase();
+          if (!candidate || seen[candidate]) {
+            return;
+          }
+          seen[candidate] = true;
+          reserved.push(candidate);
+        });
+      });
+
+      return reserved;
+    }
+
+    function npDetailRequestPropertyNumber(itemId, item, $card, extraExclude, requestId, onDone) {
       var fund = npDetailNormalizeFund($('#edit_np_fund').val());
       var category = String($card.find('.edit-np-item-category').val() || '').trim().toUpperCase();
       var year = npDetailGetYear($('#edit_np_year').val());
@@ -3721,30 +3757,40 @@ $(function(){
         && dept === originalDept
         && accountCode === originalAccount;
       var savedPropertyNumber = String(item.original_property_number || item.property_number || '').trim();
+      var excludedNumbers = npDetailCollectReservedPropertyNumbers(itemId);
+
+      $.each($.isArray(extraExclude) ? extraExclude : [], function (_, value) {
+        var candidate = String(value || '').trim().toUpperCase();
+        if (candidate && $.inArray(candidate, excludedNumbers) === -1) {
+          excludedNumbers.push(candidate);
+        }
+      });
 
       if (npDetailPropertyOptionalFund()) {
         npDetailSetProperty(itemId, '', 'Property number is not generated for ' + fund + '.', 'info');
+        if (typeof onDone === 'function') { onDone(''); }
         return;
       }
 
       if ($card.find('.edit-np-no-account-property').is(':checked')) {
         npDetailSetProperty(itemId, '', 'No property number.', 'info');
+        if (typeof onDone === 'function') { onDone(''); }
         return;
       }
 
       if (unchanged && savedPropertyNumber) {
         npDetailSetProperty(itemId, savedPropertyNumber, 'Generated from account code.');
+        if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
         return;
       }
 
       if (!fund || !category || !year || !dept || !accountCode) {
         npDetailSetProperty(itemId, savedPropertyNumber, 'Select fund, category, year, department, and account code to generate a property number.', 'error');
+        if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
         return;
       }
 
-      var requestId = ++npDetailPropertyRequestId;
       npDetailSetProperty(itemId, 'Generating...', 'Checking available property number...', 'info');
-
       $.ajax({
         url: '../auth/auth.php',
         type: 'POST',
@@ -3758,27 +3804,71 @@ $(function(){
           year: year,
           account_code: accountCode,
           dept: dept,
-          fund: fund
+          fund: fund,
+          item_quantity: npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val()),
+          exclude_property_numbers: excludedNumbers
         },
         success: function (resp) {
           if (requestId !== npDetailPropertyRequestId) { return; }
           if (resp && Number(resp.status) === 200 && resp.data && resp.data.property_number) {
             npDetailSetProperty(itemId, resp.data.property_number, 'Available property number generated.', 'success');
+            if (typeof onDone === 'function') { onDone(resp.data.property_number); }
             return;
           }
           npDetailSetProperty(itemId, savedPropertyNumber, (resp && resp.message) ? resp.message : 'Unable to generate an available property number.', 'error');
+          if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
         },
         error: function () {
           if (requestId !== npDetailPropertyRequestId) { return; }
           npDetailSetProperty(itemId, savedPropertyNumber, 'Unable to check property number availability.', 'error');
+          if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
         }
       });
     }
 
+    function npDetailRefreshProperty(itemId, extraExclude, onDone, requestIdOverride) {
+      var item = npDetailFindItem(itemId);
+      var $card = $('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"]');
+      if (!item || !$card.length) {
+        if (typeof onDone === 'function') { onDone(''); }
+        return;
+      }
+
+      var requestId = requestIdOverride || (++npDetailPropertyRequestId);
+      npDetailRequestPropertyNumber(itemId, item, $card, extraExclude, requestId, onDone);
+    }
+
     function npDetailRefreshAllProperties() {
-      $.each(npDetailState.items, function (_, item) {
-        npDetailRefreshProperty(item.key);
-      });
+      var cards = $('#editNpItemRows .item-set-card').toArray();
+      var reserved = [];
+      var batchRequestId = ++npDetailPropertyRequestId;
+
+      function reserveCopies(firstValue, $card) {
+        var value = String(firstValue || '').trim();
+        if (!npDetailIsUsablePropertyNumber(value)) { return; }
+        var quantity = npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val());
+        $.each(npDetailPropertyCopies(value, quantity), function (_, propertyNumber) {
+          var candidate = String(propertyNumber || '').trim().toUpperCase();
+          if (candidate && $.inArray(candidate, reserved) === -1) {
+            reserved.push(candidate);
+          }
+        });
+      }
+
+      function processNext(index) {
+        if (batchRequestId !== npDetailPropertyRequestId) { return; }
+        if (index >= cards.length) { return; }
+
+        var $card = $(cards[index]);
+        var itemId = String($card.data('itemId') || '').trim();
+        npDetailRefreshProperty(itemId, reserved, function (firstValue) {
+          if (batchRequestId !== npDetailPropertyRequestId) { return; }
+          reserveCopies(firstValue, $card);
+          processNext(index + 1);
+        }, batchRequestId);
+      }
+
+      processNext(0);
     }
 
     function npDetailValidateUnitValues() {
@@ -3870,6 +3960,7 @@ $(function(){
         var serialNumbers = $.isArray(item.serial_numbers) ? item.serial_numbers : [String(item.serial_number || '')];
         var serialNumbers2 = $.isArray(item.serial_numbers_2) ? item.serial_numbers_2 : [String(item.serial_number_2 || '')];
         var propertyNumbers = $.isArray(item.property_numbers) ? item.property_numbers : [];
+        var existingItemIds = $.isArray(item.existing_item_ids) ? item.existing_item_ids : [parseInt(item.id, 10) || 0];
         return $.extend({}, item, {
           key: key,
           item_quantity: itemQuantity,
@@ -3881,6 +3972,7 @@ $(function(){
           no_account_property: String(item.account_code || '').trim() === '',
           property_number: propertyNumber,
           property_numbers: propertyNumbers,
+          existing_item_ids: existingItemIds,
           property_number_preview: String(item.property_number_preview || propertyNumbers.join(', ') || npDetailPropertyCopies(propertyNumber, itemQuantity).join(', ')),
           par_ics_number: String(item.par_ics_number || ''),
           original_property_number: String(item.property_number || ''),
@@ -7488,12 +7580,23 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     return canUseNoEndUser() && $('#endUserNoneCheckBox').is(':checked');
   }
 
+  function hasPurchaseOrderValue(){
+    return String($('#po').val() || '').trim() !== '';
+  }
+
+  function syncAddItemSubmitButton(){
+    var $btn = $('#addItemSubmitBtn');
+    if (!$btn.length) { return; }
+    if ($btn.data('submitting')) { return; }
+    $btn.prop('disabled', !hasPurchaseOrderValue());
+  }
+
   function hideAddNewEmployeeSection(){
     var $section = $('#add_new_employee');
     if ($section.length) { $section.stop(true, true).slideUp(0); }
     $('#new_emp,#position').prop('required', false).val('');
     $('#additem-name-validation-msg').hide().text('');
-    $('#addItemSubmitBtn').prop('disabled', false);
+    syncAddItemSubmitButton();
   }
 
   function syncNoEndUserState(){
@@ -7877,7 +7980,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $('#new_emp').val('');
     $('#position').val('');
     $('#additem-name-validation-msg').hide().text('');
-    $('#addItemSubmitBtn').prop('disabled', false);
+    syncAddItemSubmitButton();
   }
 
   function toggleAddNewEmpSectionAddItem() {
@@ -7933,7 +8036,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       $('#new_emp').prop('required', false).val('');
       $('#position').prop('required', false).val('');
       $('#additem-name-validation-msg').hide().text('');
-      $('#addItemSubmitBtn').prop('disabled', false);
+      syncAddItemSubmitButton();
       return;
     }
 
@@ -8148,7 +8251,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .on('change.gsoAddItemPageParEmpReset', '#parEmp', function(){
         if(String($(this).val()||'').toLowerCase() !== 'add_new_emp'){
           $('#additem-name-validation-msg').hide().text('');
-          $('#addItemSubmitBtn').prop('disabled', false);
+          syncAddItemSubmitButton();
         }
       });
 
@@ -8253,7 +8356,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         var dept = String($('#dept').val() || '').trim();
         if(dept){ loadEmployeesForDept(dept); }
         updateTotalAmount();
+        syncAddItemSubmitButton();
       });
+
+    $(document)
+      .off('input.gsoAddItemPagePo change.gsoAddItemPagePo', '#po')
+      .on('input.gsoAddItemPagePo change.gsoAddItemPagePo', '#po', syncAddItemSubmitButton);
 
     (function(){
       var $deptSelect = $('#dept');
@@ -8356,6 +8464,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     applyNoAccountPropertyStateToAll();
     updateParEmpStateAddItem();
     toggleAddNewEmpSectionAddItem();
+    syncAddItemSubmitButton();
   }
 
   $(document)
@@ -8408,6 +8517,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     validateUnitValue: validateUnitValue,
     updatePropertyNumber: updatePropertyNumber,
     syncYearAcquiredWithCondition: syncYearAcquiredWithCondition,
+    syncAddItemSubmitButton: syncAddItemSubmitButton,
     getSetLabel: getSetLabel
   };
 })();
@@ -8481,13 +8591,19 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
       Swal.fire({ icon:'warning', title:'Validation error', text:'End user is required for set(s): ' + missingSets.join(', ') + '.' });
       // Restore button state and allow user to fix inputs without reload
       $btn.data('submitting', false);
-      $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      if (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.syncAddItemSubmitButton === 'function') {
+        window.GSO.AddItemPage.syncAddItemSubmitButton();
+      }
       return;
     }
     if(missingNewEmpSets.length){
       Swal.fire({ icon:'warning', title:'Validation error', text:'New employee name and position are required for set(s): ' + missingNewEmpSets.join(', ') + '.' });
       $btn.data('submitting', false);
-      $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      if (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.syncAddItemSubmitButton === 'function') {
+        window.GSO.AddItemPage.syncAddItemSubmitButton();
+      }
       return;
     }
   }
@@ -8535,7 +8651,10 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
         : 'Bundle equipment requires Bundle Set, Category, Asset Class, and Property Number for row(s): ';
       Swal.fire({ icon:'warning', title:'Validation error', text: bundleMessage + bundleMissing.join(', ') + '.' });
       $btn.data('submitting', false);
-      $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      if (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.syncAddItemSubmitButton === 'function') {
+        window.GSO.AddItemPage.syncAddItemSubmitButton();
+      }
       return;
     }
   }
@@ -8636,7 +8755,10 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
         // Re-enable submit button for correction
         var $btn = $('#addItemSubmitBtn');
         $btn.data('submitting', false);
-        $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+        $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+        if (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.syncAddItemSubmitButton === 'function') {
+          window.GSO.AddItemPage.syncAddItemSubmitButton();
+        }
       } else {
         // Unexpected
         Swal.fire({ icon:'info', title:'Notice', text: res.message || 'Unexpected response.' });
@@ -8651,7 +8773,10 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
       var $btn = $('#addItemSubmitBtn');
       // Restore button to avoid hanging if no reload happens
       $btn.data('submitting', false);
-      $btn.prop('disabled', false).html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      if (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.syncAddItemSubmitButton === 'function') {
+        window.GSO.AddItemPage.syncAddItemSubmitButton();
+      }
     }
   });
  });
