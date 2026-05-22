@@ -4052,6 +4052,70 @@ $(function(){
       };
     }
 
+    function npDetailCurrentPrintCategories() {
+      var categories = {};
+      $.each(npDetailState.items || [], function (_, item) {
+        var category = String(item.category || '').trim().toUpperCase();
+        if (category === 'PAR' || category === 'ICS') {
+          categories[category] = true;
+        }
+      });
+      $('#editNpItemRows .edit-np-item-category').each(function () {
+        var category = String($(this).val() || '').trim().toUpperCase();
+        if (category === 'PAR' || category === 'ICS') {
+          categories[category] = true;
+        }
+      });
+      return categories;
+    }
+
+    function npDetailPrintCurrentGroup() {
+      var group = npDetailState.group || {};
+      var referenceNumber = String(group.reference_number || '').trim();
+      var categories = npDetailCurrentPrintCategories();
+
+      if (!referenceNumber) {
+        Swal ? Swal.fire({ icon: 'warning', title: 'No reference number found for printing.' }) : alert('No reference number found for printing.');
+        return;
+      }
+
+      var opened = 0;
+      if (categories.PAR) {
+        window.open('printpar.php?refnumber=' + encodeURIComponent(referenceNumber), '_blank');
+        opened++;
+      }
+      if (categories.ICS) {
+        window.open('inventory_custodian_slip.php?refs=' + encodeURIComponent(referenceNumber), '_blank');
+        opened++;
+      }
+
+      if (!opened) {
+        Swal ? Swal.fire({ icon: 'warning', title: 'Select PAR or ICS before printing.' }) : alert('Select PAR or ICS before printing.');
+      }
+    }
+
+    function npDetailConfirmAction(options, onConfirm) {
+      var config = options || {};
+      if (Swal) {
+        Swal.fire({
+          icon: config.icon || 'question',
+          title: config.title || 'Continue?',
+          text: config.text || '',
+          showCancelButton: true,
+          confirmButtonText: config.confirmButtonText || 'Yes',
+          cancelButtonText: config.cancelButtonText || 'Cancel'
+        }).then(function (result) {
+          if (result && result.isConfirmed && typeof onConfirm === 'function') {
+            onConfirm();
+          }
+        });
+        return;
+      }
+      if (window.confirm(config.text || config.title || 'Continue?') && typeof onConfirm === 'function') {
+        onConfirm();
+      }
+    }
+
     function npDetailAdjustSetCount(nextCount) {
       nextCount = npDetailNormalizeSetCount(nextCount);
       while (npDetailState.items.length < nextCount) {
@@ -4300,6 +4364,16 @@ $(function(){
       });
 
     $(document)
+      .off('click.editNpPrint', '#editNpDetailPrintBtn')
+      .on('click.editNpPrint', '#editNpDetailPrintBtn', function () {
+        npDetailConfirmAction({
+          title: 'Print this document?',
+          text: 'This will open the PAR/ICS print page for the current item group.',
+          confirmButtonText: 'Yes, print'
+        }, npDetailPrintCurrentGroup);
+      });
+
+    $(document)
       .off('submit.editNpDetailForm', '#editNpDetailForm')
       .on('submit.editNpDetailForm', '#editNpDetailForm', function (e) {
         e.preventDefault();
@@ -4348,56 +4422,82 @@ $(function(){
           return;
         }
 
-        var $btn = $('#editNpDetailSaveBtn').prop('disabled', true);
-        var formData = new FormData(this);
-        formData.set('dept_id', deptCode);
+        npDetailConfirmAction({
+          title: 'Update this item?',
+          text: 'Please confirm that the edited item/equipment details are correct.',
+          confirmButtonText: 'Yes, update'
+        }, function () {
+          var $btn = $('#editNpDetailSaveBtn').prop('disabled', true);
+          var formData = new FormData(e.currentTarget);
+          formData.set('dept_id', deptCode);
 
-        if (!useMultipleEndUsers && npDetailState.items.length > 1) {
-          $.each(npDetailState.items, function (_, item) {
-            var itemKey = String(item.key || '');
-            var employeeValue = singleEmployeeValue || String(item.emp_id || '').trim();
+          if (!useMultipleEndUsers && npDetailState.items.length > 1) {
+            $.each(npDetailState.items, function (_, item) {
+              var itemKey = String(item.key || '');
+              var employeeValue = singleEmployeeValue || String(item.emp_id || '').trim();
 
-            formData.set('emp_id[' + itemKey + ']', employeeValue);
+              formData.set('emp_id[' + itemKey + ']', employeeValue);
 
-            if (singleEmployeeValue === 'add_new_emp') {
-              formData.set('emp_new_name[' + itemKey + ']', String($('#edit_np_new_emp').val() || '').trim());
-              formData.set('emp_new_position[' + itemKey + ']', String($('#edit_np_position').val() || '').trim());
-            } else {
-              formData.delete('emp_new_name[' + itemKey + ']');
-              formData.delete('emp_new_position[' + itemKey + ']');
+              if (singleEmployeeValue === 'add_new_emp') {
+                formData.set('emp_new_name[' + itemKey + ']', String($('#edit_np_new_emp').val() || '').trim());
+                formData.set('emp_new_position[' + itemKey + ']', String($('#edit_np_position').val() || '').trim());
+              } else {
+                formData.delete('emp_new_name[' + itemKey + ']');
+                formData.delete('emp_new_position[' + itemKey + ']');
+              }
+            });
+          }
+
+          $.ajax({
+            url: '../auth/auth.php',
+            type: 'POST',
+            cache: false,
+            data: formData,
+            processData: false,
+            contentType: false,
+            dataType: 'json',
+            success: function (resp) {
+              if (!resp || Number(resp.status) !== 200) {
+                var message = (resp && resp.message) ? resp.message : 'Update failed.';
+                Swal ? Swal.fire({ icon: 'error', title: message }) : alert(message);
+                return;
+              }
+              $.ajax({
+                url: '../auth/auth.php',
+                type: 'POST',
+                cache: false,
+                dataType: 'json',
+                data: {
+                  fetch_new_purchase_group: 1,
+                  po: String($('#edit_np_po').val() || $('#edit_np_group_po').val() || '').trim(),
+                  row_id: parseInt($('#edit_np_group_row_id').val(), 10) || 0
+                },
+                success: function (fetchResp) {
+                  if (fetchResp && Number(fetchResp.status) === 200 && fetchResp.data) {
+                    npDetailFillModal(fetchResp.data);
+                  }
+                  if (Swal) {
+                    Swal.fire({ icon: 'success', title: resp.message || 'Updated successfully.' });
+                  } else {
+                    alert(resp.message || 'Updated successfully.');
+                  }
+                },
+                error: function () {
+                  if (Swal) {
+                    Swal.fire({ icon: 'success', title: resp.message || 'Updated successfully.' });
+                  } else {
+                    alert(resp.message || 'Updated successfully.');
+                  }
+                }
+              });
+            },
+            error: function () {
+              Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
+            },
+            complete: function () {
+              $btn.prop('disabled', false);
             }
           });
-        }
-
-        $.ajax({
-          url: '../auth/auth.php',
-          type: 'POST',
-          cache: false,
-          data: formData,
-          processData: false,
-          contentType: false,
-          dataType: 'json',
-          success: function (resp) {
-            if (!resp || Number(resp.status) !== 200) {
-              var message = (resp && resp.message) ? resp.message : 'Update failed.';
-              Swal ? Swal.fire({ icon: 'error', title: message }) : alert(message);
-              return;
-            }
-            $('#editNpDetailModal').modal('hide');
-            if (Swal) {
-              Swal.fire({ icon: 'success', title: resp.message || 'Updated successfully.' })
-                .then(function () { window.location.reload(); });
-            } else {
-              alert(resp.message || 'Updated successfully.');
-              window.location.reload();
-            }
-          },
-          error: function () {
-            Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
-          },
-          complete: function () {
-            $btn.prop('disabled', false);
-          }
         });
       });
 

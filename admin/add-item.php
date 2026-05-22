@@ -828,6 +828,7 @@ if(!isset($_SESSION['alogin'])){
           </div>
           <div class="modal-footer border-0 pt-0">
             <button type="submit" class="btn btn-success" id="editNpDetailSaveBtn"><i class="fas fa-save"></i>&nbsp; Update</button>
+            <button type="button" class="btn btn-outline-primary" id="editNpDetailPrintBtn"><i class="fas fa-print"></i>&nbsp; Print</button>
             <button type="button" class="btn btn-outline-success" data-dismiss="modal">Close</button>
           </div>
         </form>

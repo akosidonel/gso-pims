@@ -6579,6 +6579,7 @@ if (isset($_POST['fetch_new_purchase_group'])) {
                 'jev_number' => (string)($first['jev_number'] ?? ''),
                 'department_code' => (string)($first['department_code'] ?? ''),
                 'department_name' => (string)($first['department_name'] ?? ''),
+                'reference_number' => (string)($first['reference_number'] ?? ''),
             ],
             'items' => $items,
         ],
