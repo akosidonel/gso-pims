@@ -2,10 +2,11 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.0.0) - May 23, 2026
+## v1.0.0 - 2026-05-23
 
 ### Added
 - Added confirmation prompt for update and printing
+- Feat: add recorded changelog tracking
 
 ### Changed
 - First commit
