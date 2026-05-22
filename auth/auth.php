@@ -7068,7 +7068,7 @@ if (isset($_POST['update_new_purchase_group'])) {
                 } else {
                     $createdAt = date('Y-m-d H:i:s');
                     $insertStmt->bind_param(
-                        'ssssssssdsssssssssss',
+                        'sssssssssdssssssssss',
                         $fund,
                         $category,
                         $unit,
