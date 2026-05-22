@@ -473,6 +473,40 @@ function gso_ics_new_batches($pdf, array $rows, array $colWidths, float $availab
     return $batches;
 }
 
+function gso_ics_render_office_row($pdf, string $leftOffice, string $rightOffice): void {
+    $cellWidth = 95;
+    $cellHeight = 12;
+    $lineHeight = 4.4;
+    $padding = 2.5;
+    $minFontSize = 6.5;
+    $baseFontSize = 10;
+    $officeValues = [$leftOffice, $rightOffice];
+    $fontSize = $baseFontSize;
+
+    while ($fontSize > $minFontSize) {
+        $pdf->SetFont('dejavusans', 'B', $fontSize);
+        $fits = true;
+        foreach ($officeValues as $officeValue) {
+            $lineCount = (int)$pdf->getNumLines($officeValue, $cellWidth - ($padding * 2));
+            if ($lineCount > 2) {
+                $fits = false;
+                break;
+            }
+        }
+        if ($fits) {
+            break;
+        }
+        $fontSize -= 0.5;
+    }
+
+    $startX = $pdf->GetX();
+    $startY = $pdf->GetY();
+    $pdf->SetFont('dejavusans', 'B', $fontSize);
+    $pdf->MultiCell($cellWidth, $cellHeight, $leftOffice, 1, 'C', false, 0, $startX, $startY, true, 0, false, true, $cellHeight, 'M', true);
+    $pdf->MultiCell($cellWidth, $cellHeight, $rightOffice, 1, 'C', false, 1, $startX + $cellWidth, $startY, true, 0, false, true, $cellHeight, 'M', true);
+    $pdf->SetFont('dejavusans', '', 10);
+}
+
 function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) {
     if (count($rows) === 0) { return; }
     $pdf->AddPage();
@@ -593,9 +627,11 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
     $pdf->SetFont('dejavusans', '', 9);
     $pdf->Cell(95, 6, 'Signature Over Printed Name', 'LR', 0, 'C');
     $pdf->Cell(95, 6, 'Signature Over Printed Name', 'LR', 1, 'C');
-    $pdf->SetFont('dejavusans', 'B', 10);
-    $pdf->Cell(95, 8, 'OIC-GENERAL SERVICES OFFICE', 'LRB', 0, 'C');
-    $pdf->Cell(95, 8, (string)($firstRow['department_name'] ?? ''), 'LRB', 1, 'C');
+    gso_ics_render_office_row(
+        $pdf,
+        'OIC-GENERAL SERVICES OFFICE',
+        (string)($firstRow['department_name'] ?? '')
+    );
     $pdf->SetFont('dejavusans', '', 10);
     $pdf->Cell(95, 6, 'Position/Office', 'LRT', 0, 'C');
     $pdf->Cell(95, 6, 'Position/Office', 'LRT', 1, 'C');
@@ -726,9 +762,11 @@ function render_ics_page($pdf, $row, $ics_no) {
     $pdf->SetFont('dejavusans', '', 9);
     $pdf->Cell(95, 6, 'Signature Over Printed Name', 'LR', 0, 'C');
     $pdf->Cell(95, 6, 'Signature Over Printed Name', 'LR', 1, 'C');
-    $pdf->SetFont('dejavusans', 'B', 10);
-    $pdf->Cell(95, 8, 'OIC-GENERAL SERVICES OFFICE', 'LRB', 0, 'C');
-    $pdf->Cell(95, 8, (isset($row['department_name']) ? $row['department_name'] : ''), 'LRB', 1, 'C');
+    gso_ics_render_office_row(
+        $pdf,
+        'OIC-GENERAL SERVICES OFFICE',
+        (string)($row['department_name'] ?? '')
+    );
     $pdf->SetFont('dejavusans', '', 10);
     $pdf->Cell(95, 6, 'Position/Office', 'LRT', 0, 'C');
     $pdf->Cell(95, 6, 'Position/Office', 'LRT', 1, 'C');
