@@ -1,5 +1,6 @@
 {
     "scripts": {
+        "changelog:sync": "@php tools/sync-changelog.php",
         "release": "@php tools/release.php",
         "release:dry-run": "@php tools/release.php --dry-run"
     },

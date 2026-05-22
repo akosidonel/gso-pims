@@ -62,6 +62,23 @@ composer release:dry-run
 composer release
 ```
 
+Refresh the tracked changelog snapshot manually:
+
+```bash
+php tools/sync-changelog.php
+composer changelog:sync
+```
+
+## Automatic Sync
+
+This repo includes local git hooks in `.githooks/` for:
+
+- `post-commit`
+- `post-merge`
+- `post-checkout`
+
+When `core.hooksPath` is pointed to `.githooks`, the changelog snapshot updates automatically after commits, pulls/merges, and branch switches in this clone.
+
 ## What The Release Script Does
 
 When you run `php tools/release.php`:

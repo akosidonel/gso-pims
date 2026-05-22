@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+/Applications/XAMPP/xamppfiles/bin/php tools/sync-changelog.php >/dev/null 2>&1 || true
