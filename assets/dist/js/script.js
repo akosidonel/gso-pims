@@ -3579,7 +3579,8 @@ $(function(){
           + '    </div>'
           + '    <div class="form-group col-md-2">'
           + '      <label>Category</label>'
-          + '      <select class="form-control edit-np-item-category" name="category[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" required>'
+          + '      <input type="hidden" name="category[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(String(item.category || '').trim().toUpperCase()) + '">'
+          + '      <select class="form-control edit-np-item-category" data-item-id="' + npDetailEsc(itemKey) + '" required disabled>'
           + '        <option value="">-SELECT-</option>'
           + '        <option value="PAR"' + (String(item.category || '').trim().toUpperCase() === 'PAR' ? ' selected' : '') + '>PAR</option>'
           + '        <option value="ICS"' + (String(item.category || '').trim().toUpperCase() === 'ICS' ? ' selected' : '') + '>ICS</option>'
@@ -6798,13 +6799,16 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
   }
 
   function getBundleAssetOptionsHtml(){
-    var html = String($('#asset').html() || '');
+    var html = String($('#itemAssetOptionsTemplate').html() || '');
     if (!html || !html.trim()) { html = '<option value="">-SELECT-</option>'; }
     return html;
   }
 
   function getBundleCategoryOptionsHtml(){
-    return getItemCategoryOptionsHtml();
+    return ''
+      + '<option value="">-SELECT-</option>'
+      + '<option value="PAR">PAR</option>'
+      + '<option value="ICS">ICS</option>';
   }
 
   function getParentSetCategory(setIndex){

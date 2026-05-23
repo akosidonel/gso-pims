@@ -12,6 +12,7 @@ This file is generated from git history by `php tools/release.php`.
 ### Fixed
 - Fix the changelog and add git hooks
 - Fix the overlapping total of the value item in the footer
+- General bug fixes and maintenance improvements
 
 ## v1.0.0 - 2026-05-23
 
