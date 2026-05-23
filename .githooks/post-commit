@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${PIMS_SKIP_POST_COMMIT:-0}" == "1" ]]; then
+  exit 0
+fi
+
+/Applications/XAMPP/xamppfiles/bin/php tools/sync-version.php >/dev/null 2>&1 || true
 /Applications/XAMPP/xamppfiles/bin/php tools/sync-changelog.php >/dev/null 2>&1 || true
+
+if [[ -z "$(git status --porcelain -- CHANGELOG.md include/version_snapshot.php)" ]]; then
+  exit 0
+fi
+
+git add CHANGELOG.md include/version_snapshot.php
+PIMS_SKIP_POST_COMMIT=1 git commit --amend --no-edit --no-verify >/dev/null 2>&1 || true

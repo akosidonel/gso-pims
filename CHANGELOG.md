@@ -14,6 +14,8 @@ This file is generated from git history by `php tools/release.php`.
 - Fix the overlapping total of the value item in the footer
 - General bug fixes and maintenance improvements
 - Fix malfunction of the bundle equipment
+- Fix the version control
+- Fix: update changelog and release date
 
 ## v1.0.0 - 2026-05-23
 

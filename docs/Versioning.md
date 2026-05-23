@@ -69,6 +69,13 @@ php tools/sync-changelog.php
 composer changelog:sync
 ```
 
+Refresh the committed version snapshot manually:
+
+```bash
+php tools/sync-version.php
+composer version:sync
+```
+
 ## Automatic Sync
 
 This repo includes local git hooks in `.githooks/` for:
@@ -78,6 +85,8 @@ This repo includes local git hooks in `.githooks/` for:
 - `post-checkout`
 
 When `core.hooksPath` is pointed to `.githooks`, the changelog snapshot updates automatically after commits, pulls/merges, and branch switches in this clone.
+
+The `post-commit` hook also refreshes `include/version_snapshot.php` and amends the new commit so pushed code keeps the latest version even in environments that do not include `.git`.
 
 ## What The Release Script Does
 
@@ -92,4 +101,4 @@ When you run `php tools/release.php`:
 
 ## Deployment Note
 
-If a deployment does not include `.git`, set `APP_VERSION` so the app can still show the correct release number.
+If a deployment does not include `.git`, the app will fall back to the committed `include/version_snapshot.php`. Set `APP_VERSION` only when you need to override that value manually.
