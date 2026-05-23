@@ -2,7 +2,7 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.0.1) - May 23, 2026
+## v1.0.1 - 2026-05-23
 
 ### Changed
 - Change the color style of change log to green
@@ -13,6 +13,7 @@ This file is generated from git history by `php tools/release.php`.
 - Fix the changelog and add git hooks
 - Fix the overlapping total of the value item in the footer
 - General bug fixes and maintenance improvements
+- Fix malfunction of the bundle equipment
 
 ## v1.0.0 - 2026-05-23
 
