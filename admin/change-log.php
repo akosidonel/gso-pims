@@ -8,11 +8,8 @@ if (!isset($_SESSION['alogin'])) {
   exit();
 }
 
-$returnVersionArray = true;
-$versionMeta = include('../include/version.php');
-$syncState = pims_release_sync_changelog_snapshot();
-$releaseEntries = pims_release_parse_changelog();
-$pendingRelease = $syncState['pending'];
+$releaseSnapshot = pims_release_sync_changelog_snapshot(false);
+$releaseEntries = $releaseSnapshot['entries'];
 ?>
 <?php include('../include/header.php') ?><!--Header-->
 <?php include('../include/navbar.php') ?><!-- Navbar -->

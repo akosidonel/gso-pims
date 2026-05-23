@@ -337,13 +337,8 @@ function pims_release_prepare_changelog(string $entry): string {
   return $content . PHP_EOL;
 }
 
-function pims_release_parse_changelog(?string $path = null): array {
-  $path = $path ?: pims_release_changelog_path();
-  if (!is_readable($path)) {
-    return [];
-  }
-
-  $lines = file($path, FILE_IGNORE_NEW_LINES);
+function pims_release_parse_changelog_content(string $content): array {
+  $lines = preg_split('/\R/', $content);
   if (!is_array($lines)) {
     return [];
   }
@@ -393,6 +388,20 @@ function pims_release_parse_changelog(?string $path = null): array {
   return $entries;
 }
 
+function pims_release_parse_changelog(?string $path = null): array {
+  $path = $path ?: pims_release_changelog_path();
+  if (!is_readable($path)) {
+    return [];
+  }
+
+  $content = (string) file_get_contents($path);
+  if ($content === '') {
+    return [];
+  }
+
+  return pims_release_parse_changelog_content($content);
+}
+
 function pims_release_pending_summary(): array {
   if (!pims_release_git_available()) {
     return [
@@ -438,10 +447,25 @@ function pims_release_render_unreleased_entry(string $label, string $date, array
   return implode(PHP_EOL, $lines);
 }
 
-function pims_release_sync_changelog_snapshot(): array {
+function pims_release_sync_changelog_snapshot(bool $writeToFile = true): array {
   $path = pims_release_changelog_path();
   $template = rtrim(pims_release_changelog_template());
   $pending = pims_release_pending_summary();
+  $existingContent = is_readable($path) ? (string) file_get_contents($path) : '';
+
+  if (!pims_release_git_available()) {
+    $content = trim($existingContent) !== ''
+      ? $existingContent
+      : $template . PHP_EOL . PHP_EOL . 'No recorded entries yet.' . PHP_EOL;
+
+    return [
+      'pending' => $pending,
+      'sections' => [],
+      'content' => $content,
+      'entries' => pims_release_parse_changelog_content($content),
+    ];
+  }
+
   $pendingSections = pims_release_grouped_sections($pending['commits']);
   $parts = [$template];
 
@@ -477,11 +501,14 @@ function pims_release_sync_changelog_snapshot(): array {
     return trim((string) $part) !== '';
   })) . PHP_EOL;
 
-  @file_put_contents($path, $final);
+  if ($writeToFile) {
+    @file_put_contents($path, $final);
+  }
 
   return [
     'pending' => $pending,
     'sections' => $pendingSections,
     'content' => $final,
+    'entries' => pims_release_parse_changelog_content($final),
   ];
 }
