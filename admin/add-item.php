@@ -249,7 +249,7 @@ if(!isset($_SESSION['alogin'])){
                 <div class="form-row mb-0">
                   <div class="form-group col-md-4 mb-0">
                     <label>P.O</label>
-                    <input type="text" class="form-control" id="po" name="po" placeholder="Enter purchase order" required>
+                    <input type="text" class="form-control" id="po" name="po" placeholder="Enter purchase order">
                   </div>
                   <div class="form-group col-md-4 mb-0">
                     <label>O.B.R</label>

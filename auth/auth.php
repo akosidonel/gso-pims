@@ -7448,13 +7448,17 @@ if (isset($_POST['save_item'])) {
     }
     $account_code = mysqli_real_escape_string($conn, $accountCodeNormalized);
     $purchaseOrderRaw = strtoupper(trim((string)($_POST['po'] ?? '')));
-    if ($purchaseOrderRaw === '') {
+    if ($conditionRaw === 'NEW' && $purchaseOrderRaw === '') {
         echo json_encode(['status' => 422, 'message' => 'P.O is required.']);
+        return false;
+    }
+    if ($conditionRaw === 'NEW' && !preg_match('/^\d{5,8}$/', $purchaseOrderRaw)) {
+        echo json_encode(['status' => 422, 'message' => 'P.O must contain 5 to 8 digits for NEW items.']);
         return false;
     }
     $pr = empty($_POST['pr']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['pr'])) . "'";
     $supplier = empty($_POST['supplier']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['supplier'])) . "'";
-    $po = "'" . mysqli_real_escape_string($conn, $purchaseOrderRaw) . "'";
+    $po = $purchaseOrderRaw === '' ? 'NULL' : "'" . mysqli_real_escape_string($conn, $purchaseOrderRaw) . "'";
     $obr = empty($_POST['obr']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['obr'])) . "'";
     $dept = mysqli_real_escape_string($conn,strtoupper($_POST['dept']));
     $parEmpRaw = isset($_POST['parEmp']) ? $_POST['parEmp'] : '';

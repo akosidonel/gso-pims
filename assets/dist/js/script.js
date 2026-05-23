@@ -7770,11 +7770,37 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     return String($('#po').val() || '').trim() !== '';
   }
 
+  function isValidNewPurchaseOrderValue(){
+    return /^\d{5,8}$/.test(String($('#po').val() || '').trim());
+  }
+
+  function isPurchaseOrderRequired(){
+    return String($('#condition').val() || '').trim().toUpperCase() === 'NEW';
+  }
+
+  function syncPurchaseOrderRequirement(){
+    var required = isPurchaseOrderRequired();
+    var $po = $('#po');
+    $po.prop('required', required);
+    if (required) {
+      $po.attr('inputmode', 'numeric');
+      $po.attr('maxlength', '8');
+      $po.attr('pattern', '^\\d{5,8}$');
+      $po.attr('title', 'Enter 5 to 8 digits.');
+    } else {
+      $po.removeAttr('inputmode');
+      $po.removeAttr('maxlength');
+      $po.removeAttr('pattern');
+      $po.removeAttr('title');
+    }
+  }
+
   function syncAddItemSubmitButton(){
     var $btn = $('#addItemSubmitBtn');
     if (!$btn.length) { return; }
     if ($btn.data('submitting')) { return; }
-    $btn.prop('disabled', !hasPurchaseOrderValue());
+    syncPurchaseOrderRequirement();
+    $btn.prop('disabled', isPurchaseOrderRequired() && !isValidNewPurchaseOrderValue());
   }
 
   function hideAddNewEmployeeSection(){
@@ -8522,10 +8548,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .off('change.gsoAddItemPageCond', '#condition')
       .on('change.gsoAddItemPageCond', '#condition', function(){
         syncYearAcquiredWithCondition();
+        syncPurchaseOrderRequirement();
         syncNoEndUserState();
         renderEndUserRows();
         applyNoAccountPropertyStateToAll();
         scheduleUpdatePropertyNumber();
+        syncAddItemSubmitButton();
       });
 
     $('#addItemModal')
@@ -8543,6 +8571,16 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         if(dept){ loadEmployeesForDept(dept); }
         updateTotalAmount();
         syncAddItemSubmitButton();
+      });
+
+    $(document)
+      .off('input.gsoAddItemPagePoDigits', '#po')
+      .on('input.gsoAddItemPagePoDigits', '#po', function(){
+        if (!isPurchaseOrderRequired()) { return; }
+        var clean = String($(this).val() || '').replace(/\D/g, '').slice(0, 8);
+        if ($(this).val() !== clean) {
+          $(this).val(clean);
+        }
       });
 
     $(document)
