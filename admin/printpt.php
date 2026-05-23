@@ -175,6 +175,24 @@ class PDF extends TCPDF
                 return $chunks;
             }
 
+            function estimateRenderedHtmlLines($pdf, $html, $widthMm) {
+                $html = (string)$html;
+                if (trim($html) === '') { return 0; }
+
+                $parts = preg_split('/<br\s*\/?>/i', $html);
+                $totalLines = 0;
+                foreach ($parts as $part) {
+                    $text = trim(html_entity_decode(strip_tags((string)$part), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+                    if ($text === '') {
+                        $totalLines += 1;
+                        continue;
+                    }
+                    $totalLines += max(1, (int)$pdf->getNumLines($text, $widthMm));
+                }
+
+                return $totalLines;
+            }
+
             function gso_pt_bundle_table_columns(mysqli $conn, string $table): array {
                 static $cache = [];
 
@@ -394,15 +412,34 @@ class PDF extends TCPDF
               $footerTopY = $pdf->getPageHeight() - 125;
               $contentStartY = 116.5;
               $usableHeightMm = max(20, $footerTopY - $contentStartY - 1.0);
+              $amountReserveMm = 10.0;
+              $firstPageUsableHeightMm = max(16, $usableHeightMm - $amountReserveMm);
               $baseMaxLines = max(8, (int)floor($usableHeightMm / $lineHeightMm));
+              $baseFirstPageMaxLines = max(6, (int)floor($firstPageUsableHeightMm / $lineHeightMm));
               $fillRatio = 1.65; // Pack more text before splitting to reduce blank space.
               $maxLinesPerPage = max(14, (int)floor($baseMaxLines * $fillRatio));
-              $maxLinesFirstPage = $maxLinesPerPage;
-              $chunks = splitTextByRenderedLines($pdf, $baseDescription, $descWidthMm, $maxLinesFirstPage, $maxLinesPerPage);
+              $maxLinesFirstPage = max(10, (int)floor($baseFirstPageMaxLines * $fillRatio));
 
               // SN lines are only printed for non-grouped items, so reserve space accordingly.
-              $snLineCount = ($qty > 1) ? 0 : 2;
-              $lastPageLineLimit = max(6, $maxLinesPerPage - $snLineCount);
+              $serialTailHtml = '';
+              if ($qty <= 1) {
+                  if ($serialLine1 !== '') { $serialTailHtml .= '<br>' . htmlspecialchars($serialLine1, ENT_QUOTES, 'UTF-8'); }
+                  if ($serialLine2 !== '') { $serialTailHtml .= '<br>' . htmlspecialchars($serialLine2, ENT_QUOTES, 'UTF-8'); }
+              } elseif ($bundleHtml !== '') {
+                  $serialTailHtml .= '<br>SN 1: N/A<br>SN 2: N/A';
+              }
+              $tailHtml = $serialTailHtml;
+              if ($bundleHtml !== '') {
+                  $tailHtml .= $bundleHtml;
+              }
+              $tailLineCount = estimateRenderedHtmlLines($pdf, $tailHtml, $descWidthMm);
+              $tailReserveLines = max(0, $tailLineCount - 1);
+              $maxLinesFirstPage = max(8, $maxLinesFirstPage - $tailReserveLines);
+              $maxLinesPerPage = max(10, $maxLinesPerPage - $tailReserveLines);
+              $chunks = splitTextByRenderedLines($pdf, $baseDescription, $descWidthMm, $maxLinesFirstPage, $maxLinesPerPage);
+
+              $lastPageBaseLimit = (count($chunks) === 1) ? $maxLinesFirstPage : $maxLinesPerPage;
+              $lastPageLineLimit = max(6, $lastPageBaseLimit);
               if (!empty($chunks)) {
                   $lastChunkIndex = count($chunks) - 1;
                   $lastChunkLines = (int)$pdf->getNumLines($chunks[$lastChunkIndex], $descWidthMm);

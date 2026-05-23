@@ -642,6 +642,30 @@ class PDF extends TCPDF
         );
     }
 
+    protected function drawGrandTotalBlock($grandTotal, $footerContentTopY) {
+        $grandTotalSafe = htmlspecialchars('₱ ' . number_format((float)$grandTotal, 2, '.', ','), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $html = '
+          <table cellpadding="5" cellspacing="0" border="0">
+            <tr align="center">
+              <td width="37"></td>
+              <td width="42"></td>
+              <td width="246"></td>
+              <td width="47"></td>
+              <td width="79" align="right" style="border-top:1px solid #000; padding-top:6px;"><strong>TOTAL</strong></td>
+              <td align="right" style="border-top:1px solid #000; padding-top:6px;"><strong>' . $grandTotalSafe . '</strong></td>
+            </tr>
+          </table>
+        ';
+
+        $totalHeightMm = 10.0;
+        $preferredY = $this->GetY() + 1.5;
+        $maxY = $footerContentTopY - $totalHeightMm - 2.5;
+        $targetY = min($preferredY, $maxY);
+        $targetY = max($targetY, 54.0);
+
+        $this->writeHTMLCell(0, 0, 15, $targetY, $html, 0, 1, false, true, 'L', false);
+    }
+
     public function header(){
         $this->Ln(42);
         $this->SetFont('dejavusans','',10);
@@ -676,8 +700,10 @@ class PDF extends TCPDF
         $descWidthMm   = 123.0;
         $lineHeightMm  = 3.2;
         $footerTopY    = $this->getPageHeight() - 82;
+        $footerContentTopY = $this->getPageHeight() - 102;
         $contentStartY = 54;
-        $usableHeightMm = max(20, $footerTopY - $contentStartY - 1.0);
+        $totalReserveMm = ($grandTotal !== null) ? 12.0 : 0.0;
+        $usableHeightMm = max(20, $footerContentTopY - $contentStartY - 1.0 - $totalReserveMm);
         $baseMaxLines   = max(8, (int)floor($usableHeightMm / $lineHeightMm));
         $visibleRowCount = max(1, count($rows));
         $maxLinesPerPage = max(6, (int)floor($baseMaxLines / $visibleRowCount) - 1);
@@ -771,22 +797,11 @@ class PDF extends TCPDF
             $idx++;
         }
 
-        if ($grandTotal !== null && count($continuations) === 0) {
-          $grandTotalSafe = htmlspecialchars('₱ ' . number_format((float)$grandTotal, 2, '.', ','), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-          $html .= '
-            <tr align="center">
-              <td width="37"></td>
-              <td width="42"></td>
-              <td width="246"></td>
-              <td width="47"></td>
-              <td width="79" align="right" style="border-top:1px solid #000; padding-top:6px;"><strong>TOTAL</strong></td>
-              <td align="right" style="border-top:1px solid #000; padding-top:6px;"><strong>' . $grandTotalSafe . '</strong></td>
-            </tr>
-          ';
-        }
-
         $html .= '</table>';
         $this->writeHTML($html,true,false,false,false,'');
+        if ($grandTotal !== null && count($continuations) === 0) {
+          $this->drawGrandTotalBlock($grandTotal, $footerContentTopY);
+        }
 
         return $continuations;
     }
