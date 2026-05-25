@@ -24,58 +24,77 @@ class PDF extends TCPDF
 {
     public $or = '';
     public $date = '';
+    public $showDisclaimer = false;
+    public $verifiedByName = 'ARLENE M. POLANCOS';
+    public $verifiedByTitle = 'Supply and Property Division';
     public $signatoryName = 'ATTY. ARVIN Q. TAPIA';
     public $signatoryTitle = 'OIC-General Services Office';
 
     public function Header() {
-        $this->Ln(33);
         $this->SetFont('dejavusans','',11);
         $this->setJPEGQuality(75);
 
-        $logoSize = 26;
-        $logoY = 5;
-        $logoGap = 4;
-        $pageWidth = $this->getPageWidth();
+        $assetDir = __DIR__ . '/';
+        $leftLogo = $assetDir . 'logo.jpg';
+        $rightLogo = $assetDir . 'bp.png';
+        $headerTextX = 50;
+        $headerTextWidth = 110;
 
-        $logos = [];
-        if (file_exists('mega.png')) { $logos[] = ['file' => 'mega.png', 'type' => 'PNG']; }
-        if (file_exists('logo.jpg')) { $logos[] = ['file' => 'logo.jpg', 'type' => 'JPG']; }
-        if (file_exists('bp.png'))   { $logos[] = ['file' => 'bp.png',   'type' => 'PNG']; }
-
-        $count = count($logos);
-        if ($count > 0) {
-            $groupWidth = ($logoSize * $count) + ($logoGap * ($count - 1));
-            $x = ($pageWidth - $groupWidth) / 2;
-            foreach ($logos as $logo) {
-                $this->Image($logo['file'], $x, $logoY, $logoSize, $logoSize, $logo['type'], '', '', true, 300, '', false, false, 0, false, false, false);
-                $x += $logoSize + $logoGap;
-            }
+        if (file_exists($leftLogo)) {
+            $this->Image($leftLogo, 24, 8, 22, 22, 'JPG', '', '', true, 300, '', false, false, 0, false, false, false);
         }
-        $this->SetX(72);
-        $this->SetFont('times','B',18);
-        $this->Cell(130,5,"Republic of the Philippines",0,1);
-        $this->SetX(90);
-        $this->SetFont('times','B',14);
-        $this->Cell(130,5,"City of Parañaque",0,1);
-        $this->SetX(97);
-        $this->SetFont('times','',12);
-        $this->Cell(130,5,"Metro Manila",0,1);
-        $this->Ln(6);
-        $this->SetX(23);
-        $this->SetFont('times','',13);
-        $this->Cell(10,5,"TANGGAPAN NG OPISYAL NG SERBISYONG PANGKALAHATAN NG LUNGSOD",0,1);
-        $this->SetX(80);
-        $this->SetFont('times','B',12);
-        $this->Cell(10,5,"(GENERAL SERVICES OFFICE)",0,1);
+
+        if (file_exists($rightLogo)) {
+            $this->Image($rightLogo, 163, 9, 26, 20, 'PNG', '', '', true, 300, '', false, false, 0, false, false, false);
+        }
+
+        $this->SetY(11);
+        $this->SetX($headerTextX);
+        $this->SetFont('times', 'B', 23);
+        $this->Cell($headerTextWidth, 8, 'GENERAL SERVICES OFFICE', 0, 1, 'C');
+
+        $this->SetX($headerTextX);
+        $this->SetFont('times', '', 9);
+        $this->Cell($headerTextWidth, 5, 'TANGGAPAN NG OPISYAL NG SERBISYOPANG KALAHATAN NG LUNGSOD', 0, 1, 'C');
+
+        $this->Ln(15);
+        $this->SetFont('helvetica', 'B', 14);
+        $this->Cell(0, 7, 'PROPERTY CLEARANCE CERTIFICATE', 0, 1, 'C');
+
+        $this->SetFont('helvetica', '', 10);
+        $this->Cell(0, 5, '(No Property Accountability)', 0, 1, 'C');
     }
 
     public function Footer() {
-        $this->SetY(-110);
-        $this->SetFont('dejavusans','B',13);
-        $this->Cell(0,5,$this->signatoryName,0,1,'C');
-        $this->SetFont('dejavusans','',11);
-        $this->Cell(0,5,$this->signatoryTitle,0,1,'C');
-        $this->SetY(-50);
+        $leftX = 18;
+        $columnWidth = 82;
+        $rightX = 110;
+
+        $this->SetY(-128);
+        $this->SetFont('helvetica', '', 11);
+        $this->SetX($leftX);
+        $this->Cell($columnWidth, 6, 'Verified by:', 0, 0, 'L');
+        $this->SetX($rightX);
+        $this->Cell($columnWidth, 6, 'Approved by:', 0, 1, 'L');
+
+        $lineY = $this->GetY() + 16;
+        $this->Line($leftX, $lineY, $leftX + $columnWidth, $lineY);
+        $this->Line($rightX, $lineY, $rightX + $columnWidth, $lineY);
+
+        $this->SetY($lineY + 6);
+        $this->SetX($leftX);
+        $this->SetFont('helvetica', 'B', 13);
+        $this->Cell($columnWidth, 6, $this->verifiedByName, 0, 0, 'C');
+        $this->SetX($rightX);
+        $this->Cell($columnWidth, 6, $this->signatoryName, 0, 1, 'C');
+
+        $this->SetX($leftX);
+        $this->SetFont('helvetica', '', 11);
+        $this->Cell($columnWidth, 6, $this->verifiedByTitle, 0, 0, 'C');
+        $this->SetX($rightX);
+        $this->Cell($columnWidth, 6, $this->signatoryTitle, 0, 1, 'C');
+
+        $this->SetY(-68);
         $this->SetX(23);
         $this->SetFont('dejavusans','',12);
         $this->Cell(95,5,"O.R. No.: ".$this->or,0,1);
@@ -85,6 +104,34 @@ class PDF extends TCPDF
         $this->Cell(95,5,"Amount : Php 100.00",0,1);
         $this->SetX(23);      
         $this->Cell(95,5,"DRY SEAL",0,1);
+
+        if ($this->showDisclaimer) {
+            $this->SetY(-34);
+            $this->SetX(23);
+            $this->SetFont('helvetica', '', 7.5);
+            $this->setCellPaddings(3, 2, 3, 2);
+            $disclaimer = '<div><b>DISCLAIMER:</b> This clearance is issued based on the current records of the General Services Office (GSO). Any city-owned equipment, property, or assets found to be in the possession of the applicant which were not reflected or accounted for at the time of verification shall render this clearance null and void. The issuance of this document does not absolve the applicant from accountability or liability for any unrecorded properties discovered hereafter.</div>';
+            $this->writeHTMLCell(164, 0, '', '', $disclaimer, 1, 1, false, true, 'J', true);
+            $this->setCellPaddings(0, 0, 0, 0);
+        }
+
+        $megaLogo = __DIR__ . '/mega.png';
+        if (file_exists($megaLogo)) {
+            $this->Image($megaLogo, 88, 281, 34, 12, 'PNG', '', '', true, 300, '', false, false, 0, false, false, false);
+        }
+    }
+}
+
+if (!function_exists('pdf_uppercase')) {
+    function pdf_uppercase($value) {
+        $text = trim((string)$value);
+        if ($text === '') {
+            return '';
+        }
+
+        return function_exists('mb_strtoupper')
+            ? mb_strtoupper($text, 'UTF-8')
+            : strtoupper($text);
     }
 }
 
@@ -110,6 +157,7 @@ if ($controlParam !== null) {
             $forcedPos = forced_council_secretary_position_from_position($positionRaw);
             if ($forcedPos !== null) {
                 $positionRaw = $forcedPos;
+                $appointmentPhraseOverride = 'elected as';
                 if ($forcedPos === 'CITY COUNCILOR') {
                     $deptRaw = 'City of Parañaque';
                 } else {
@@ -121,22 +169,29 @@ if ($controlParam !== null) {
         // Sanitize output
         $controlNum    = htmlspecialchars($row['control_number']);
         $or            = htmlspecialchars($row['or_number']);
-        $employee      = htmlspecialchars($employeeRaw);
-        $position      = htmlspecialchars($positionRaw);
-        $dept          = htmlspecialchars($deptRaw);
-        $address       = htmlspecialchars($row['address']);
-        $city          = htmlspecialchars($row['city']);
-        $clearanceType = htmlspecialchars($row['clearance_name']);
+        $employee      = htmlspecialchars(pdf_uppercase($employeeRaw));
+        $position      = htmlspecialchars(pdf_uppercase($positionRaw));
+        $dept          = htmlspecialchars(pdf_uppercase($deptRaw));
+        $clearanceTypeText = pdf_uppercase($row['clearance_name']);
+        $clearanceType = htmlspecialchars($clearanceTypeText);
         $created       = htmlspecialchars($row['created_at']);
         $dateCreated   = date('F j, Y', strtotime($created));
         $date          = date('jS \of F Y');
+        $appointmentPhrase = htmlspecialchars($appointmentPhraseOverride ?: 'holding the position of');
 
-        $appointmentPhrase = $appointmentPhraseOverride
-            ?? (should_use_elected_as($row['emp_name'] ?? '', $row['position'] ?? '') ? 'elected as' : 'appointed as');
+        $noAccountabilityTypes = array(
+            'TERMINAL LEAVE',
+            'RETIREMENT',
+            'RESIGNATION',
+            'TRANSFER OF OFFICE FROM LOCAL TO NATIONAL',
+            'EXHAUSTION OF LEAVE CREDITS'
+        );
+        $usesNoAccountabilityWording = in_array($clearanceTypeText, $noAccountabilityTypes, true);
 
         $pdf = new PDF('P','mm', 'A4', true, 'UTF-8', false);
         $pdf->SetMargins(20, 20, 20);
         $pdf->AddPage();
+        $pdf->showDisclaimer = $usesNoAccountabilityWording;
 
         if (is_gso_officer_in_charge_applicant($row['department_name'] ?? '', $row['position'] ?? '')) {
             $cityAdmin = fetch_city_administrator_signatory($conn);
@@ -149,38 +204,48 @@ if ($controlParam !== null) {
         // Watermark image
         $pdf->SetAlpha(0.10);
         if (file_exists('gso.png')) {
-            $pdf->Image('gso.png', 0, 70, 210, 190, '', '', 'C', true, 72);
+            $pdf->Image('gso.png', 0, 58, 210, 190, '', '', 'C', true, 72);
         }
         $pdf->SetAlpha(1);
 
-        $pdf->Ln(65);
+        $pdf->SetY(64);
         $pdf->SetFont('dejavusans','',13);
 
-        $html = <<<EOD
-        <h4 style="text-align:right; margin-top: 20px; margin-bottom: 20px;">Control No. : $controlNum </h4>
-        <h2 style="text-align:center; margin-top: 20px; margin-bottom: 20px;">PROPERTY CLEARANCE</h2>
-        <h4 style="margin-left: 150px; margin-bottom: 15px;">TO WHOM IT MAY CONCERN:</h4>
-        <p style="text-align:justify; text-indent:50px; margin-left: 50px; margin-right: 50px; margin-bottom: 15px;">
-            This is to Certify that Mr./Ms. <b>$employee</b>, a resident of <b>$address</b>, <b>$city</b>, $appointmentPhrase <b>$position</b>
-            of <b>$dept</b>, has no property accountability in the office as of this date.
+        if ($usesNoAccountabilityWording) {
+            $bodyHtml = <<<EOD
+        <p style="text-align:justify; text-indent:38px; margin-left: 32px; margin-right: 32px; line-height: 1.55; margin-bottom: 8px;">
+            This is to certify that <b>$employee</b>, $appointmentPhrase <b>$position</b> in the <b>$dept</b>,
+            has been verified by this Office with <b>NO EXISTING PROPERTY ACCOUNTABILITY</b> under any Property Acknowledgement
+            Receipt (PAR) or Inventory Custodian Slip (ICS).
         </p>
-        <p style="text-align:justify; text-indent:50px; margin-left: 50px; margin-right: 50px; margin-bottom: 15px;">
-            Issued this <b>$date</b> upon the request of the above to be used for <b>$clearanceType</b> and for whatever legal purpose and intent this may serve.
+        <p style="text-align:justify; text-indent:38px; margin-left: 32px; margin-right: 32px; line-height: 1.55; margin-bottom: 8px;">
+            This clearance is issued specifically for <b>$clearanceType</b> purposes and for whatever legal purpose it may serve.
+        </p>
+EOD;
+        } else {
+            $bodyHtml = <<<EOD
+        <p style="text-align:justify; text-indent:38px; margin-left: 32px; margin-right: 32px; line-height: 1.55; margin-bottom: 8px;">
+            This is to certify that <b>$employee</b>, $appointmentPhrase <b>$position</b> in the <b>$dept</b>,
+            is authorized by this Office during his/her approved leave.
+        </p>
+        <p style="text-align:justify; text-indent:38px; margin-left: 32px; margin-right: 32px; line-height: 1.55; margin-bottom: 8px;">
+            This certification is issued specifically for <b>$clearanceType</b> purposes. All properties issued to the applicant
+            under a Property Acknowledgement Receipt (PAR) or Inventory Custodian Slip (ICS) shall remain under their accountability
+            for the duration of the leave and must be accounted for upon resumption of duty.
+        </p>
+EOD;
+        }
+
+        $html = <<<EOD
+        <h4 style="text-align:right; margin-top: 0; margin-bottom: 12px;">Control No. : $controlNum </h4>
+        <h4 style="margin-left: 32px; margin-top: 0; margin-bottom: 12px;">TO WHOM IT MAY CONCERN:</h4>
+        $bodyHtml
+        <p style="text-align:left; text-indent:38px; margin-left: 32px; margin-right: 32px; line-height: 1.55; margin-bottom: 8px;">
+            Issued this <b>$date</b> at Parañaque City.
         </p>
 EOD;
         $pdf->writeHTML($html, true, false, false, false, '');
 
-        // QR code style
-        $style = array(
-            'border' => 2,
-            'vpadding' => 'auto',
-            'hpadding' => 'auto',
-            'fgcolor' => array(0, 0, 0),
-            'bgcolor' => false,
-            'module_width' => 1.5,
-            'module_height' => 1.5
-        );
-        $pdf->write2DBarcode($controlNum, 'QRCODE,L', 150, 228, 60, 60, $style, 'N');
         $pdf->or = $or;
         $pdf->date = $dateCreated;
         $pdf->Output();

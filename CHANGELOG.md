@@ -2,11 +2,11 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.0.1) - May 23, 2026
+## Unreleased (planned v1.0.1) - May 25, 2026
 
 ### Changed
 - Change the color style of change log to green
-- Updated internal project files (2 times)
+- Updated internal project files (3 times)
 - Specific set of items can now be deleted in edit item or equipment modal
 
 ### Fixed

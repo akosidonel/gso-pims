@@ -127,6 +127,7 @@ gso_repair_blank_new_purchase_history_links($conn, $refnumber, 'PAR');
 // NEW purchases (preferred): new_purchase_history + new_purchase
 $sqlNew = "
   SELECT
+    'NEW' AS item_condition,
     $newPurchaseUnitSelect,
     np.unit_value,
     np.item,
@@ -193,6 +194,7 @@ if ($stmt = $conn->prepare($sqlNew)) {
 // General Fund
 $sqlGf = "
   SELECT
+    '' AS item_condition,
     p.unit,
     p.unit_value,
     p.item,
@@ -247,6 +249,7 @@ if (count($items) === 0 && ($stmt = $conn->prepare($sqlGf))) {
 // SEF (optional; in case PAR items are stored under SEF)
 $sqlSef = "
   SELECT
+    '' AS item_condition,
     p.unit,
     p.unit_value,
     p.item,
@@ -535,6 +538,7 @@ foreach ($items as $r) {
       'model' => (string)($r['model'] ?? ''),
       'description' => (string)($r['description'] ?? ''),
       'date_aquired' => $date,
+      'item_condition' => (string)($r['item_condition'] ?? ''),
       'serials' => [],
       'emp_name' => (string)($r['emp_name'] ?? ''),
       'department_name' => (string)($r['department_name'] ?? ''),
@@ -739,6 +743,8 @@ class PDF extends TCPDF
             if (isset($r['serial_block_html'])) {
                 $serialBlockHtml = (string)$r['serial_block_html'];
             } else {
+                $itemCondition = strtoupper(trim((string)($r['item_condition'] ?? '')));
+                $hideSerialLabel = ($itemCondition === 'NEW');
                 // Serial numbers must appear at the bottom of the full description.
                 // If description overflows (descRest not empty), serials will be printed on the continuation page.
                 $serials = (isset($r['serials']) && is_array($r['serials'])) ? $r['serials'] : [];
@@ -748,9 +754,9 @@ class PDF extends TCPDF
                 $bundlesByProp = (isset($r['bundles_by_property']) && is_array($r['bundles_by_property'])) ? $r['bundles_by_property'] : [];
                 $bundleHtml = !empty($bundlesByProp) ? gso_bundle_block_html($bundlesByProp) : '';
 
-                if ($serialsSafe !== '') {
+                if (!$hideSerialLabel && $serialsSafe !== '') {
                   $serialBlockHtml = '<br><br>Serial No.: ' . $serialsSafe;
-                } elseif ($bundleHtml !== '') {
+                } elseif (!$hideSerialLabel && $bundleHtml !== '') {
                   // Keep ordering requirement: show bundle after a (possibly N/A) serial label
                   $serialBlockHtml = '<br><br>Serial No.: N/A';
                 } else {
@@ -767,6 +773,7 @@ class PDF extends TCPDF
                 'unit' => (string)($r['unit'] ?? ''),
                     'unit_value' => $uv,
                     'date_aquired' => $rawDate,
+                    'item_condition' => (string)($r['item_condition'] ?? ''),
                     'description_rest' => $descRest,
                     'serial_block_html' => $serialBlockHtml,
                 ];
@@ -921,6 +928,7 @@ foreach ($pageOrder as $pk) {
           'unit' => (string)($c['unit'] ?? ''),
           'unit_value' => (float)($c['unit_value'] ?? 0),
           'model' => '',
+          'item_condition' => (string)($c['item_condition'] ?? ''),
           // continuation-only: print the remainder, then serial numbers at the bottom (as HTML)
           'description' => (string)($c['description_rest'] ?? ''),
           'serial_block_html' => (string)($c['serial_block_html'] ?? ''),

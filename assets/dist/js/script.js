@@ -2938,6 +2938,14 @@ $(function(){
   // ============================================================
   // New Purchase: summary table (one row per P.O. No.)
   // ============================================================
+  function gsoNpSourceContext() {
+    return String($('#np_source_context').val() || 'new_purchase').trim().toLowerCase();
+  }
+
+  function gsoNpFundKey() {
+    return String($('#np_fund_key').val() || '').trim().toLowerCase();
+  }
+
   if ($('#addItemNewPurchaseTable').length && $.fn.dataTable && !$.fn.dataTable.isDataTable('#addItemNewPurchaseTable')) {
     var addItemNpTable = $('#addItemNewPurchaseTable').DataTable({
       responsive: true,
@@ -2957,6 +2965,75 @@ $(function(){
           className: 'btn btn-success btn-sm',
           action: function (e, dt, node) {
             try { e.preventDefault(); } catch (ex) {}
+
+            var sourceContext = gsoNpSourceContext();
+            if (sourceContext === 'fund_inventory') {
+              var selectedFundIds = [];
+              $(addItemNpTable.rows({ search: 'applied' }).nodes()).find('input.add-item-np-checkbox:checked').each(function () {
+                var idsCsv = String($(this).data('itemIds') || '').trim();
+                if (!idsCsv) { return; }
+                idsCsv.split(',').forEach(function (idValue) {
+                  var id = parseInt(String(idValue || '').trim(), 10) || 0;
+                  if (id > 0 && $.inArray(id, selectedFundIds) === -1) {
+                    selectedFundIds.push(id);
+                  }
+                });
+              });
+
+              if (!selectedFundIds.length) {
+                Swal && Swal.fire({ icon: 'warning', title: 'Please select at least one P.O. row.' });
+                return;
+              }
+
+              function doFundTransfer() {
+                var $btn = $(node);
+                $btn.prop('disabled', true).addClass('disabled');
+                $.ajax({
+                  url: '../auth/auth.php',
+                  type: 'POST',
+                  cache: false,
+                  dataType: 'json',
+                  data: {
+                    bulkTransferFundInventory: 1,
+                    fund_bulk: gsoNpFundKey(),
+                    selected_fund_ids: JSON.stringify(selectedFundIds)
+                  },
+                  success: function (resp) {
+                    if (!resp || Number(resp.status) !== 200) {
+                      var message = (resp && resp.message) ? resp.message : 'Transfer failed.';
+                      Swal ? Swal.fire({ icon: 'error', title: message }) : alert(message);
+                      return;
+                    }
+                    if (Swal) {
+                      Swal.fire({ icon: 'success', title: resp.message || 'Transferred successfully.' }).then(function () { window.location.reload(); });
+                    } else {
+                      alert(resp.message || 'Transferred successfully.');
+                      window.location.reload();
+                    }
+                  },
+                  error: function () {
+                    Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
+                  },
+                  complete: function () {
+                    $btn.prop('disabled', false).removeClass('disabled');
+                  }
+                });
+              }
+
+              if (Swal) {
+                Swal.fire({
+                  icon: 'question',
+                  title: 'Transfer selected P.O. rows to records?',
+                  text: 'This will move their items into records.',
+                  showCancelButton: true,
+                  confirmButtonText: 'Yes, transfer',
+                  cancelButtonText: 'Cancel'
+                }).then(function (r) { if (r && r.isConfirmed) { doFundTransfer(); } });
+              } else if (confirm('Transfer selected P.O. rows to records?')) {
+                doFundTransfer();
+              }
+              return;
+            }
 
             var token = String($('#np_transfer_token').val() || '').trim();
             if (!token) {
@@ -3072,11 +3149,13 @@ $(function(){
     var npDetailState = {
       group: null,
       items: [],
+      bundles: [],
       employeeOptionsHtml: '<option value="">-SELECT-</option><option value="add_new_emp"> + ADD NEW EMPLOYEE </option>',
       useMultipleEndUsers: false
     };
     var npDetailPropertyRequestId = 0;
     var npDetailTempIndex = 0;
+    var npDetailBundleParIcsCache = {};
 
     function npDetailEsc(value) {
       return $('<div>').text(value === null || value === undefined ? '' : String(value)).html();
@@ -3091,6 +3170,14 @@ $(function(){
     function npDetailPropertyOptionalFund() {
       var fund = npDetailNormalizeFund($('#edit_np_fund').val());
       return fund === 'TRUST FUND' || fund === 'DONATION';
+    }
+
+    function npDetailSourceContext() {
+      return gsoNpSourceContext();
+    }
+
+    function npDetailFundInventoryKey() {
+      return gsoNpFundKey();
     }
 
     function npDetailGetYear(value) {
@@ -3180,6 +3267,391 @@ $(function(){
 
       html += '    </tbody></table></div>';
       return html;
+    }
+
+    function npDetailFindParentItemByPropertyNumber(propertyNumber) {
+      var target = String(propertyNumber || '').trim().toUpperCase();
+      if (!target) { return null; }
+      for (var i = 0; i < npDetailState.items.length; i++) {
+        var item = npDetailState.items[i];
+        var propertyNumbers = $.isArray(item.property_numbers) ? item.property_numbers : [];
+        for (var j = 0; j < propertyNumbers.length; j++) {
+          if (String(propertyNumbers[j] || '').trim().toUpperCase() === target) {
+            return item;
+          }
+        }
+        if (String(item.property_number || '').trim().toUpperCase() === target) {
+          return item;
+        }
+      }
+      return null;
+    }
+
+    function npDetailBundleSetCount() {
+      return npDetailState.items.length || 0;
+    }
+
+    function npDetailBundleSetOptionsHtml(selectedValue) {
+      var selected = String(selectedValue || '').trim();
+      var html = '<option value="">-SELECT-</option>';
+      $.each(npDetailState.items, function (_, item) {
+        var setValue = String(item.set_no || '');
+        var isSelected = setValue === selected ? ' selected' : '';
+        html += '<option value="' + npDetailEsc(setValue) + '"' + isSelected + '>Set ' + npDetailEsc(setValue) + '</option>';
+      });
+      return html;
+    }
+
+    function npDetailFindParentItemBySetIndex(setIndex) {
+      var target = parseInt(setIndex, 10) || 0;
+      if (target < 1) { return null; }
+      for (var i = 0; i < npDetailState.items.length; i++) {
+        if ((parseInt(npDetailState.items[i].set_no, 10) || 0) === target) {
+          return npDetailState.items[i];
+        }
+      }
+      return null;
+    }
+
+    function npDetailBundlePropertyNumbers(bundle) {
+      var parentItem = npDetailFindParentItemBySetIndex(bundle.set_index);
+      if (!parentItem) { return []; }
+      var propertyNumbers = $.isArray(parentItem.property_numbers) ? parentItem.property_numbers : [];
+      if (propertyNumbers.length) {
+        return propertyNumbers;
+      }
+      return npDetailPropertyCopies(parentItem.property_number || '', parentItem.item_quantity || 1);
+    }
+
+    function npDetailBundlePropertyPreviewText(bundle) {
+      return npDetailBundlePropertyNumbers(bundle).join(', ');
+    }
+
+    function npDetailNormalizeBundle(bundle) {
+      var data = $.extend({
+        key: 'bundle_' + (++npDetailTempIndex),
+        id: 0,
+        set_index: '',
+        category: '',
+        unit: '',
+        item: '',
+        model: '',
+        description: '',
+        par_ics_number: '',
+        add_serial: false,
+        no_brand: false,
+        serial_numbers: [],
+        serial_numbers_2: []
+      }, bundle || {});
+      var parentItem = npDetailFindParentItemByPropertyNumber(data.bundle_with);
+      if (!data.set_index && parentItem) {
+        data.set_index = String(parentItem.set_no || '');
+      }
+      if (!data.set_index && npDetailBundleSetCount() === 1) {
+        data.set_index = '1';
+      }
+      data.category = String(data.category || '').trim().toUpperCase();
+      data.unit = String(data.unit || '').trim().toUpperCase();
+      data.item = String(data.item || '').trim().toUpperCase();
+      data.model = String(data.model || '');
+      data.description = String(data.description || '');
+      data.par_ics_number = String(data.par_ics_number || '').trim().toUpperCase();
+      data.no_brand = String(data.model || '').trim().toUpperCase() === 'NO BRAND/MODEL' || !!data.no_brand;
+      data.serial_numbers = $.isArray(data.serial_numbers) ? data.serial_numbers : [];
+      data.serial_numbers_2 = $.isArray(data.serial_numbers_2) ? data.serial_numbers_2 : [];
+      data.add_serial = !!data.add_serial;
+      if (!data.add_serial) {
+        $.each(data.serial_numbers, function (_, value) {
+          if (String(value || '').trim() !== '') { data.add_serial = true; return false; }
+        });
+      }
+      if (!data.add_serial) {
+        $.each(data.serial_numbers_2, function (_, value) {
+          if (String(value || '').trim() !== '') { data.add_serial = true; return false; }
+        });
+      }
+      return data;
+    }
+
+    function npDetailSnapshotBundleRows() {
+      var bundles = [];
+      $('#editNpBundleRows .edit-np-bundle-card').each(function () {
+        var $card = $(this);
+        var serials1 = [];
+        var serials2 = [];
+        $card.find('.edit-np-bundle-serial-primary').each(function () {
+          serials1.push(String($(this).val() || ''));
+        });
+        $card.find('.edit-np-bundle-serial-secondary').each(function () {
+          serials2.push(String($(this).val() || ''));
+        });
+        bundles.push(npDetailNormalizeBundle({
+          key: String($card.data('bundleKey') || ''),
+          id: parseInt($card.data('bundleId'), 10) || 0,
+          set_index: String($card.find('.edit-np-bundle-set').val() || '').trim(),
+          category: String($card.find('.edit-np-bundle-category').val() || '').trim(),
+          unit: String($card.find('.edit-np-bundle-unit').val() || '').trim(),
+          item: String($card.find('.edit-np-bundle-asset').val() || '').trim(),
+          model: String($card.find('.edit-np-bundle-brand').val() || ''),
+          description: String($card.find('.edit-np-bundle-description').val() || ''),
+          par_ics_number: String($card.find('.edit-np-bundle-par-ics-value').val() || '').trim(),
+          add_serial: $card.find('.edit-np-bundle-add-serial').is(':checked'),
+          no_brand: $card.find('.edit-np-bundle-no-brand').is(':checked'),
+          serial_numbers: serials1,
+          serial_numbers_2: serials2
+        }));
+      });
+      npDetailState.bundles = bundles;
+    }
+
+    function npDetailBuildBundleSerialRows(bundle) {
+      var normalized = npDetailNormalizeBundle(bundle);
+      var parentItem = npDetailFindParentItemBySetIndex(normalized.set_index);
+      var quantity = parentItem ? npDetailNormalizeItemQuantity(parentItem.item_quantity || 1) : 0;
+      var propertyNumbers = npDetailBundlePropertyNumbers(normalized);
+      var html = ''
+        + '<div class="table-responsive gso-serial-table-scroll">'
+        + '  <table class="table table-sm table-bordered mb-0">'
+        + '    <thead class="bg-light">'
+        + '      <tr>'
+        + '        <th style="width:80px;">Unit</th>'
+        + '        <th>Primary Serial Number</th>'
+        + '        <th>Secondary Serial Number</th>'
+        + '      </tr>'
+        + '    </thead>'
+        + '    <tbody>';
+
+      if (!parentItem || quantity < 1) {
+        html += '<tr><td colspan="3" class="text-center text-muted">Select a bundle set to load the per-unit bundle rows.</td></tr>';
+      }
+
+      for (var i = 1; i <= quantity; i++) {
+        html += ''
+          + '<tr>'
+          + '  <td class="align-middle text-center">' + i + '</td>'
+          + '  <td><input type="text" class="form-control text-uppercase edit-np-bundle-serial-primary" value="' + npDetailEsc(normalized.serial_numbers[i - 1] || '') + '" placeholder="Enter primary serial number"></td>'
+          + '  <td><input type="text" class="form-control text-uppercase edit-np-bundle-serial-secondary" value="' + npDetailEsc(normalized.serial_numbers_2[i - 1] || '') + '" placeholder="Enter secondary serial number"><input type="hidden" class="edit-np-bundle-property-number" value="' + npDetailEsc(propertyNumbers[i - 1] || '') + '"></td>'
+          + '</tr>';
+      }
+
+      html += ''
+        + '    </tbody>'
+        + '  </table>'
+        + '</div>';
+      return html;
+    }
+
+    function npDetailApplyBundleNoBrandState($card) {
+      var $brand = $card.find('.edit-np-bundle-brand');
+      var $toggle = $card.find('.edit-np-bundle-no-brand');
+      if (!$brand.length || !$toggle.length) { return; }
+      if ($toggle.is(':checked')) {
+        if ($brand.data('prevUserValueCaptured') !== true) {
+          $brand.data('prevUserValue', String($brand.val() || ''));
+          $brand.data('prevUserValueCaptured', true);
+        }
+        $brand.val('NO BRAND/MODEL').prop('readonly', true);
+        return;
+      }
+      if (String($brand.val() || '').trim().toUpperCase() === 'NO BRAND/MODEL') {
+        $brand.val(String($brand.data('prevUserValue') || ''));
+      }
+      $brand.prop('readonly', false);
+      $brand.data('prevUserValueCaptured', false);
+    }
+
+    function npDetailApplyBundleSerialVisibility($card) {
+      $card.find('.edit-np-bundle-serial-row').toggle($card.find('.edit-np-bundle-add-serial').is(':checked'));
+    }
+
+    function npDetailSetBundleParIcsPreview($card, value) {
+      var code = String(value || '').trim().toUpperCase();
+      $card.find('.edit-np-bundle-par-ics-value').val(code);
+      $card.find('.edit-np-bundle-par-ics-preview').val(code);
+      var bundleKey = String($card.data('bundleKey') || '');
+      $.each(npDetailState.bundles || [], function (_, bundle) {
+        if (String(bundle.key || '') === bundleKey) {
+          bundle.par_ics_number = code;
+          return false;
+        }
+      });
+    }
+
+    function npDetailRefreshBundlePreviewFields($card) {
+      if (!$card || !$card.length) { return; }
+      var normalized = npDetailNormalizeBundle({
+        key: String($card.data('bundleKey') || ''),
+        id: parseInt($card.data('bundleId'), 10) || 0,
+        set_index: String($card.find('.edit-np-bundle-set').val() || '').trim(),
+        category: String($card.find('.edit-np-bundle-category').val() || '').trim(),
+        unit: String($card.find('.edit-np-bundle-unit').val() || '').trim(),
+        item: String($card.find('.edit-np-bundle-asset').val() || '').trim(),
+        model: String($card.find('.edit-np-bundle-brand').val() || ''),
+        description: String($card.find('.edit-np-bundle-description').val() || ''),
+        par_ics_number: String($card.find('.edit-np-bundle-par-ics-value').val() || '').trim()
+      });
+      $card.find('.edit-np-bundle-property-preview').val(npDetailBundlePropertyPreviewText(normalized));
+    }
+
+    function npDetailRefreshBundleParIcsNumbers() {
+      var codeByCategory = {};
+      $.each(npDetailState.items, function (_, item) {
+        var category = String(item.category || '').trim().toUpperCase();
+        var code = String(item.par_ics_number || '').trim().toUpperCase();
+        if (category && code && !codeByCategory[category]) {
+          codeByCategory[category] = code;
+        }
+      });
+      $.each(npDetailState.bundles || [], function (_, bundle) {
+        var category = String(bundle.category || '').trim().toUpperCase();
+        var code = String(bundle.par_ics_number || '').trim().toUpperCase();
+        if (category && code && !codeByCategory[category]) {
+          codeByCategory[category] = code;
+        }
+      });
+
+      var pendingCategories = [];
+      $('#editNpBundleRows .edit-np-bundle-card').each(function () {
+        var $card = $(this);
+        var category = String($card.find('.edit-np-bundle-category').val() || '').trim().toUpperCase();
+        if (!category) {
+          npDetailSetBundleParIcsPreview($card, '');
+          return;
+        }
+        if (codeByCategory[category]) {
+          npDetailSetBundleParIcsPreview($card, codeByCategory[category]);
+          return;
+        }
+        if (npDetailBundleParIcsCache[category]) {
+          codeByCategory[category] = npDetailBundleParIcsCache[category];
+          npDetailSetBundleParIcsPreview($card, codeByCategory[category]);
+          return;
+        }
+        if ($.inArray(category, pendingCategories) === -1) {
+          pendingCategories.push(category);
+        }
+      });
+
+      $.each(pendingCategories, function (_, category) {
+        $.ajax({
+          url: '../auth/auth.php',
+          type: 'POST',
+          cache: false,
+          dataType: 'json',
+          data: {
+            generate_par_ics_code: 1,
+            category: category,
+            condition: 'NEW'
+          },
+          success: function (resp) {
+            var code = (resp && Number(resp.status) === 200 && resp.code) ? String(resp.code).trim().toUpperCase() : '';
+            if (!code) { return; }
+            npDetailBundleParIcsCache[category] = code;
+            $('#editNpBundleRows .edit-np-bundle-card').each(function () {
+              var $card = $(this);
+              if (String($card.find('.edit-np-bundle-category').val() || '').trim().toUpperCase() === category) {
+                npDetailSetBundleParIcsPreview($card, code);
+              }
+            });
+          }
+        });
+      });
+    }
+
+    function npDetailBuildBundleCard(bundle, index) {
+      var normalized = npDetailNormalizeBundle(bundle);
+      return ''
+        + '<div class="border rounded p-3 mb-2 edit-np-bundle-card" data-bundle-key="' + npDetailEsc(normalized.key) + '" data-bundle-id="' + npDetailEsc(normalized.id) + '">'
+        + '  <div class="d-flex justify-content-between align-items-center mb-3">'
+        + '    <strong>Bundle Equipment ' + (index + 1) + '</strong>'
+        + '    <button type="button" class="btn btn-sm btn-outline-danger edit-np-remove-bundle" data-bundle-key="' + npDetailEsc(normalized.key) + '"><i class="fas fa-trash"></i></button>'
+        + '  </div>'
+        + '  <div class="form-row">'
+        + '    <div class="form-group col-md-2">'
+        + '      <label>Bundle Set</label>'
+        + '      <select class="form-control edit-np-bundle-set">' + npDetailBundleSetOptionsHtml(normalized.set_index) + '</select>'
+        + '    </div>'
+        + '    <div class="form-group col-md-2">'
+        + '      <label>Category</label>'
+        + '      <select class="form-control edit-np-bundle-category">'
+        + '        <option value="">-SELECT-</option>'
+        + '        <option value="PAR"' + (normalized.category === 'PAR' ? ' selected' : '') + '>PAR</option>'
+        + '        <option value="ICS"' + (normalized.category === 'ICS' ? ' selected' : '') + '>ICS</option>'
+        + '      </select>'
+        + '    </div>'
+        + '    <div class="form-group col-md-2">'
+        + '      <label>Unit</label>'
+        + '      <select class="form-control edit-np-bundle-unit">' + npDetailSelectedOptions('#editNpItemUnitOptionsTemplate', normalized.unit) + '</select>'
+        + '    </div>'
+        + '    <div class="form-group col-md-3">'
+        + '      <label>Asset Class</label>'
+        + '      <select class="form-control edit-np-bundle-asset">' + npDetailSelectedOptions('#editNpItemAssetOptionsTemplate', normalized.item) + '</select>'
+        + '    </div>'
+        + '    <div class="form-group col-md-3">'
+        + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+        + '        <label class="mb-0">Brand/Model</label>'
+        + '        <div class="form-check form-check-inline mb-0 text-muted">'
+        + '          <input type="checkbox" class="form-check-input edit-np-bundle-no-brand"' + (normalized.no_brand ? ' checked' : '') + '>'
+        + '          <label class="form-check-label">none</label>'
+        + '        </div>'
+        + '      </div>'
+        + '      <input type="text" class="form-control text-uppercase edit-np-bundle-brand" value="' + npDetailEsc(normalized.model) + '" placeholder="Enter brand/model">'
+        + '    </div>'
+        + '  </div>'
+        + '  <div class="form-row">'
+        + '    <div class="form-group col-12">'
+        + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+        + '        <label class="mb-0">Description</label>'
+        + '        <div class="form-check form-check-inline mb-0 text-muted">'
+        + '          <input type="checkbox" class="form-check-input edit-np-bundle-add-serial"' + (normalized.add_serial ? ' checked' : '') + '>'
+        + '          <label class="form-check-label">add serial number</label>'
+        + '        </div>'
+        + '      </div>'
+        + '      <textarea class="form-control text-uppercase edit-np-bundle-description" rows="4" placeholder="Enter description">' + npDetailEsc(normalized.description) + '</textarea>'
+        + '    </div>'
+        + '  </div>'
+        + '  <div class="form-row edit-np-bundle-serial-row"' + (normalized.add_serial ? '' : ' style="display:none;"') + '>'
+        + '    <div class="form-group col-12">'
+        + '      <div class="edit-np-bundle-serial-table-wrap">' + npDetailBuildBundleSerialRows(normalized) + '</div>'
+        + '    </div>'
+        + '  </div>'
+        + '  <div class="form-row">'
+        + '    <div class="form-group col-md-6">'
+        + '      <label>PAR/ICS No.</label>'
+        + '      <input type="hidden" class="edit-np-bundle-par-ics-value" value="' + npDetailEsc(normalized.par_ics_number || '') + '">'
+        + '      <textarea class="form-control edit-np-bundle-par-ics-preview" rows="3" readonly>' + npDetailEsc(normalized.par_ics_number || '') + '</textarea>'
+        + '    </div>'
+        + '    <div class="form-group col-md-6">'
+        + '      <label>Property No.</label>'
+        + '      <textarea class="form-control edit-np-bundle-property-preview" rows="3" readonly>' + npDetailEsc(npDetailBundlePropertyPreviewText(normalized)) + '</textarea>'
+        + '    </div>'
+        + '  </div>'
+        + '</div>';
+    }
+
+    function npDetailRenderBundleRows() {
+      var $wrap = $('#editNpBundleRows');
+      if (!$wrap.length) { return; }
+      npDetailState.bundles = $.map(npDetailState.bundles || [], function (bundle) {
+        return npDetailNormalizeBundle(bundle);
+      });
+      if (!npDetailState.bundles.length) {
+        $wrap.html('<div class="text-center text-muted py-4">No bundle equipment found.</div>');
+        return;
+      }
+
+      var html = '';
+      $.each(npDetailState.bundles, function (index, bundle) {
+        html += npDetailBuildBundleCard(bundle, index);
+      });
+
+      $wrap.html(html);
+      $wrap.find('.edit-np-bundle-card').each(function () {
+        npDetailApplyBundleNoBrandState($(this));
+        npDetailApplyBundleSerialVisibility($(this));
+        npDetailRefreshBundlePreviewFields($(this));
+      });
+      npDetailRefreshBundleParIcsNumbers();
     }
 
     function npDetailHasSerialValues(item) {
@@ -3700,6 +4172,8 @@ $(function(){
 
       $hidden.val(firstValue);
       $preview.val(previewValue);
+      npDetailSnapshotBundleRows();
+      npDetailRenderBundleRows();
     }
 
     function npDetailIsUsablePropertyNumber(value) {
@@ -3948,6 +4422,7 @@ $(function(){
     function npDetailFillModal(data) {
       var group = data && data.group ? data.group : {};
       var items = data && data.items ? data.items : [];
+      var bundles = data && data.bundles ? data.bundles : [];
 
       npDetailState.group = group;
       npDetailState.items = $.map(items, function (item) {
@@ -3991,6 +4466,13 @@ $(function(){
         item.add_serial = npDetailHasSerialValues(item);
         return item;
       });
+      npDetailState.bundles = $.map(bundles, function (bundle) {
+        return npDetailNormalizeBundle($.extend({}, bundle, {
+          key: String(bundle.id || ('bundle_' + (++npDetailTempIndex))),
+          serial_numbers: $.isArray(bundle.serial_numbers) ? bundle.serial_numbers : [String(bundle.serial_number || '')],
+          serial_numbers_2: $.isArray(bundle.serial_numbers_2) ? bundle.serial_numbers_2 : [String(bundle.serial_number_2 || '')]
+        }));
+      });
 
       $('#edit_np_group_po').val(group.po || '');
       $('#edit_np_group_row_id').val(group.row_id || '');
@@ -4002,9 +4484,17 @@ $(function(){
       $('#edit_np_obr').val(group.obr_number || '');
       $('#edit_np_jev').val(group.jev_number || '');
       $('#edit_np_dept').val(group.department_code || '');
+      $('#editNpDetailPrintBtn').toggle(npDetailSourceContext() !== 'fund_inventory');
+      $('#edit_np_fund').prop('disabled', npDetailSourceContext() === 'fund_inventory');
+      $('#edit_np_set_count').prop('readonly', npDetailSourceContext() === 'fund_inventory');
       npDetailPopulateDeptDatalist();
       npDetailSyncDeptInput();
       npDetailRenderItemRows();
+      npDetailRenderBundleRows();
+      if (npDetailSourceContext() === 'fund_inventory') {
+        $('#editNpItemRows .edit-np-remove-set').hide();
+        $('#editNpItemRows .edit-np-item-quantity').prop('readonly', true);
+      }
       npDetailLoadEmployees(String(group.department_code || '').trim(), function () {
         npDetailRefreshAllProperties();
       });
@@ -4120,6 +4610,7 @@ $(function(){
     }
 
     function npDetailAdjustSetCount(nextCount) {
+      npDetailSnapshotBundleRows();
       nextCount = npDetailNormalizeSetCount(nextCount);
       while (npDetailState.items.length < nextCount) {
         npDetailState.items.push(npDetailCreateBlankItem());
@@ -4130,11 +4621,17 @@ $(function(){
       npDetailResetSetNumbers();
       npDetailRenderItemRows();
       npDetailRenderEndUserRows();
+      npDetailRenderBundleRows();
       npDetailRefreshAllProperties();
     }
 
     function npDetailReloadTable() {
       if (!($.fn.dataTable && $.fn.dataTable.isDataTable('#addItemNewPurchaseTable'))) { return; }
+
+      if (npDetailSourceContext() === 'fund_inventory') {
+        window.location.reload();
+        return;
+      }
 
       var table = $('#addItemNewPurchaseTable').DataTable();
       var settings = table.settings()[0] || {};
@@ -4162,7 +4659,9 @@ $(function(){
         data: {
           fetch_new_purchase_group: 1,
           po: String($('#edit_np_po').val() || $('#edit_np_group_po').val() || '').trim(),
-          row_id: parseInt($('#edit_np_group_row_id').val(), 10) || 0
+          row_id: parseInt($('#edit_np_group_row_id').val(), 10) || 0,
+          source_context: npDetailSourceContext(),
+          fund_inventory_key: npDetailFundInventoryKey()
         },
         success: function (resp) {
           if (resp && Number(resp.status) === 200 && resp.data) {
@@ -4194,7 +4693,9 @@ $(function(){
           data: {
             fetch_new_purchase_group: 1,
             po: String($btn.data('po') || '').trim(),
-            row_id: parseInt($btn.data('rowId'), 10) || 0
+            row_id: parseInt($btn.data('rowId'), 10) || 0,
+            source_context: npDetailSourceContext(),
+            fund_inventory_key: npDetailFundInventoryKey()
           },
           success: function (resp) {
             if (!resp || Number(resp.status) !== 200 || !resp.data) {
@@ -4289,6 +4790,52 @@ $(function(){
       });
 
     $(document)
+      .off('change.editNpBundleSerialToggle', '#editNpBundleRows .edit-np-bundle-add-serial')
+      .on('change.editNpBundleSerialToggle', '#editNpBundleRows .edit-np-bundle-add-serial', function () {
+        npDetailApplyBundleSerialVisibility($(this).closest('.edit-np-bundle-card'));
+      });
+
+    $(document)
+      .off('click.editNpAddBundle', '#editNpAddBundleRow')
+      .on('click.editNpAddBundle', '#editNpAddBundleRow', function () {
+        npDetailSnapshotBundleRows();
+        npDetailState.bundles.push(npDetailNormalizeBundle({}));
+        npDetailRenderBundleRows();
+      });
+
+    $(document)
+      .off('click.editNpRemoveBundle', '#editNpBundleRows .edit-np-remove-bundle')
+      .on('click.editNpRemoveBundle', '#editNpBundleRows .edit-np-remove-bundle', function () {
+        var bundleKey = String($(this).data('bundleKey') || '');
+        npDetailSnapshotBundleRows();
+        npDetailState.bundles = $.grep(npDetailState.bundles, function (bundle) {
+          return String(bundle.key || '') !== bundleKey;
+        });
+        npDetailRenderBundleRows();
+      });
+
+    $(document)
+      .off('change.editNpBundleSet', '#editNpBundleRows .edit-np-bundle-set')
+      .on('change.editNpBundleSet', '#editNpBundleRows .edit-np-bundle-set', function () {
+        npDetailSnapshotBundleRows();
+        npDetailRenderBundleRows();
+      });
+
+    $(document)
+      .off('change.editNpBundleCategory', '#editNpBundleRows .edit-np-bundle-category')
+      .on('change.editNpBundleCategory', '#editNpBundleRows .edit-np-bundle-category', function () {
+        var $card = $(this).closest('.edit-np-bundle-card');
+        npDetailRefreshBundleParIcsNumbers();
+        npDetailRefreshBundlePreviewFields($card);
+      });
+
+    $(document)
+      .off('change.editNpBundleNoBrand', '#editNpBundleRows .edit-np-bundle-no-brand')
+      .on('change.editNpBundleNoBrand', '#editNpBundleRows .edit-np-bundle-no-brand', function () {
+        npDetailApplyBundleNoBrandState($(this).closest('.edit-np-bundle-card'));
+      });
+
+    $(document)
       .off('click.editNpRemoveSet', '#editNpItemRows .edit-np-remove-set')
       .on('click.editNpRemoveSet', '#editNpItemRows .edit-np-remove-set', function () {
         var $button = $(this);
@@ -4310,12 +4857,14 @@ $(function(){
           confirmButtonColor: '#dc3545'
         }, function () {
           if (!deleteItemIds.length) {
+            npDetailSnapshotBundleRows();
             npDetailState.items = $.grep(npDetailState.items, function (currentItem) {
               return String(currentItem.key || '') !== itemKey;
             });
             npDetailResetSetNumbers();
             npDetailRenderItemRows();
             npDetailRenderEndUserRows();
+            npDetailRenderBundleRows();
             npDetailRefreshAllProperties();
             return;
           }
@@ -4390,6 +4939,8 @@ $(function(){
         }));
         npDetailApplySerialVisibilityState($card, false);
         npDetailSyncTotalAmount($card.find('.edit-np-unit-value'));
+        npDetailSnapshotBundleRows();
+        npDetailRenderBundleRows();
         npDetailRefreshParIcsNumbers();
         npDetailRefreshProperty(itemKey);
       });
@@ -4537,6 +5088,18 @@ $(function(){
           var $btn = $('#editNpDetailSaveBtn').prop('disabled', true);
           var formData = new FormData(e.currentTarget);
           formData.set('dept_id', deptCode);
+          formData.set('fund', $('#edit_np_fund').val() || '');
+          formData.set('source_context', npDetailSourceContext());
+          formData.set('fund_inventory_key', npDetailFundInventoryKey());
+          formData.delete('bundle_parent_index[]');
+          formData.delete('bundle_category[]');
+          formData.delete('bundle_unit[]');
+          formData.delete('bundle_asset_class[]');
+          formData.delete('bundle_brand_model[]');
+          formData.delete('bundle_description[]');
+          formData.delete('bundle_serial1[]');
+          formData.delete('bundle_serial2[]');
+          formData.delete('bundle_property_number[]');
 
           if (!useMultipleEndUsers && npDetailState.items.length > 1) {
             $.each(npDetailState.items, function (_, item) {
@@ -4553,6 +5116,52 @@ $(function(){
                 formData.delete('emp_new_position[' + itemKey + ']');
               }
             });
+          }
+
+          npDetailSnapshotBundleRows();
+          var bundleMissing = [];
+          var isPropertyNumberOptionalFund = npDetailPropertyOptionalFund();
+          $.each(npDetailState.bundles || [], function (bundleIndex, bundle) {
+            var normalized = npDetailNormalizeBundle(bundle);
+            var propertyNumbers = npDetailBundlePropertyNumbers(normalized);
+            var quantity = propertyNumbers.length;
+            var groupLabel = 'Bundle ' + (bundleIndex + 1);
+            var hasAny = normalized.set_index || normalized.category || normalized.unit || normalized.item || normalized.model || normalized.description || normalized.serial_numbers.length || normalized.serial_numbers_2.length;
+            if (!hasAny) {
+              return;
+            }
+            if (!normalized.set_index || !normalized.category || !normalized.unit || !normalized.item || quantity < 1) {
+              bundleMissing.push(groupLabel);
+              return;
+            }
+
+            for (var copyIndex = 0; copyIndex < quantity; copyIndex++) {
+              var propertyNumber = String(propertyNumbers[copyIndex] || '').trim();
+              if (!isPropertyNumberOptionalFund && !propertyNumber) {
+                bundleMissing.push(groupLabel);
+                return false;
+              }
+              var serial1 = normalized.add_serial ? String(normalized.serial_numbers[copyIndex] || '').trim() : '';
+              var serial2 = normalized.add_serial ? String(normalized.serial_numbers_2[copyIndex] || '').trim() : '';
+              formData.append('bundle_parent_index[]', normalized.set_index);
+              formData.append('bundle_category[]', normalized.category);
+              formData.append('bundle_unit[]', normalized.unit);
+              formData.append('bundle_asset_class[]', normalized.item);
+              formData.append('bundle_brand_model[]', normalized.model);
+              formData.append('bundle_description[]', normalized.description);
+              formData.append('bundle_serial1[]', serial1);
+              formData.append('bundle_serial2[]', serial2);
+              formData.append('bundle_property_number[]', propertyNumber);
+            }
+          });
+
+          if (bundleMissing.length) {
+            bundleMissing = $.grep(bundleMissing, function (value, index) {
+              return $.inArray(value, bundleMissing) === index;
+            });
+            $btn.prop('disabled', false);
+            Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'Bundle equipment requires Bundle Set, Category, Unit, Asset Class, and valid property numbers for: ' + bundleMissing.join(', ') + '.' }) : alert('Bundle equipment is incomplete.');
+            return;
           }
 
           $.ajax({
@@ -4593,12 +5202,18 @@ $(function(){
       .on('hidden.bs.modal.editNpDetail', function () {
         npDetailState.group = null;
         npDetailState.items = [];
+        npDetailState.bundles = [];
         npDetailState.employeeOptionsHtml = '<option value="">-SELECT-</option><option value="add_new_emp"> + ADD NEW EMPLOYEE </option>';
         npDetailState.useMultipleEndUsers = false;
+        npDetailBundleParIcsCache = {};
         $('#editNpDetailForm')[0].reset();
         $('#editNpItemRows').html('<div class="text-center text-muted py-4">Select a purchase to view details.</div>');
+        $('#editNpBundleRows').html('<div class="text-center text-muted py-4">No bundle equipment found.</div>');
         $('#editNpEndUserRows').html('<tr><td colspan="4" class="text-center text-muted">Select a purchase to view details.</td></tr>');
         $('#edit_np_set_count').val(0);
+        $('#edit_np_fund').prop('disabled', false);
+        $('#edit_np_set_count').prop('readonly', false);
+        $('#editNpDetailPrintBtn').show();
         npDetailPopulateDeptDatalist();
       });
 
@@ -6689,6 +7304,7 @@ window.GSO = window.GSO || {};
 window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
   var inited = false;
   var refreshTimer = null;
+  var bundleParIcsCache = {};
 
   function hasUI(){
     return $('#addItemModal').length && $('#bundleRows').length && $('#btnAddBundleRow').length;
@@ -6729,6 +7345,27 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     return parts.join('-');
   }
 
+  function splitPreviewValues(raw){
+    return String(raw || '')
+      .split(/[\n\r,]+/)
+      .map(function(value){ return String(value || '').trim(); })
+      .filter(function(value){ return value !== ''; });
+  }
+
+  function getParentSetQuantity(setIndex){
+    var index = parseInt(setIndex, 10) || 0;
+    if (index < 1) { return 0; }
+    var qty = parseInt($('#itemSetRows .item-set-card[data-set-index="' + index + '"] .js-item-quantity').val(), 10);
+    return qty && qty > 0 ? qty : 1;
+  }
+
+  function getParentSetPropertyNumbers(setIndex){
+    var index = parseInt(setIndex, 10) || 0;
+    if (index < 1) { return []; }
+    var preview = $('#itemSetRows .item-set-card[data-set-index="' + index + '"] .js-item-property-number').val();
+    return splitPreviewValues(preview);
+  }
+
   function buildBundleSetOptionsHtml(selected){
     var qty = getParentQty();
     var sel = String(selected || '').trim();
@@ -6757,17 +7394,72 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
   }
 
   function syncBundlePropertyNumbers(){
-    var parentNums = getParentPropertyNumbersPreview();
     bundleRowEls().each(function(){
       var $row = $(this);
       var setVal = String($row.find('select[name="bundle_parent_index[]"]').val() || '').trim();
-      var $input = $row.find('input[name="bundle_property_number[]"]');
-      if (!setVal || !parentNums.length) {
-        $input.val('');
+      var numbers = getParentSetPropertyNumbers(setVal);
+      var previewText = numbers.join(', ');
+      $row.find('.js-bundle-property-preview').val(previewText);
+      $row.find('.bundle-copy-row').each(function(copyIndex){
+        var propNumber = numbers[copyIndex] || '';
+        $(this).find('.js-bundle-property-number').val(propNumber);
+      });
+    });
+  }
+
+  function getItemParIcsCodeByCategory(category){
+    var target = String(category || '').trim().toUpperCase();
+    if (!target) { return ''; }
+    var code = '';
+    $('#itemSetRows .item-set-card').each(function(){
+      var itemCategory = String($(this).find('.js-item-category').val() || '').trim().toUpperCase();
+      if (itemCategory !== target) { return; }
+      code = String($(this).find('.js-item-par-ics-value').val() || '').trim().toUpperCase();
+      if (code) { return false; }
+    });
+    return code;
+  }
+
+  function setBundleParIcsPreview($row, value){
+    var code = String(value || '').trim().toUpperCase();
+    $row.find('.js-bundle-par-ics-preview').val(code);
+  }
+
+  function refreshBundleParIcsNumbers(){
+    bundleRowEls().each(function(){
+      var $row = $(this);
+      var category = String($row.find('.js-bundle-category').val() || '').trim().toUpperCase();
+      if (!category) {
+        setBundleParIcsPreview($row, '');
         return;
       }
-      var idx = parseInt(setVal, 10);
-      $input.val((idx >= 1 && idx <= parentNums.length) ? parentNums[idx - 1] : '');
+      var existingCode = getItemParIcsCodeByCategory(category) || bundleParIcsCache[category] || '';
+      if (existingCode) {
+        setBundleParIcsPreview($row, existingCode);
+        return;
+      }
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        cache: false,
+        dataType: 'json',
+        data: {
+          generate_par_ics_code: 1,
+          category: category,
+          condition: String($('#condition').val() || '').trim().toUpperCase()
+        },
+        success: function(resp){
+          var code = (resp && Number(resp.status) === 200 && resp.code) ? String(resp.code).trim().toUpperCase() : '';
+          if (!code) { return; }
+          bundleParIcsCache[category] = code;
+          bundleRowEls().each(function(){
+            var $bundleRow = $(this);
+            if (String($bundleRow.find('.js-bundle-category').val() || '').trim().toUpperCase() === category) {
+              setBundleParIcsPreview($bundleRow, code);
+            }
+          });
+        }
+      });
     });
   }
 
@@ -6804,6 +7496,10 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     return html;
   }
 
+  function getBundleUnitOptionsHtml(){
+    return String($('#itemUnitOptionsTemplate').html() || '<option value="">-SELECT-</option>');
+  }
+
   function getBundleCategoryOptionsHtml(){
     return ''
       + '<option value="">-SELECT-</option>'
@@ -6817,83 +7513,183 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     return String($('#itemSetRows .item-set-card[data-set-index="' + index + '"] .js-item-category').val() || '').trim().toUpperCase();
   }
 
+  function getBundleGroupState($group){
+    var serials = {};
+    $group.find('.bundle-copy-row').each(function(){
+      var rowIndex = parseInt($(this).attr('data-copy-index'), 10) || 0;
+      if (rowIndex < 1) { return; }
+      serials[rowIndex] = {
+        serial1: String($(this).find('.js-bundle-serial1').val() || ''),
+        serial2: String($(this).find('.js-bundle-serial2').val() || '')
+      };
+    });
+    return {
+      setIndex: String($group.find('.js-bundle-parent-index').val() || '').trim(),
+      category: String($group.find('.js-bundle-category').val() || '').trim().toUpperCase(),
+      unit: String($group.find('.js-bundle-unit').val() || '').trim().toUpperCase(),
+      asset: String($group.find('.js-bundle-asset').val() || '').trim().toUpperCase(),
+      model: String($group.find('.js-bundle-brand-model').val() || ''),
+      noBrand: $group.find('.bundle-no-brand-model').is(':checked'),
+      addSerial: $group.find('.js-bundle-add-serial').is(':checked'),
+      description: String($group.find('.js-bundle-description').val() || ''),
+      serials: serials
+    };
+  }
+
+  function getBundleSerialValue(serials, rowIndex, fieldName){
+    if (serials && serials[rowIndex] && serials[rowIndex][fieldName] !== undefined) {
+      return String(serials[rowIndex][fieldName] || '');
+    }
+    return '';
+  }
+
+  function buildBundleSerialRowsHtml(state){
+    var parentIndex = state && state.setIndex ? state.setIndex : '';
+    if (!parentIndex) {
+      return '<div class="text-muted py-2">Select a bundle set to load the per-unit bundle rows.</div>';
+    }
+
+    var qty = getParentSetQuantity(parentIndex);
+    var numbers = getParentSetPropertyNumbers(parentIndex);
+    var html = ''
+      + '<div class="table-responsive gso-serial-table-scroll">'
+      + '<table class="table table-sm table-bordered mb-0">'
+      + '<thead class="bg-light">'
+      + '<tr>'
+      + '<th style="width:80px;">Unit</th>'
+      + '<th>Primary Serial Number</th>'
+      + '<th>Secondary Serial Number</th>'
+      + '</tr>'
+      + '</thead><tbody>';
+
+    for (var copyIndex = 1; copyIndex <= qty; copyIndex++) {
+      html += '<tr class="bundle-copy-row" data-copy-index="' + copyIndex + '">'
+        + '<td class="align-middle text-center">' + copyIndex + '</td>'
+        + '<td><input type="text" class="form-control text-uppercase js-bundle-serial1" placeholder="Enter primary serial number" value="' + esc(getBundleSerialValue(state.serials, copyIndex, 'serial1')) + '"></td>'
+        + '<td><input type="text" class="form-control text-uppercase js-bundle-serial2" placeholder="Enter secondary serial number" value="' + esc(getBundleSerialValue(state.serials, copyIndex, 'serial2')) + '"><input type="hidden" class="js-bundle-property-number" value="' + esc(numbers[copyIndex - 1] || '') + '"></td>'
+        + '</tr>';
+    }
+
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  function applyBundleSerialVisibility($group){
+    if (!$group || !$group.length) { return; }
+    var showSerial = $group.find('.js-bundle-add-serial').is(':checked');
+    $group.find('.js-bundle-serial-row').toggle(showSerial);
+  }
+
+  function syncBundleGroup($group){
+    if (!$group || !$group.length) { return; }
+    var state = getBundleGroupState($group);
+    var currentSet = state.setIndex;
+    var $setSelect = $group.find('.js-bundle-parent-index');
+
+    if ($setSelect.length) {
+      $setSelect.html(buildBundleSetOptionsHtml(currentSet));
+      if (!currentSet || parseInt(currentSet, 10) > getParentQty()) {
+        currentSet = '';
+        if (getParentQty() === 1) {
+          currentSet = '1';
+        }
+        $setSelect.val(currentSet);
+      } else {
+        $setSelect.val(currentSet);
+      }
+    }
+
+    state.setIndex = currentSet;
+    if (!$group.find('.js-bundle-category').val()) {
+      var parentCategory = getParentSetCategory(currentSet || 1);
+      if (parentCategory && $group.find('.js-bundle-category option[value="' + parentCategory + '"]').length) {
+        $group.find('.js-bundle-category').val(parentCategory);
+      }
+      state.category = String($group.find('.js-bundle-category').val() || '').trim().toUpperCase();
+    }
+
+    $group.find('.js-bundle-serial-table-wrap').html(buildBundleSerialRowsHtml(state));
+    applyBundleSerialVisibility($group);
+  }
+
   function addBundleRow(){
-    var opts = getBundleAssetOptionsHtml();
+    var assetOpts = getBundleAssetOptionsHtml();
+    var unitOpts = getBundleUnitOptionsHtml();
     var catOpts = getBundleCategoryOptionsHtml();
     var idx = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
     var row = ''
-      + '<div class="border rounded p-3 mb-2 bundle-row" data-bundle-row="' + esc(idx) + '">' 
-      + '  <div class="d-flex justify-content-between align-items-center mb-2">'
-      + '    <strong>Bundle Item</strong>'
+      + '<div class="border rounded p-3 mb-2 bundle-row" data-bundle-row="' + esc(idx) + '">'
+      + '  <div class="d-flex justify-content-between align-items-center mb-3">'
+      + '    <strong>Bundle Equipment</strong>'
       + '    <button type="button" class="btn btn-sm btn-outline-danger btnRemoveBundleRow" title="Remove">'
       + '      <i class="fas fa-trash"></i>'
       + '    </button>'
       + '  </div>'
       + '  <div class="form-row">'
-      + '    <div class="col-md-8">'
-      + '      <div class="form-row">'
-      + '        <div class="form-group col-md-4">'
-      + '          <label>Bundle Set</label>'
-      + '          <select class="form-control" name="bundle_parent_index[]">' + buildBundleSetOptionsHtml('') + '</select>'
-      + '        </div>'
-      + '        <div class="form-group col-md-4">'
-      + '          <label>Category</label>'
-      + '          <select class="form-control" name="bundle_category[]">' + catOpts + '</select>'
-      + '        </div>'
-      + '        <div class="form-group col-md-4">'
-      + '          <label>Asset Class</label>'
-      + '          <select class="form-control" name="bundle_asset_class[]">' + opts + '</select>'
-      + '        </div>'
-      + '      </div>'
-      + '      <div class="form-row">'
-      + '        <div class="form-group col-md-4 mb-0">'
-      + '          <label>Primary Serial Number</label>'
-      + '          <input type="text" class="form-control text-uppercase" name="bundle_serial1[]" placeholder="Enter serial number">'
-      + '        </div>'
-      + '        <div class="form-group col-md-4 mb-0">'
-      + '          <label>Secondary Serial Number</label>'
-      + '          <input type="text" class="form-control text-uppercase" name="bundle_serial2[]" placeholder="Enter serial number">'
-      + '        </div>'
-      + '        <div class="form-group col-md-4 mb-0">'
-      + '          <label>Property Number</label>'
-      + '          <input type="text" class="form-control text-uppercase" name="bundle_property_number[]" placeholder="Property Number" readonly value="">'
-      + '        </div>'
-      + '      </div>'
+      + '    <div class="form-group col-md-2">'
+      + '      <label>Bundle Set</label>'
+      + '      <select class="form-control js-bundle-parent-index" name="bundle_parent_index[]">' + buildBundleSetOptionsHtml('') + '</select>'
       + '    </div>'
-      + '    <div class="col-md-4">'
-      + '      <div class="form-group">'
-      + '        <label>Brand/Model'
-      + '          <span class="text-muted" style="margin-left:10px;">'
-      + '            <input type="checkbox" class="form-check-input bundle-no-brand-model" style="position:static; margin-left:0; margin-right:6px;">'
-      + '            <span class="form-check-label">no brand/model</span>'
-      + '          </span>'
-      + '        </label>'
-      + '        <input type="text" class="form-control text-uppercase" name="bundle_brand_model[]" placeholder="Enter brand/model">'
+      + '    <div class="form-group col-md-2">'
+      + '      <label>Category</label>'
+      + '      <select class="form-control js-bundle-category" name="bundle_category[]">' + catOpts + '</select>'
+      + '    </div>'
+      + '    <div class="form-group col-md-2">'
+      + '      <label>Unit</label>'
+      + '      <select class="form-control js-bundle-unit" name="bundle_unit[]">' + unitOpts + '</select>'
+      + '    </div>'
+      + '    <div class="form-group col-md-3">'
+      + '      <label>Asset Class</label>'
+      + '      <select class="form-control js-bundle-asset" name="bundle_asset_class[]">' + assetOpts + '</select>'
+      + '    </div>'
+      + '    <div class="form-group col-md-3">'
+      + '      <label>Brand/Model'
+      + '        <span class="text-muted" style="margin-left:10px;">'
+      + '          <input type="checkbox" class="form-check-input bundle-no-brand-model" style="position:static; margin-left:0; margin-right:6px;">'
+      + '          <span class="form-check-label">no brand/model</span>'
+      + '        </span>'
+      + '      </label>'
+      + '      <input type="text" class="form-control text-uppercase js-bundle-brand-model" name="bundle_brand_model[]" placeholder="Enter brand/model">'
+      + '    </div>'
+      + '  </div>'
+      + '  <div class="form-row">'
+      + '    <div class="form-group col-12">'
+      + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+      + '        <label class="mb-0">Description</label>'
+      + '        <div class="form-check form-check-inline mb-0 text-muted">'
+      + '          <input type="checkbox" class="form-check-input js-bundle-add-serial" style="position:static; margin-left:0; margin-right:6px;">'
+      + '          <label class="form-check-label">add serial number</label>'
+      + '        </div>'
       + '      </div>'
-      + '      <div class="form-group mb-0">'
-      + '        <label>Description</label>'
-      + '        <textarea class="form-control text-uppercase" name="bundle_description[]" rows="5" placeholder="Enter description"></textarea>'
-      + '      </div>'
+      + '      <textarea class="form-control text-uppercase js-bundle-description" name="bundle_description[]" rows="4" placeholder="Enter description"></textarea>'
+      + '    </div>'
+      + '  </div>'
+      + '  <div class="form-row js-bundle-serial-row" style="display:none;">'
+      + '    <div class="form-group col-12">'
+      + '      <div class="js-bundle-serial-table-wrap"></div>'
+      + '    </div>'
+      + '  </div>'
+      + '  <div class="form-row">'
+      + '    <div class="form-group col-md-6">'
+      + '      <label>PAR/ICS No.</label>'
+      + '      <textarea class="form-control js-bundle-par-ics-preview" rows="3" readonly></textarea>'
+      + '    </div>'
+      + '    <div class="form-group col-md-6">'
+      + '      <label>Property No.</label>'
+      + '      <textarea class="form-control js-bundle-property-preview" rows="3" readonly></textarea>'
       + '    </div>'
       + '  </div>'
       + '</div>';
 
     $('#bundleRows').append(row).show();
-    syncBundleSetSelectors();
-    // Default bundle category to the first parent category if available
-    var pCat = getParentSetCategory(1);
-    if (pCat) {
-      try {
-        var $last = $('#bundleRows .bundle-row').last();
-        var $sel = $last.find('select[name="bundle_category[]"]');
-        if ($sel.length && $sel.find('option[value="' + pCat + '"]').length) {
-          $sel.val(pCat);
-        }
-      } catch (e) {}
+    var $last = $('#bundleRows .bundle-row').last();
+    var defaultSet = getParentQty() === 1 ? '1' : '';
+    if (defaultSet) {
+      $last.find('.js-bundle-parent-index').val(defaultSet);
     }
+    syncBundleGroup($last);
     syncBundleCardVisibility(true);
-    // Ensure deptSearch -> dept select sync has a chance to run
     try { $('#deptSearch').trigger('change'); } catch(e) {}
     scheduleRefresh();
   }
@@ -6909,21 +7705,29 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     if (!hasUI()) { return; }
     if (!bundleRowEls().length) { return; }
 
+    bundleRowEls().each(function(){
+      syncBundleGroup($(this));
+    });
+
     var fund = String($('#fund').val() || '').trim().toUpperCase();
     if (fund === 'TRUST FUND' || fund === 'DONATION') {
-      $('input[name="bundle_property_number[]"]').val('');
+      $('.js-bundle-property-number').val('');
+      $('.js-bundle-property-preview').val('');
       setBundleHelp('');
+      refreshBundleParIcsNumbers();
       return;
     }
 
-    var first = String($('#par_number_value').val() || '').trim();
-    if (!first) {
-      $('input[name="bundle_property_number[]"]').val('');
-      setBundleHelp('Parent property number is not yet generated.');
+    if (!getParentPropertyNumbersPreview().length) {
+      $('.js-bundle-property-number').val('');
+      $('.js-bundle-property-preview').val('');
+      setBundleHelp('');
+      refreshBundleParIcsNumbers();
       return;
     }
     setBundleHelp('');
     syncBundlePropertyNumbers();
+    refreshBundleParIcsNumbers();
   }
 
   function init(){
@@ -6941,24 +7745,31 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
       scheduleRefresh();
     });
 
-    $(document).off('change.bundleCategory', 'select[name="bundle_category[]"]').on('change.bundleCategory', 'select[name="bundle_category[]"]', function(){
+    $(document).off('change.bundleCategory', '.js-bundle-category').on('change.bundleCategory', '.js-bundle-category', function(){
       scheduleRefresh();
     });
 
-    $(document).off('change.bundleSet', 'select[name="bundle_parent_index[]"]').on('change.bundleSet', 'select[name="bundle_parent_index[]"]', function(){
+    $(document).off('change.bundleAddSerial', '.js-bundle-add-serial').on('change.bundleAddSerial', '.js-bundle-add-serial', function(){
+      applyBundleSerialVisibility($(this).closest('.bundle-row'));
+    });
+
+    $(document).off('change.bundleSet', '.js-bundle-parent-index').on('change.bundleSet', '.js-bundle-parent-index', function(){
       var $row = $(this).closest('.bundle-row');
-      var $category = $row.find('select[name="bundle_category[]"]');
+      var $category = $row.find('.js-bundle-category');
       if ($category.length && !$category.val()) {
         var parentCategory = getParentSetCategory($(this).val());
         if (parentCategory && $category.find('option[value="' + parentCategory + '"]').length) {
           $category.val(parentCategory);
         }
       }
+      syncBundleGroup($row);
       scheduleRefresh();
     });
 
     $(document).off('input.bundleQty change.bundleQty', '#quantity').on('input.bundleQty change.bundleQty', '#quantity', function(){
-      syncBundleSetSelectors();
+      bundleRowEls().each(function(){
+        syncBundleGroup($(this));
+      });
       scheduleRefresh();
     });
 
@@ -6966,7 +7777,7 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     $(document).off('change.bundleNoBrandModel', '#bundleRows .bundle-no-brand-model').on('change.bundleNoBrandModel', '#bundleRows .bundle-no-brand-model', function(){
       var $cb = $(this);
       var $row = $cb.closest('.bundle-row');
-      var $model = $row.find('input[name="bundle_brand_model[]"]');
+      var $model = $row.find('.js-bundle-brand-model');
       if(!$model.length){ return; }
 
       var checked = $cb.is(':checked');
@@ -6995,10 +7806,10 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     $(document).off('change.bundleParentCat', '.js-item-category').on('change.bundleParentCat', '.js-item-category', function(){
       bundleRowEls().each(function(){
         var $row = $(this);
-        var $sel = $row.find('select[name="bundle_category[]"]');
+        var $sel = $row.find('.js-bundle-category');
         var cur = String($sel.val() || '').trim();
         if (cur) { return; }
-        var parentCategory = getParentSetCategory($row.find('select[name="bundle_parent_index[]"]').val());
+        var parentCategory = getParentSetCategory($row.find('.js-bundle-parent-index').val());
         if (parentCategory && $sel.find('option[value="' + parentCategory + '"]').length) {
           $sel.val(parentCategory);
         }
@@ -7008,7 +7819,10 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
 
     $('#addItemModal').off('shown.bs.modal.addItemBundle').on('shown.bs.modal.addItemBundle', function(){
       syncBundleCardVisibility(false);
-      syncBundleSetSelectors();
+      bundleParIcsCache = {};
+      bundleRowEls().each(function(){
+        syncBundleGroup($(this));
+      });
       scheduleRefresh();
     });
   }
@@ -8758,6 +9572,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
   var formCondition = String($('#condition').val() || '').toUpperCase();
   var printPreference = String($form.data('printPreference') || '').toLowerCase();
   var hasPrintableCategory = false;
+  var selectedFund = String($('#fund').val() || '').trim().toUpperCase();
 
   $('#itemSetRows .js-item-category').each(function(){
     var value = String($(this).val() || '').trim().toUpperCase();
@@ -8767,33 +9582,60 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     }
   });
 
-  if (formCondition === 'NEW' && hasPrintableCategory && printPreference !== 'now' && printPreference !== 'later') {
+  var canPrintExisting = formCondition === 'EXISTING' && hasPrintableCategory && selectedFund !== 'TRUST FUND' && selectedFund !== 'DONATION';
+  var canPromptPrintChoice = (formCondition === 'NEW' && hasPrintableCategory) || canPrintExisting;
+
+  if (canPromptPrintChoice && printPreference !== 'now' && printPreference !== 'later') {
     if (window.Swal && Swal.fire) {
-      Swal.fire({
-        icon: 'question',
-        title: 'What do you want to do with this item?',
-        text: 'Choose whether to print the PAR/ICS right after saving or print it later.',
-        showCancelButton: true,
-        showDenyButton: true,
-        confirmButtonText: 'Print and Save',
-        denyButtonText: 'Save and Print Later',
-        cancelButtonText: 'Cancel',
-        reverseButtons: true
-      }).then(function(result){
-        if (result && result.isConfirmed) {
-          $form.data('printPreference', 'now');
-          $form.trigger('submit');
-        } else if (result && result.isDenied) {
-          $form.data('printPreference', 'later');
-          $form.trigger('submit');
-        } else {
-          $form.removeData('printPreference');
-        }
-      });
+      if (formCondition === 'EXISTING') {
+        Swal.fire({
+          icon: 'question',
+          title: 'Save this existing item?',
+          text: 'Choose whether to print the PAR/ICS right after saving or save only.',
+          showCancelButton: true,
+          showDenyButton: true,
+          confirmButtonText: 'Print and Save',
+          denyButtonText: 'Save Only',
+          cancelButtonText: 'Back',
+          reverseButtons: true
+        }).then(function(result){
+          if (result && result.isConfirmed) {
+            $form.data('printPreference', 'now');
+            $form.trigger('submit');
+          } else if (result && result.isDenied) {
+            $form.data('printPreference', 'later');
+            $form.trigger('submit');
+          } else {
+            $form.removeData('printPreference');
+          }
+        });
+      } else {
+        Swal.fire({
+          icon: 'question',
+          title: 'What do you want to do with this item?',
+          text: 'Choose whether to print the PAR/ICS right after saving or print it later.',
+          showCancelButton: true,
+          showDenyButton: true,
+          confirmButtonText: 'Print and Save',
+          denyButtonText: 'Save and Print Later',
+          cancelButtonText: 'Cancel',
+          reverseButtons: true
+        }).then(function(result){
+          if (result && result.isConfirmed) {
+            $form.data('printPreference', 'now');
+            $form.trigger('submit');
+          } else if (result && result.isDenied) {
+            $form.data('printPreference', 'later');
+            $form.trigger('submit');
+          } else {
+            $form.removeData('printPreference');
+          }
+        });
+      }
       return;
     }
 
-    if (window.confirm('Select OK to print after saving, or Cancel to stop.')) {
+    if (window.confirm('Select OK to print and save, or Cancel to go back.')) {
       $form.data('printPreference', 'now');
       $form.trigger('submit');
     } else {
@@ -8802,7 +9644,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     return;
   }
 
-  var shouldPrintAfterSave = (formCondition === 'NEW' && hasPrintableCategory && printPreference === 'now');
+  var shouldPrintAfterSave = (canPromptPrintChoice && printPreference === 'now');
   var $btn = $('#addItemSubmitBtn');
   if($btn.data('submitting')){ return; }
   $btn.data('submitting', true);
@@ -8889,43 +9731,72 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
   // This guarantees the backend receives bundle_* arrays even if the bundle UI
   // container is rendered outside the <form> subtree by the browser.
   var bundleRows = $('#bundleRows .bundle-row');
-  var selectedFund = String($('#fund').val() || '').trim().toUpperCase();
   var isPropertyNumberOptionalFund = selectedFund === 'TRUST FUND' || selectedFund === 'DONATION';
   if(bundleRows.length){
+    fd.delete('bundle_parent_index[]');
+    fd.delete('bundle_category[]');
+    fd.delete('bundle_unit[]');
+    fd.delete('bundle_asset_class[]');
+    fd.delete('bundle_brand_model[]');
+    fd.delete('bundle_description[]');
+    fd.delete('bundle_serial1[]');
+    fd.delete('bundle_serial2[]');
+    fd.delete('bundle_property_number[]');
+
     var bundleMissing = [];
-    bundleRows.each(function(i){
-      var $r = $(this);
-      var parentIdx = String($r.find('select[name="bundle_parent_index[]"]').val() || '').trim();
-      var cat = String($r.find('select[name="bundle_category[]"]').val() || '').trim();
-      var asset = String($r.find('select[name="bundle_asset_class[]"]').val() || '').trim();
-      var model = String($r.find('input[name="bundle_brand_model[]"]').val() || '').trim();
-      var desc = String($r.find('textarea[name="bundle_description[]"]').val() || '').trim();
-      var s1 = String($r.find('input[name="bundle_serial1[]"]').val() || '').trim();
-      var s2 = String($r.find('input[name="bundle_serial2[]"]').val() || '').trim();
-      var par = String($r.find('input[name="bundle_property_number[]"]').val() || '').trim();
+    bundleRows.each(function(groupIndex){
+      var $group = $(this);
+      var parentIdx = String($group.find('.js-bundle-parent-index').val() || '').trim();
+      var cat = String($group.find('.js-bundle-category').val() || '').trim();
+      var unit = String($group.find('.js-bundle-unit').val() || '').trim();
+      var asset = String($group.find('.js-bundle-asset').val() || '').trim();
+      var model = String($group.find('.js-bundle-brand-model').val() || '').trim();
+      var desc = String($group.find('.js-bundle-description').val() || '').trim();
+      var groupRows = $group.find('.bundle-copy-row');
+      var groupLabel = groupIndex + 1;
+      var hasAny = (parentIdx || cat || unit || asset || model || desc || groupRows.length);
 
-      // Append values in the expected PHP array keys
-  fd.append('bundle_parent_index[]', parentIdx);
-      fd.append('bundle_category[]', cat);
-      fd.append('bundle_asset_class[]', asset);
-      fd.append('bundle_brand_model[]', model);
-      fd.append('bundle_description[]', desc);
-      fd.append('bundle_serial1[]', s1);
-      fd.append('bundle_serial2[]', s2);
-      fd.append('bundle_property_number[]', par);
+      if(!hasAny){
+        return;
+      }
 
-      // Basic validation: if a row exists, require at least category/asset/property number
-      var rowNum = i + 1;
-      var hasAny = (parentIdx || cat || asset || model || desc || s1 || s2 || par);
-      if(hasAny && (!parentIdx || !cat || !asset || (!isPropertyNumberOptionalFund && !par))){
-        bundleMissing.push(rowNum);
+      if(!parentIdx || !cat || !unit || !asset || !groupRows.length){
+        bundleMissing.push('Bundle ' + groupLabel);
+        return;
+      }
+
+      var rowHasMissing = false;
+      groupRows.each(function(){
+        var $copy = $(this);
+        var s1 = String($copy.find('.js-bundle-serial1').val() || '').trim();
+        var s2 = String($copy.find('.js-bundle-serial2').val() || '').trim();
+        var par = String($copy.find('.js-bundle-property-number').val() || '').trim();
+
+        if(!isPropertyNumberOptionalFund && !par){
+          rowHasMissing = true;
+          return false;
+        }
+
+        fd.append('bundle_parent_index[]', parentIdx);
+        fd.append('bundle_category[]', cat);
+        fd.append('bundle_unit[]', unit);
+        fd.append('bundle_asset_class[]', asset);
+        fd.append('bundle_brand_model[]', model);
+        fd.append('bundle_description[]', desc);
+        fd.append('bundle_serial1[]', s1);
+        fd.append('bundle_serial2[]', s2);
+        fd.append('bundle_property_number[]', par);
+      });
+
+      if(rowHasMissing){
+        bundleMissing.push('Bundle ' + groupLabel);
       }
     });
 
     if(bundleMissing.length){
       var bundleMessage = isPropertyNumberOptionalFund
-        ? 'Bundle equipment requires Bundle Set, Category, and Asset Class for row(s): '
-        : 'Bundle equipment requires Bundle Set, Category, Asset Class, and Property Number for row(s): ';
+        ? 'Bundle equipment requires Bundle Set, Category, Unit, Asset Class, and generated unit rows for: '
+        : 'Bundle equipment requires Bundle Set, Category, Unit, Asset Class, and Property Number for: ';
       Swal.fire({ icon:'warning', title:'Validation error', text: bundleMessage + bundleMissing.join(', ') + '.' });
       $form.removeData('printPreference');
       $btn.data('submitting', false);
@@ -8955,7 +9826,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
         // Print only when the backend explicitly requests it (NEW purchases).
         try {
           var data = (res && res.data) ? res.data : null;
-          if(shouldPrintAfterSave && data && data.should_print && String(data.condition || '').toUpperCase() === 'NEW'){
+          if(shouldPrintAfterSave && data && data.should_print){
             var parRefs = Array.isArray(data.par_refs) ? data.par_refs : [];
             var icsRefs = Array.isArray(data.ics_refs) ? data.ics_refs : [];
 
@@ -11936,6 +12807,483 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
       if (window.GSO && window.GSO.MotorVehicleStatistics) { window.GSO.MotorVehicleStatistics.init(); }
     } catch (e) {}
   });
+
+$(function(){
+  var $page = $('#fundInventoryPage');
+  var $tableEl = $('#FundInventoryTable');
+
+  if (!$page.length || !$tableEl.length) {
+    return;
+  }
+
+  function escHtml(text) {
+    if (text === null || text === undefined) return '';
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function cleanExportValue(value) {
+    return $('<div>').html(value == null ? '' : value).text().trim();
+  }
+
+  function hasNoSerial(value) {
+    var serial = cleanExportValue(value).toUpperCase();
+    return serial === '' || serial === 'NULL' || serial === 'N/A' || serial === 'NA' || serial === 'NONE';
+  }
+
+  function displayUnit(value) {
+    var unit = cleanExportValue(value);
+    return unit !== '' ? unit : 'pcs';
+  }
+
+  function summarizeExcelInventoryRows(exportData) {
+    var grouped = {};
+    var output = [];
+
+    exportData.header.splice(3, 0, 'QTY');
+
+    exportData.body.forEach(function(row) {
+      var item = cleanExportValue(row[0]);
+      var model = cleanExportValue(row[1]);
+      var description = cleanExportValue(row[2]);
+      var unit = displayUnit(row[3]);
+      var serialPrimary = cleanExportValue(row[4]);
+      var serialSecondary = cleanExportValue(row[5]);
+      var propertyNumber = cleanExportValue(row[6]);
+      var yearAcquired = cleanExportValue(row[7]);
+      var endUser = cleanExportValue(row[8]);
+
+      if (!hasNoSerial(serialPrimary) || !hasNoSerial(serialSecondary)) {
+        output.push([item, model, description, 1, unit, serialPrimary, serialSecondary, propertyNumber, yearAcquired, endUser]);
+        return;
+      }
+
+      var key = [item, model, description, unit, yearAcquired, endUser].join('|').toUpperCase();
+      if (!grouped[key]) {
+        grouped[key] = [item, model, description, 0, unit, '', '', '', yearAcquired, endUser];
+        output.push(grouped[key]);
+      }
+
+      grouped[key][3] += 1;
+      grouped[key][7] = grouped[key][7] ? grouped[key][7] + '\n' + propertyNumber : propertyNumber;
+    });
+
+    exportData.body = output;
+  }
+
+  var fundKey = String($page.data('fund-key') || '').trim().toLowerCase();
+  var selectedAssetClass = '';
+  var selectedEndUser = '';
+  var selectedParIcs = '';
+  var selectedFundRows = {};
+
+  function getSelectedFundRows() {
+    return Object.keys(selectedFundRows).map(function(key) {
+      return selectedFundRows[key];
+    });
+  }
+
+  function syncFundSelectionUI() {
+    var $rows = $('#FundInventoryTable tbody input.row-select');
+    var totalRows = 0;
+    var checkedRows = 0;
+
+    $rows.each(function() {
+      var id = String($(this).data('fund-id') || '').trim();
+      if (!id) return;
+      totalRows += 1;
+      var isChecked = !!selectedFundRows[id];
+      $(this).prop('checked', isChecked);
+      if (isChecked) checkedRows += 1;
+    });
+
+    $('#selectAllFundInventory')
+      .prop('checked', totalRows > 0 && checkedRows === totalRows)
+      .prop('indeterminate', checkedRows > 0 && checkedRows < totalRows);
+
+    $('#bulkFundTransferBtn').prop('disabled', getSelectedFundRows().length === 0);
+  }
+
+  function hasFocusedExportFilter(dt) {
+    return (selectedAssetClass || '').trim() !== '' ||
+      (selectedEndUser || '').trim() !== '' ||
+      (selectedParIcs || '').trim() !== '' ||
+      (dt.search() || '').trim() !== '';
+  }
+
+  function withAllRows(dt, callback) {
+    if (!hasFocusedExportFilter(dt)) {
+      callback();
+      return;
+    }
+
+    var previousLength = dt.page.len();
+    if (previousLength === -1) {
+      callback();
+      return;
+    }
+
+    dt.one('draw', function() {
+      callback();
+      setTimeout(function() {
+        try { dt.page.len(previousLength).draw(false); } catch (_) {}
+      }, 400);
+    });
+
+    dt.page.len(-1).draw();
+  }
+
+  var table = $tableEl.DataTable({
+    responsive: true,
+    lengthChange: true,
+    pageLength: 25,
+    lengthMenu: [[10, 25, 50, 100, 500, 1500], [10, 25, 50, 100, 500, 1500]],
+    autoWidth: false,
+    stateSave: false,
+    dom: "<'row'<'col-sm-12 col-md-8'Bl><'col-sm-12 col-md-4'f>>" +
+         "<'row'<'col-sm-12'tr>>" +
+         "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
+    processing: true,
+    serverSide: true,
+    deferRender: true,
+    ajax: {
+      url: '../auth/fetch_fund_inventory_dataTable.php',
+      type: 'POST',
+      data: function(d) {
+        d.fund = fundKey;
+        d.asset_class = selectedAssetClass;
+        d.end_user = selectedEndUser;
+        d.par_ics = selectedParIcs;
+      }
+    },
+    columns: [
+      {
+        data: 'fund_id',
+        orderable: false,
+        searchable: false,
+        className: 'text-center align-middle select-checkbox-column',
+        render: function(data, type, row) {
+          var fundId = escHtml(data || '');
+          var propertyNumber = escHtml(row.par_number || '');
+          return '<input type="checkbox" class="row-select"' +
+            ' value="' + propertyNumber + '"' +
+            ' data-fund-id="' + fundId + '"' +
+            ' data-item="' + escHtml(row.item || '') + '"' +
+            ' data-user="' + escHtml(row.emp_name || '') + '"' +
+            ' data-cat="' + escHtml(row.category || '') + '"' +
+            ' data-property-number="' + propertyNumber + '"' +
+            ' data-dept-id="' + escHtml(row.current_dept_id || '') + '"' +
+            ' data-dept-name="' + escHtml(row.current_dept_name || '') + '"' +
+            ' aria-label="Select property ' + propertyNumber + '">';
+        }
+      },
+      { data: 'item', render: function(data) { return escHtml(data); } },
+      { data: null, render: function(data, type, row) { return escHtml((row.model || '') + ' - ' + (row.description || '')); } },
+      { data: 'serial_number', render: function(data) { return data ? escHtml(data) : "<span class='text-dark'>NULL</span>"; } },
+      { data: 'serial_number_2', render: function(data) { return data ? escHtml(data) : "<span class='text-dark'>NULL</span>"; } },
+      { data: 'par_number', render: function(data) { return data ? escHtml(data) : "<span class='text-dark'>NULL</span>"; } },
+      { data: 'emp_name', render: function(data) { return escHtml(data); } },
+      { data: 'model', visible: false, render: function(data) { return escHtml(data); } },
+      { data: 'description', visible: false, render: function(data) { return escHtml(data); } },
+      { data: 'date_aquired', visible: false, render: function(data) { return escHtml(data); } },
+      { data: 'unit', visible: false, render: function(data) { return escHtml(data); } }
+    ],
+    columnDefs: [
+      { targets: 0, orderable: false, searchable: false, className: 'select-checkbox-column' },
+      { targets: [7, 8, 9, 10], visible: false, searchable: false }
+    ],
+    order: [[1, 'asc']],
+    buttons: [
+      {
+        extend: 'excel',
+        orientation: 'landscape',
+        pageSize: 'LEGAL',
+        title: function() { return $('#reportTitle').text() || 'Inventory Report'; },
+        exportOptions: {
+          columns: [1, 7, 8, 10, 3, 4, 5, 9, 6],
+          format: {
+            header: function(data, columnIdx) {
+              var headers = {
+                1: 'ITEM',
+                7: 'MODEL',
+                8: 'DESCRIPTION',
+                10: 'UNIT',
+                3: 'SERIAL NUMBER PRIMARY',
+                4: 'SERIAL NUMBER SECONDARY',
+                5: 'PROPERTY NUMBER',
+                9: 'YEAR ACQUIRED',
+                6: 'END USER'
+              };
+              return headers[columnIdx] || data;
+            },
+            body: function(data) { return $('<div>').html(data).text(); }
+          },
+          customizeData: summarizeExcelInventoryRows
+        },
+        action: function(e, dt, button, config) {
+          var self = this;
+          withAllRows(dt, function() {
+            var buttonsExt = $.fn && $.fn.dataTable && $.fn.dataTable.ext && $.fn.dataTable.ext.buttons;
+            if (!buttonsExt) return;
+            var act = (buttonsExt.excel && buttonsExt.excel.action) ? buttonsExt.excel.action : null;
+            if (!act && buttonsExt.excelHtml5 && buttonsExt.excelHtml5.action) act = buttonsExt.excelHtml5.action;
+            if (act) act.call(self, e, dt, button, config);
+          });
+        }
+      },
+      {
+        extend: 'print',
+        orientation: 'landscape',
+        pageSize: 'LEGAL',
+        title: function() { return $('#reportTitle').text() || 'Inventory Report'; },
+        exportOptions: { columns: ':visible:not(.select-checkbox-column)' },
+        action: function(e, dt, button, config) {
+          var self = this;
+          withAllRows(dt, function() {
+            if ($.fn && $.fn.dataTable && $.fn.dataTable.ext && $.fn.dataTable.ext.buttons && $.fn.dataTable.ext.buttons.print && $.fn.dataTable.ext.buttons.print.action) {
+              $.fn.dataTable.ext.buttons.print.action.call(self, e, dt, button, config);
+            }
+          });
+        }
+      },
+      {
+        text: 'Transfer to Records',
+        className: 'btn btn-secondary',
+        attr: { id: 'bulkFundTransferBtn', disabled: true },
+        action: function() {
+          var selectedRows = getSelectedFundRows();
+          if (!selectedRows.length) {
+            if (window.Swal && Swal.fire) {
+              Swal.fire({ icon: 'warning', title: 'Please select at least one item.' });
+            } else {
+              alert('Please select at least one item.');
+            }
+            return;
+          }
+
+          var missingDeptRows = selectedRows.filter(function(row) {
+            return !String(row.current_dept_id || '').trim();
+          });
+          if (missingDeptRows.length) {
+            var preview = missingDeptRows.slice(0, 5).map(function(row) {
+              return String(row.par_number || row.fund_id || '').trim();
+            }).filter(Boolean).join(', ');
+            var message = 'Some selected items do not have a department assigned.';
+            if (preview) {
+              message += ' Affected: ' + preview;
+            }
+            if (window.Swal && Swal.fire) {
+              Swal.fire({ icon: 'error', title: message });
+            } else {
+              alert(message);
+            }
+            return;
+          }
+
+          function doTransfer() {
+            var $btn = $('#bulkFundTransferBtn');
+            $btn.prop('disabled', true).addClass('disabled');
+
+            $.ajax({
+              url: '../auth/auth.php',
+              type: 'POST',
+              dataType: 'json',
+              data: {
+                bulkTransferFundInventory: 1,
+                fund_bulk: fundKey,
+                selected_fund_ids: JSON.stringify(selectedRows.map(function(row) { return row.fund_id; }))
+              },
+              success: function(res) {
+                if (!(res && res.status == 200)) {
+                  toastr.error(res && res.message ? res.message : 'Transfer failed');
+                  return;
+                }
+
+                if (window.Swal && Swal.fire) {
+                  Swal.fire({ icon: 'success', title: res.message || 'Transferred to records successfully.' });
+                }
+
+                selectedFundRows = {};
+                $('#selectAllFundInventory').prop('checked', false).prop('indeterminate', false);
+                $('#bulkFundTransferBtn').prop('disabled', true);
+                table.ajax.reload(null, false);
+                populateFiltersAllRecords();
+              },
+              error: function() {
+                toastr.error('Server error performing transfer');
+              },
+              complete: function() {
+                syncFundSelectionUI();
+                $btn.removeClass('disabled');
+              }
+            });
+          }
+
+          if (window.Swal && Swal.fire) {
+            Swal.fire({
+              icon: 'question',
+              title: 'Transfer selected items to records?',
+              text: 'This will move the selected items into their assigned department records.',
+              showCancelButton: true,
+              confirmButtonText: 'Yes, transfer',
+              cancelButtonText: 'Cancel'
+            }).then(function(result) {
+              if (result && result.isConfirmed) {
+                doTransfer();
+              } else {
+                syncFundSelectionUI();
+              }
+            });
+          } else if (confirm('Transfer selected items to records?')) {
+            doTransfer();
+          }
+        }
+      },
+      {
+        extend: 'pdfHtml5',
+        orientation: 'landscape',
+        pageSize: 'LEGAL',
+        title: 'INVENTORY REPORT',
+        exportOptions: { columns: ':visible:not(.select-checkbox-column)' },
+        action: function(e, dt, button, config) {
+          var self = this;
+          withAllRows(dt, function() {
+            if ($.fn && $.fn.dataTable && $.fn.dataTable.ext && $.fn.dataTable.ext.buttons && $.fn.dataTable.ext.buttons.pdfHtml5 && $.fn.dataTable.ext.buttons.pdfHtml5.action) {
+              $.fn.dataTable.ext.buttons.pdfHtml5.action.call(self, e, dt, button, config);
+            }
+          });
+        }
+      }
+    ]
+  });
+
+  if (table.buttons && typeof table.buttons === 'function') {
+    table.buttons().container().appendTo('#FundInventoryTable_wrapper .col-md-8:eq(0)');
+  }
+
+  var assetClassSelect = $('<select id="assetClassSelect" class="form-control form-control-sm ml-3" style="min-width:160px; max-width:290px; width:auto; display:inline-block;"><option value="">ALL ASSET CLASS</option></select>');
+  var endUserSelect = $('<select id="endUserSelect" class="form-control form-control-sm ml-3" style="min-width:160px; max-width:290px; width:auto; display:inline-block;"><option value="">ALL END USER</option></select>');
+  var parIcsSelect = $('<select id="parIcsSelect" class="form-control form-control-sm ml-3" style="min-width:120px; max-width:160px; width:auto; display:inline-block;"><option value="">ALL PAR/ICS</option><option value="PAR">PAR</option><option value="ICS">ICS</option></select>');
+
+  function populateFiltersAllRecords() {
+    assetClassSelect.find('option:not(:first)').remove();
+    endUserSelect.find('option:not(:first)').remove();
+    assetClassSelect.append('<option value="" disabled>Loading...</option>');
+    endUserSelect.append('<option value="" disabled>Loading...</option>');
+
+    $.ajax({
+      url: '../auth/fetch_fund_inventory_filters.php',
+      type: 'POST',
+      dataType: 'json',
+      data: { fund: fundKey },
+      success: function(resp) {
+        assetClassSelect.find('option:not(:first)').remove();
+        endUserSelect.find('option:not(:first)').remove();
+
+        ((resp && Array.isArray(resp.asset_classes)) ? resp.asset_classes : []).forEach(function(value) {
+          var safe = $('<div>').text(value).html();
+          assetClassSelect.append('<option value="' + safe + '">' + safe + '</option>');
+        });
+        ((resp && Array.isArray(resp.end_users)) ? resp.end_users : []).forEach(function(value) {
+          var safe = $('<div>').text(value).html();
+          endUserSelect.append('<option value="' + safe + '">' + safe + '</option>');
+        });
+
+        assetClassSelect.val(selectedAssetClass);
+        endUserSelect.val(selectedEndUser);
+      }
+    });
+  }
+
+  assetClassSelect.on('change', function() {
+    selectedAssetClass = $(this).val() || '';
+    table.ajax.reload(null, true);
+  });
+
+  endUserSelect.on('change', function() {
+    selectedEndUser = $(this).val() || '';
+    table.ajax.reload(null, true);
+  });
+
+  parIcsSelect.on('change', function() {
+    selectedParIcs = ($(this).val() || '').toUpperCase();
+    table.ajax.reload(null, true);
+  });
+
+  table.one('draw', populateFiltersAllRecords);
+  table.on('draw', syncFundSelectionUI);
+
+  $(document).on('change', '#selectAllFundInventory', function() {
+    var checked = this.checked;
+
+    $('#FundInventoryTable tbody input.row-select').each(function() {
+      var id = String($(this).data('fund-id') || '').trim();
+      if (!id) return;
+
+      if (checked) {
+        selectedFundRows[id] = {
+          fund_id: id,
+          par_number: $(this).data('property-number') || '',
+          item: $(this).data('item') || '',
+          emp_name: $(this).data('user') || '',
+          category: $(this).data('cat') || '',
+          current_dept_id: $(this).data('dept-id') || '',
+          current_dept_name: $(this).data('dept-name') || ''
+        };
+      } else {
+        delete selectedFundRows[id];
+      }
+    });
+
+    syncFundSelectionUI();
+  });
+
+  $(document).on('change.fundSelectSync', '#FundInventoryTable tbody input.row-select', function() {
+    var id = String($(this).data('fund-id') || '').trim();
+    if (!id) return;
+
+    if (this.checked) {
+      selectedFundRows[id] = {
+        fund_id: id,
+        par_number: $(this).data('property-number') || '',
+        item: $(this).data('item') || '',
+        emp_name: $(this).data('user') || '',
+        category: $(this).data('cat') || '',
+        current_dept_id: $(this).data('dept-id') || '',
+        current_dept_name: $(this).data('dept-name') || ''
+      };
+    } else {
+      delete selectedFundRows[id];
+    }
+
+    syncFundSelectionUI();
+  });
+
+  setTimeout(function() {
+    var left = $('#FundInventoryTable_wrapper .col-md-8:eq(0)');
+    var dtButtons = (table.buttons && typeof table.buttons === 'function') ? $(table.buttons().container()) : left.find('.dt-buttons');
+    var dtLength = left.find('.dataTables_length');
+    var flexDiv = $('<div class="dt-toolbar-flex"></div>');
+
+    flexDiv.append(dtButtons);
+    flexDiv.append(dtLength);
+    flexDiv.append(parIcsSelect);
+    flexDiv.append(assetClassSelect);
+    flexDiv.append(endUserSelect);
+    left.children().not('.dt-toolbar-flex').remove();
+    left.append(flexDiv);
+
+    flexDiv.css({ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'nowrap', width: '100%', overflowX: 'auto', whiteSpace: 'nowrap', minHeight: '42px' });
+    dtButtons.css({ display: 'flex', flexWrap: 'nowrap', gap: '6px', alignItems: 'center', marginBottom: 0 });
+    dtLength.css({ display: 'flex', alignItems: 'center', marginBottom: 0 });
+    dtLength.find('label').css({ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: 0, whiteSpace: 'nowrap' });
+  }, 0);
+
+});
 
 // Global init
 $(function(){

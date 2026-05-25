@@ -825,6 +825,26 @@ if(!isset($_SESSION['alogin'])){
                 </div>
               </div>
             </div>
+
+            <div class="row add-item-section">
+              <div class="col-12">
+                <div class="card gso-card mb-0">
+                  <div class="card-header border-0">
+                    <div class="d-flex justify-content-between align-items-center">
+                      <h3 class="card-title mb-0"><i class="fas fa-layer-group"></i>&nbsp; Bundle Equipment</h3>
+                      <button type="button" class="btn btn-sm btn-success" id="editNpAddBundleRow" title="Add bundle equipment">
+                        <i class="fas fa-plus"></i>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="card-body pt-2">
+                    <div id="editNpBundleRows">
+                      <div class="text-center text-muted py-4">No bundle equipment found.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="modal-footer border-0 pt-0">
             <button type="submit" class="btn btn-success" id="editNpDetailSaveBtn"><i class="fas fa-save"></i>&nbsp; Update</button>

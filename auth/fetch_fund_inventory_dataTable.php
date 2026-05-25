@@ -53,7 +53,8 @@ if (fund_dt_table_exists($conn, $historyTable)) {
 
 $fromSql = "FROM {$table} f
             {$historyJoin}
-            LEFT JOIN employee e ON e.emp_id = h.emp_id";
+            LEFT JOIN employee e ON e.emp_id = h.emp_id
+            LEFT JOIN department d ON d.department_code = h.dept_id";
 $whereParts = array('1 = 1');
 
 $colSearch = isset($_POST['columns']) && is_array($_POST['columns']) ? $_POST['columns'] : array();
@@ -147,16 +148,19 @@ $length = isset($_POST['length']) ? (int)$_POST['length'] : 10;
 $limitSql = $length !== -1 ? ' LIMIT ' . $start . ',' . max(0, $length) : '';
 
 $dataSql = "SELECT
+                f.id AS fund_id,
                 f.item,
                 f.model,
                 f.description,
                 f.serial_number,
                 f.serial_number_2,
-                f.property_number,
+                COALESCE(NULLIF(TRIM(f.property_number), ''), NULLIF(TRIM(h.par_number), ''), CONCAT('NPID:', f.id)) AS property_number,
                 f.unit,
                 f.date_aquired,
                 COALESCE(f.category, h.history_category, '') AS category,
-                COALESCE(e.emp_name, '') AS emp_name
+                COALESCE(e.emp_name, '') AS emp_name,
+                COALESCE(h.dept_id, '') AS current_dept_id,
+                COALESCE(d.department_name, '') AS current_dept_name
             {$fromSql}
             {$whereSql}
             {$orderSql}
@@ -167,6 +171,7 @@ $data = array();
 if ($runQuery) {
     while ($row = mysqli_fetch_assoc($runQuery)) {
         $data[] = array(
+            'fund_id' => $row['fund_id'],
             'item' => $row['item'],
             'model' => $row['model'],
             'description' => $row['description'],
@@ -177,6 +182,8 @@ if ($runQuery) {
             'date_aquired' => $row['date_aquired'],
             'category' => $row['category'],
             'emp_name' => $row['emp_name'],
+            'current_dept_id' => $row['current_dept_id'],
+            'current_dept_name' => $row['current_dept_name'],
         );
     }
 }
