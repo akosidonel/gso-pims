@@ -70,7 +70,7 @@ class PDF extends TCPDF
         $columnWidth = 82;
         $rightX = 110;
 
-        $this->SetY(-128);
+        $this->SetY(-118);
         $this->SetFont('helvetica', '', 11);
         $this->SetX($leftX);
         $this->Cell($columnWidth, 6, 'Verified by:', 0, 0, 'L');

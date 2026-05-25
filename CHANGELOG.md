@@ -6,7 +6,7 @@ This file is generated from git history by `php tools/release.php`.
 
 ### Changed
 - Change the color style of change log to green
-- Updated internal project files (3 times)
+- Updated internal project files (4 times)
 - Specific set of items can now be deleted in edit item or equipment modal
 
 ### Fixed
