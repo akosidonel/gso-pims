@@ -6,12 +6,84 @@ const PIMS_RELEASE_INITIAL_MINOR = 0;
 const PIMS_RELEASE_INITIAL_PATCH = 0;
 const PIMS_RELEASE_ROOT = __DIR__ . '/..';
 
+function pims_release_git_binary(): string {
+  $candidates = [
+    '/usr/bin/git',
+    '/opt/homebrew/bin/git',
+    '/usr/local/bin/git',
+  ];
+
+  foreach ($candidates as $candidate) {
+    if (is_executable($candidate)) {
+      return $candidate;
+    }
+  }
+
+  return 'git';
+}
+
 function pims_release_git_available(): bool {
-  return trim((string) @shell_exec('git -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' rev-parse --is-inside-work-tree 2>/dev/null')) === 'true';
+  $command = escapeshellarg(pims_release_git_binary()) . ' -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' rev-parse --is-inside-work-tree 2>/dev/null';
+  return trim((string) @shell_exec($command)) === 'true';
 }
 
 function pims_release_git(string $command): string {
-  return trim((string) @shell_exec('git -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' ' . $command . ' 2>/dev/null'));
+  $binary = escapeshellarg(pims_release_git_binary());
+  return trim((string) @shell_exec($binary . ' -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' ' . $command . ' 2>/dev/null'));
+}
+
+function pims_release_commit_log_format(): string {
+  return '--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad%x1f%at --date=iso-strict';
+}
+
+function pims_release_relative_time(?int $timestamp): string {
+  $timestamp = (int) $timestamp;
+  if ($timestamp <= 0) {
+    return 'Unknown time';
+  }
+
+  $diff = time() - $timestamp;
+  if ($diff <= 0) {
+    return 'Just now';
+  }
+
+  if ($diff < 60) {
+    return $diff . 's ago';
+  }
+
+  if ($diff < 3600) {
+    return floor($diff / 60) . 'm ago';
+  }
+
+  if ($diff < 86400) {
+    return floor($diff / 3600) . 'h ago';
+  }
+
+  if ($diff < 604800) {
+    return floor($diff / 86400) . 'd ago';
+  }
+
+  return date('M j, Y g:i A', $timestamp);
+}
+
+function pims_release_parse_commit_line(string $line): ?array {
+  $parts = explode("\x1f", trim($line));
+  if (count($parts) !== 6) {
+    return null;
+  }
+
+  $timestamp = (int) trim($parts[5]);
+
+  return [
+    'hash' => trim($parts[0]),
+    'short_hash' => trim($parts[1]),
+    'subject' => pims_release_pretty_subject($parts[2]),
+    'raw_subject' => trim($parts[2]),
+    'author' => trim($parts[3]),
+    'committed_at' => trim($parts[4]),
+    'committed_timestamp' => $timestamp,
+    'committed_ago' => pims_release_relative_time($timestamp),
+  ];
 }
 
 function pims_release_parse_tag(?string $tag): ?array {
@@ -83,7 +155,7 @@ function pims_release_commit_subjects(?string $tag): array {
 
 function pims_release_commits(?string $tag): array {
   $range = $tag ? escapeshellarg($tag . '..HEAD') : 'HEAD';
-  $output = pims_release_git('log --reverse --pretty=format:%H%x1f%h%x1f%s ' . $range);
+  $output = pims_release_git('log --reverse ' . pims_release_commit_log_format() . ' ' . $range);
 
   if ($output === '') {
     return [];
@@ -91,17 +163,10 @@ function pims_release_commits(?string $tag): array {
 
   $commits = [];
   foreach (explode("\n", $output) as $line) {
-    $parts = explode("\x1f", $line);
-    if (count($parts) !== 3) {
-      continue;
+    $commit = pims_release_parse_commit_line($line);
+    if ($commit) {
+      $commits[] = $commit;
     }
-
-    $commits[] = [
-      'hash' => trim($parts[0]),
-      'short_hash' => trim($parts[1]),
-      'subject' => pims_release_pretty_subject($parts[2]),
-      'raw_subject' => trim($parts[2]),
-    ];
   }
 
   return $commits;
@@ -114,7 +179,7 @@ function pims_release_commits_between(?string $fromTag, string $toTag): array {
     $range = escapeshellarg($toTag);
   }
 
-  $output = pims_release_git('log --reverse --pretty=format:%H%x1f%h%x1f%s ' . $range);
+  $output = pims_release_git('log --reverse ' . pims_release_commit_log_format() . ' ' . $range);
 
   if ($output === '') {
     return [];
@@ -122,17 +187,29 @@ function pims_release_commits_between(?string $fromTag, string $toTag): array {
 
   $commits = [];
   foreach (explode("\n", $output) as $line) {
-    $parts = explode("\x1f", $line);
-    if (count($parts) !== 3) {
-      continue;
+    $commit = pims_release_parse_commit_line($line);
+    if ($commit) {
+      $commits[] = $commit;
     }
+  }
 
-    $commits[] = [
-      'hash' => trim($parts[0]),
-      'short_hash' => trim($parts[1]),
-      'subject' => pims_release_pretty_subject($parts[2]),
-      'raw_subject' => trim($parts[2]),
-    ];
+  return $commits;
+}
+
+function pims_release_recent_commits(int $limit = 12): array {
+  $limit = max(1, (int) $limit);
+  $output = pims_release_git('log -n ' . $limit . ' ' . pims_release_commit_log_format() . ' HEAD');
+
+  if ($output === '') {
+    return [];
+  }
+
+  $commits = [];
+  foreach (explode("\n", $output) as $line) {
+    $commit = pims_release_parse_commit_line($line);
+    if ($commit) {
+      $commits[] = $commit;
+    }
   }
 
   return $commits;
@@ -286,6 +363,35 @@ function pims_release_changelog_path(): string {
   return dirname(__DIR__) . DIRECTORY_SEPARATOR . 'CHANGELOG.md';
 }
 
+function pims_release_changelog_baseline_path(): string {
+  return __DIR__ . '/changelog_baseline.json';
+}
+
+function pims_release_load_changelog_baseline(): ?array {
+  $path = pims_release_changelog_baseline_path();
+  if (!is_readable($path)) {
+    return null;
+  }
+
+  $decoded = json_decode((string) file_get_contents($path), true);
+  if (!is_array($decoded)) {
+    return null;
+  }
+
+  $hash = trim((string) ($decoded['hash'] ?? ''));
+  $version = trim((string) ($decoded['version'] ?? ''));
+  if ($hash === '' || $version === '') {
+    return null;
+  }
+
+  return [
+    'hash' => $hash,
+    'version' => $version,
+    'date' => trim((string) ($decoded['date'] ?? '')),
+    'created_at' => trim((string) ($decoded['created_at'] ?? '')),
+  ];
+}
+
 function pims_release_changelog_template(): string {
   return implode(PHP_EOL, [
     '# Changelog',
@@ -403,26 +509,32 @@ function pims_release_parse_changelog(?string $path = null): array {
 }
 
 function pims_release_pending_summary(): array {
+  $baseline = pims_release_load_changelog_baseline();
+
   if (!pims_release_git_available()) {
     return [
       'latest_tag' => null,
       'commits' => [],
       'bump' => 'patch',
       'next_tag' => pims_release_format_tag(pims_release_initial_version()),
+      'baseline' => $baseline,
     ];
   }
 
   $latestTag = pims_release_latest_tag();
-  $commits = pims_release_commits($latestTag);
+  $baseRef = $baseline['hash'] ?? $latestTag;
+  $commits = pims_release_commits($baseRef);
   $subjects = array_column($commits, 'raw_subject');
   $bump = pims_release_detect_bump($subjects);
-  $nextVersion = pims_release_next_version($latestTag, $bump);
+  $versionBaseTag = $baseline ? ('v' . $baseline['version']) : $latestTag;
+  $nextVersion = pims_release_next_version($versionBaseTag, $bump);
 
   return [
-    'latest_tag' => $latestTag,
+    'latest_tag' => $baseline['version'] ?? $latestTag,
     'commits' => $commits,
     'bump' => $bump,
     'next_tag' => pims_release_format_tag($nextVersion),
+    'baseline' => $baseline,
   ];
 }
 
@@ -451,6 +563,7 @@ function pims_release_sync_changelog_snapshot(bool $writeToFile = true): array {
   $path = pims_release_changelog_path();
   $template = rtrim(pims_release_changelog_template());
   $pending = pims_release_pending_summary();
+  $baseline = $pending['baseline'] ?? null;
   $existingContent = is_readable($path) ? (string) file_get_contents($path) : '';
 
   if (!pims_release_git_available()) {
@@ -477,18 +590,20 @@ function pims_release_sync_changelog_snapshot(bool $writeToFile = true): array {
     );
   }
 
-  $tags = pims_release_all_tags();
   $releaseEntries = [];
-  $tagCount = count($tags);
-  for ($index = 0; $index < $tagCount; $index++) {
-    $tag = $tags[$index];
-    $previousTag = ($index + 1 < $tagCount) ? $tags[$index + 1] : null;
-    $commits = pims_release_commits_between($previousTag, $tag);
-    if (!$commits) {
-      continue;
-    }
+  if (!$baseline) {
+    $tags = pims_release_all_tags();
+    $tagCount = count($tags);
+    for ($index = 0; $index < $tagCount; $index++) {
+      $tag = $tags[$index];
+      $previousTag = ($index + 1 < $tagCount) ? $tags[$index + 1] : null;
+      $commits = pims_release_commits_between($previousTag, $tag);
+      if (!$commits) {
+        continue;
+      }
 
-    $releaseEntries[] = pims_release_render_entry($tag, pims_release_tag_date($tag), $commits);
+      $releaseEntries[] = pims_release_render_entry($tag, pims_release_tag_date($tag), $commits);
+    }
   }
 
   if ($releaseEntries) {

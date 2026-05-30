@@ -1020,7 +1020,10 @@ window.GSO.ClearanceStats = window.GSO.ClearanceStats || (function(){
 })();
 
 $(function(){ 
+  if (window.GSO_LIGHT_PAGE) { return; }
+
   function initTooltips(scope) {
+    if (!$.fn || typeof $.fn.tooltip !== 'function') { return; }
     var $scope = scope ? $(scope) : $(document);
     // Avoid duplicated tooltip instances on redraw
     $scope.find('[data-toggle="tooltip"]').tooltip('dispose').tooltip({
@@ -13470,10 +13473,181 @@ $(function(){
 
 });
 
+window.GSO.ChangeLogLive = window.GSO.ChangeLogLive || (function(){
+  var timer = null;
+  var endpoint = '../auth/auth.php';
+
+  function hasPage(){
+    return $('.gso-realtime-changelog[data-changelog-live="1"]').length > 0;
+  }
+
+  function escapeHtml(value){
+    return $('<div>').text(value == null ? '' : String(value)).html();
+  }
+
+  function renderVersionCard(version){
+    version = version || {};
+
+    $('#gsoChangeLogVersion').html(
+      '<div class="gso-live-cardhead">' +
+        '<h2 class="gso-live-cardtitle">Current Version</h2>' +
+      '</div>' +
+      '<div class="gso-live-version">' + escapeHtml(version.full || 'Unavailable') + '</div>'
+    );
+  }
+
+  function renderComments(items){
+    var commits = Array.isArray(items) ? items : [];
+    var html = '';
+
+    if (!commits.length) {
+      html = '<p class="gso-changelog-empty">No comments yet.</p>';
+    } else {
+      commits.forEach(function(commit){
+        html += '' +
+          '<article class="gso-simple-log-row">' +
+            '<div class="gso-simple-log-version">' + escapeHtml(commit.patch_version || 'Pending') + '</div>' +
+            '<div class="gso-simple-log-comment">' + escapeHtml(commit.subject || commit.raw_subject || 'Updated project files') + '</div>' +
+          '</article>';
+      });
+    }
+
+    $('#gsoChangeLogComments').html(html);
+  }
+
+  function renderPayload(data){
+    renderVersionCard(data.version || {});
+    renderComments(data.recent_comments || []);
+  }
+
+  function poll(){
+    $.ajax({
+      url: endpoint,
+      type: 'GET',
+      cache: false,
+      dataType: 'json',
+      data: { fetch_realtime_changelog: 1, _ts: Date.now() },
+      success: function(resp){
+        if (!(resp && resp.status === 200 && resp.data)) {
+          return;
+        }
+        renderPayload(resp.data);
+      }
+    });
+  }
+
+  function init(){
+    if (!hasPage() || timer) { return; }
+    poll();
+    timer = setInterval(function(){
+      if (!document.hidden) {
+        poll();
+      }
+    }, 10000);
+
+    document.addEventListener('visibilitychange', function(){
+      if (!document.hidden) {
+        poll();
+      }
+    });
+  }
+
+  return { init: init };
+})();
+
+window.GSO.LiveVersion = window.GSO.LiveVersion || (function(){
+  var timer = null;
+
+  function roots(){
+    return $('[data-live-version-root="1"]');
+  }
+
+  function hasRoot(){
+    return roots().length > 0;
+  }
+
+  function endpoint(){
+    var $root = roots().first();
+    var configured = $root.length ? String($root.data('versionEndpoint') || '').trim() : '';
+    if (configured && /^\/[^.].*\/auth\/auth\.php$/i.test(configured)) {
+      return configured;
+    }
+
+    var parts = String((window.location && window.location.pathname) || '').split('/').filter(Boolean);
+    if (!parts.length) {
+      return configured;
+    }
+
+    return '/' + parts[0] + '/auth/auth.php';
+  }
+
+  function apply(payload){
+    var data = payload || {};
+    roots().each(function(){
+      var $root = $(this);
+      $root.find('[data-version-name]').text(data.name || 'P.I.M.S');
+      $root.find('[data-version-full]').text(data.full || '0.0.0-local');
+
+      var meta = '';
+      if (data.source === 'env') {
+        meta = '(override)';
+      } else if (data.meta_label) {
+        meta = '(' + data.meta_label + ')';
+      }
+
+      var $meta = $root.find('[data-version-meta]');
+      if (!$meta.length) {
+        return;
+      }
+
+      if (meta) {
+        $meta.text(meta).removeClass('d-none');
+      } else {
+        $meta.text('').addClass('d-none');
+      }
+    });
+  }
+
+  function poll(){
+    var url = endpoint();
+    if (!url) { return; }
+
+    var query = url + (url.indexOf('?') === -1 ? '?' : '&') + 'fetch_live_version=1&_ts=' + Date.now();
+    window.fetch(query, { credentials: 'same-origin' })
+      .then(function(resp){ return resp.ok ? resp.json() : null; })
+      .then(function(resp){
+        if (resp && resp.status === 200 && resp.data) {
+          apply(resp.data);
+        }
+      })
+      .catch(function(){});
+  }
+
+  function init(){
+    if (!hasRoot() || timer) { return; }
+    poll();
+    timer = setInterval(function(){
+      if (!document.hidden) {
+        poll();
+      }
+    }, 5000);
+
+    document.addEventListener('visibilitychange', function(){
+      if (!document.hidden) {
+        poll();
+      }
+    });
+  }
+
+  return { init: init };
+})();
+
 // Global init
 $(function(){
   try {
-    if (window.GSO && window.GSO.SessionGuard) { window.GSO.SessionGuard.init(); }
-    if (window.GSO && window.GSO.AdminPresencePanel) { window.GSO.AdminPresencePanel.start(); }
+    if (window.currentUserRole && window.GSO && window.GSO.SessionGuard) { window.GSO.SessionGuard.init(); }
+    if (window.currentUserRole && window.GSO && window.GSO.AdminPresencePanel) { window.GSO.AdminPresencePanel.start(); }
+    if (window.GSO && window.GSO.ChangeLogLive) { window.GSO.ChangeLogLive.init(); }
+    if (window.GSO && window.GSO.LiveVersion) { window.GSO.LiveVersion.init(); }
   } catch (e) {}
 });

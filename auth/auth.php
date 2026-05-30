@@ -7,6 +7,7 @@ require_once __DIR__ . '/../include/getuser_ipaddress.php';
 require_once __DIR__ . '/../include/generate_par_ics_number.php';
 require_once __DIR__ . '/../include/generate_ptr_number.php';
 require_once __DIR__ . '/../include/generate_ref_number.php';
+require_once __DIR__ . '/../include/release.php';
 date_default_timezone_set('Asia/Manila');
 @extract($_REQUEST);
 // Helper utilities (restored)
@@ -138,6 +139,82 @@ if(!function_exists('gso_query_one')){
         if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
         return !empty($rows) ? $rows[0] : null;
     }
+}
+if(!function_exists('gso_release_version_payload')){
+    function gso_release_version_payload(){
+        $returnVersionArray = true;
+        $payload = require __DIR__ . '/../include/version.php';
+        return is_array($payload) ? $payload : [];
+    }
+}
+if(isset($_GET['fetch_live_version'])){
+    header('Content-Type: application/json');
+    echo json_encode([
+        'status' => 200,
+        'message' => 'OK',
+        'data' => gso_release_version_payload(),
+    ]);
+    return;
+}
+if(!function_exists('gso_realtime_changelog_payload')){
+    function gso_realtime_changelog_payload(){
+        $snapshot = pims_release_sync_changelog_snapshot(false);
+        $version = gso_release_version_payload();
+        $pending = $snapshot['pending'] ?? [];
+        $baseline = is_array($pending['baseline'] ?? null) ? $pending['baseline'] : null;
+        $pendingCommits = is_array($pending['commits'] ?? null) ? $pending['commits'] : [];
+        $recentCommits = array_reverse(array_slice($pendingCommits, -12));
+        $patchTimeline = pims_version_patch_timeline($baseline['version'] ?? $pending['latest_tag'] ?? null, $pendingCommits);
+        $patchVersionsByHash = [];
+
+        foreach ($patchTimeline as $item) {
+            $hash = trim((string) ($item['hash'] ?? ''));
+            if ($hash === '') {
+                continue;
+            }
+            $patchVersionsByHash[$hash] = (string) ($item['version'] ?? '');
+        }
+
+        foreach ($pendingCommits as $index => $commit) {
+            $hash = trim((string) ($commit['hash'] ?? ''));
+            $pendingCommits[$index]['patch_version'] = $patchVersionsByHash[$hash] ?? null;
+        }
+
+        foreach ($recentCommits as $index => $commit) {
+            $hash = trim((string) ($commit['hash'] ?? ''));
+            $recentCommits[$index]['patch_version'] = $patchVersionsByHash[$hash] ?? null;
+        }
+
+        $pending['commits'] = $pendingCommits;
+
+        return [
+            'version' => $version,
+            'pending' => $pending,
+            'entries' => $snapshot['entries'] ?? [],
+            'recent_comments' => $recentCommits,
+            'patch_timeline' => $pendingCommits,
+            'current_patch_version' => pims_version_current_live_patch_version($version),
+            'baseline' => $baseline,
+            'current_head' => $recentCommits[0]['hash'] ?? ($version['hash'] ?? null),
+            'updated_at' => date('c'),
+            'updated_label' => date('M j, Y g:i:s A'),
+        ];
+    }
+}
+if(isset($_GET['fetch_realtime_changelog'])){
+    header('Content-Type: application/json');
+
+    if (empty($_SESSION['alogin'])) {
+        echo json_encode(['status' => 401, 'message' => 'Unauthorized']);
+        return;
+    }
+
+    echo json_encode([
+        'status' => 200,
+        'message' => 'OK',
+        'data' => gso_realtime_changelog_payload(),
+    ]);
+    return;
 }
 if(!function_exists('gso_fetch_administrator_by_emp_number')){
     function gso_fetch_administrator_by_emp_number(mysqli $conn, $employeeNumber){

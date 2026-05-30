@@ -139,6 +139,17 @@ if(isset($_SESSION['alogin'])){
   </div>
 
   <script src="assets/plugins/sweetalert2/sweetalert2.min.js"></script><!--sweetalert-->
+  <script src="assets/plugins/jquery/jquery.min.js"></script><!-- jQuery -->
+  <script>
+    window.currentUserRole = "";
+    window.GSO_LIGHT_PAGE = true;
+  </script>
+  <?php
+    $__gsoLoginScriptPath = __DIR__ . '/assets/dist/js/script.js';
+    $__gsoLoginScriptVer = @filemtime($__gsoLoginScriptPath);
+    if (!$__gsoLoginScriptVer) { $__gsoLoginScriptVer = '20260205'; }
+  ?>
+  <script src="assets/dist/js/script.js?v=<?php echo urlencode((string)$__gsoLoginScriptVer); ?>"></script><!---Custom App-->
   <?php if (isset($_SESSION['error'])) {?>
 	  <script>
     Swal.fire({
