@@ -163,8 +163,10 @@ if(!function_exists('gso_realtime_changelog_payload')){
         $pending = $snapshot['pending'] ?? [];
         $baseline = is_array($pending['baseline'] ?? null) ? $pending['baseline'] : null;
         $pendingCommits = is_array($pending['commits'] ?? null) ? $pending['commits'] : [];
-        $recentCommits = array_reverse(array_slice($pendingCommits, -12));
-        $patchTimeline = pims_version_patch_timeline($baseline['version'] ?? $pending['latest_tag'] ?? null, $pendingCommits);
+        $gitLatestTag = pims_release_latest_tag();
+        $gitCommits = pims_release_commits($gitLatestTag);
+        $recentCommits = pims_release_recent_commits(12);
+        $patchTimeline = pims_version_patch_timeline($gitLatestTag ? ltrim($gitLatestTag, 'v') : null, $gitCommits);
         $patchVersionsByHash = [];
 
         foreach ($patchTimeline as $item) {
