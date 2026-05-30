@@ -1,11 +1,16 @@
 <?php 
 include_once('../config/session.php');
 include('../config/check_session.php');
+require_once('../auth/auth.php');
 
 if(!isset($_SESSION['alogin'])){
   header('Location:../index.php');
   exit();
+} elseif (!gso_user_has_role(['SYSTEM-ADMIN'])) {
+  header('Location:../index.php');
+  exit();
 }else {
+  $adminPanelToken = gso_issue_form_token('admin_panel');
 ?>
   <?php include('../include/header.php')?><!--Header-->
   
@@ -51,8 +56,9 @@ if(!isset($_SESSION['alogin'])){
                 <span aria-hidden="true">&times;</span>
               </button>
             </div>
-            <form class="form-horizontal" id="admin_form" method="POST" enctype="multipart/form-data">
-            <div class="modal-body">
+	            <form class="form-horizontal" id="admin_form" method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="admin_form_token" id="admin_form_token" value="<?= htmlspecialchars($adminPanelToken, ENT_QUOTES, 'UTF-8') ?>">
+	            <div class="modal-body">
 
               <div class="alert alert-warning d-none"></div>
 
@@ -125,8 +131,9 @@ if(!isset($_SESSION['alogin'])){
                 <span aria-hidden="true">&times;</span>
               </button>
             </div>
-            <form class="form-horizontal" id="admin_update" method="POST" enctype="multipart/form-data">
-            <div class="modal-body">
+	            <form class="form-horizontal" id="admin_update" method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="admin_form_token" value="<?= htmlspecialchars($adminPanelToken, ENT_QUOTES, 'UTF-8') ?>">
+	            <div class="modal-body">
                 <div class="card-body">
                 <input type="hidden" name="id" id="id" value="">
                   <div class="form-group row">
@@ -203,37 +210,11 @@ if(!isset($_SESSION['alogin'])){
                   </tr>
                 </thead>
               <tbody>
-                <?php  
-                $timeoutSeconds = 90;
-                $hasLastActivity = false;
-                $colRes = mysqli_query(
-                  $conn,
-                  "SELECT 1
-                   FROM information_schema.COLUMNS
-                   WHERE TABLE_SCHEMA = DATABASE()
-                     AND TABLE_NAME = 'administrator'
-                     AND COLUMN_NAME = 'last_activity'
-                   LIMIT 1"
-                );
-                if ($colRes && mysqli_num_rows($colRes) === 1) {
-                  $hasLastActivity = true;
-                }
-
-                if ($hasLastActivity) {
-                  $query = "SELECT *,
-                                   CASE
-                                     WHEN status = 1 AND last_activity >= DATE_SUB(NOW(), INTERVAL {$timeoutSeconds} SECOND)
-                                     THEN 1 ELSE 0
-                                   END AS is_online
-                            FROM administrator";
-                } else {
-                  // Legacy fallback (before last_activity migration)
-                  $query = "SELECT *, status AS is_online FROM administrator";
-                }
-
-                $results = mysqli_query($conn,$query);
-                if(mysqli_num_rows($results)){
-                  foreach($results as $row){ ?>
+	                <?php  
+	                $timeoutSeconds = 90;
+	                $results = gso_fetch_admin_panel_rows($conn, $timeoutSeconds);
+	                if(!empty($results)){
+	                  foreach($results as $row){ ?>
                         <tr>
                           <td><?=$row['first_name']." ".$row['last_name']?></td>
                           <td><?=$row['emp_number']?></td>

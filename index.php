@@ -11,17 +11,7 @@ ini_set('log_errors', 1);
 ini_set('error_log', __DIR__ . '/php-error.log');
 error_reporting(E_ALL);
 
-include('database/databaseConnection.php');
-include('include/getuser_ipaddress.php');
-
-function set_admin_online($conn, $adminId){
-  $adminIdSafe = mysqli_real_escape_string($conn, (string)$adminId);
-  // Prefer last_activity if present; fall back to legacy status-only.
-  $ok = mysqli_query($conn, "UPDATE administrator SET status = '1', last_activity = NOW() WHERE admin_id='{$adminIdSafe}'");
-  if(!$ok){
-    mysqli_query($conn, "UPDATE administrator SET status = '1' WHERE admin_id='{$adminIdSafe}'");
-  }
-}
+require_once __DIR__ . '/auth/auth.php';
 
 if(isset($_SESSION['alogin'])){
   $sessionRole = strtoupper(trim((string)($_SESSION['role'] ?? '')));
@@ -30,18 +20,13 @@ if(isset($_SESSION['alogin'])){
   header('Location:' . $landingPage);
   exit();
 }else{
-  if(isset($_POST['signinbtn'])){
-    $empid = trim($_POST['empid']);
-    $password = $_POST['password'];
-    // Use prepared statement
-    $stmt = $conn->prepare("SELECT * FROM administrator WHERE emp_number = ? LIMIT 1");
-    $stmt->bind_param('s', $empid);
-    $stmt->execute();
-    $results = $stmt->get_result();
-    if($results && $results->num_rows == 1){
-      $row = $results->fetch_assoc();
-      if(password_verify($password, $row['password'])){
-        session_regenerate_id(true); // Prevent session fixation
+	  if(isset($_POST['signinbtn'])){
+	    $empid = trim($_POST['empid']);
+	    $password = $_POST['password'];
+	    $row = gso_fetch_administrator_by_emp_number($conn, $empid);
+	    if($row){
+	      if(password_verify($password, $row['password'])){
+	        session_regenerate_id(true); // Prevent session fixation
 
         // Store display name for navbar usage
         $_SESSION['admin_name'] = trim(((string)($row['first_name'] ?? '')) . ' ' . ((string)($row['last_name'] ?? '')));
@@ -49,53 +34,53 @@ if(isset($_SESSION['alogin'])){
           $_SESSION['alogin'] = $row['admin_id'];
           $_SESSION['role'] = $row['role'];
           $_SESSION['start'] = time();
-          $uid = $_SESSION['alogin'];
-          $uip = getUserIpAddr();
-          $actvty = "Logged in the system.";
-          header('Location:admin/dashboard.php');
-          mysqli_query($conn, "INSERT INTO activity_log(admin_id,ip_address,activity) VALUES('$uid','$uip','$actvty')");
-          set_admin_online($conn, $uid);
-        }
-        elseif($row['role'] == 'GF/SEF-ADMIN'){
+	          $uid = $_SESSION['alogin'];
+	          $uip = getUserIpAddr();
+	          $actvty = "Logged in the system.";
+	          header('Location:admin/dashboard.php');
+	          gso_log_activity($conn, $uid, $uip, $actvty);
+	          gso_admin_touch_activity($conn, (string)$uid, $uip);
+	        }
+	        elseif($row['role'] == 'GF/SEF-ADMIN'){
           $_SESSION['alogin'] = $row['admin_id'];
           $_SESSION['role'] = $row['role'];
-          $uid = $_SESSION['alogin'];
-          $uip = getUserIpAddr();
-          $actvty = "Logged in the system.";
-          header('Location:admin/dashboard.php');
-          mysqli_query($conn, "INSERT INTO activity_log(admin_id,ip_address,activity) VALUES('$uid','$uip','$actvty')");
-          set_admin_online($conn, $uid);
-        }
-        elseif($row['role'] == 'CLEARANCE-ADMIN'){
+	          $uid = $_SESSION['alogin'];
+	          $uip = getUserIpAddr();
+	          $actvty = "Logged in the system.";
+	          header('Location:admin/dashboard.php');
+	          gso_log_activity($conn, $uid, $uip, $actvty);
+	          gso_admin_touch_activity($conn, (string)$uid, $uip);
+	        }
+	        elseif($row['role'] == 'CLEARANCE-ADMIN'){
           $_SESSION['alogin'] = $row['admin_id'];
           $_SESSION['role'] = $row['role'];
-          $uid = $_SESSION['alogin'];
-          $uip = getUserIpAddr();
-          $actvty = "Logged in the system.";
-          header('Location:services/clearance.php');
-          mysqli_query($conn, "INSERT INTO activity_log(admin_id,ip_address,activity) VALUES('$uid','$uip','$actvty')");
-          set_admin_online($conn, $uid);
-        }
-         elseif($row['role'] == 'DISPOSAL-ADMIN'){
+	          $uid = $_SESSION['alogin'];
+	          $uip = getUserIpAddr();
+	          $actvty = "Logged in the system.";
+	          header('Location:services/clearance.php');
+	          gso_log_activity($conn, $uid, $uip, $actvty);
+	          gso_admin_touch_activity($conn, (string)$uid, $uip);
+	        }
+	         elseif($row['role'] == 'DISPOSAL-ADMIN'){
           $_SESSION['alogin'] = $row['admin_id'];
           $_SESSION['role'] = $row['role'];
-          $uid = $_SESSION['alogin'];
-          $uip = getUserIpAddr();
-          $actvty = "Logged in the system.";
-          header('Location:admin/dashboard.php');
-          mysqli_query($conn, "INSERT INTO activity_log(admin_id,ip_address,activity) VALUES('$uid','$uip','$actvty')");
-          set_admin_online($conn, $uid);
-        }
-        elseif($row['role'] == 'MV-ADMIN'){
+	          $uid = $_SESSION['alogin'];
+	          $uip = getUserIpAddr();
+	          $actvty = "Logged in the system.";
+	          header('Location:admin/dashboard.php');
+	          gso_log_activity($conn, $uid, $uip, $actvty);
+	          gso_admin_touch_activity($conn, (string)$uid, $uip);
+	        }
+	        elseif($row['role'] == 'MV-ADMIN'){
           $_SESSION['alogin'] = $row['admin_id'];
           $_SESSION['role'] = $row['role'];
-          $uid = $_SESSION['alogin'];
-          $uip = getUserIpAddr();
-          $actvty = "Logged in the system.";
-          header('Location:admin/motor-vehicle-dashboard.php');
-          mysqli_query($conn, "INSERT INTO activity_log(admin_id,ip_address,activity) VALUES('$uid','$uip','$actvty')");
-          set_admin_online($conn, $uid);
-        }
+	          $uid = $_SESSION['alogin'];
+	          $uip = getUserIpAddr();
+	          $actvty = "Logged in the system.";
+	          header('Location:admin/motor-vehicle-dashboard.php');
+	          gso_log_activity($conn, $uid, $uip, $actvty);
+	          gso_admin_touch_activity($conn, (string)$uid, $uip);
+	        }
         else {
           $_SESSION['error']="Unauthorized role!";
         }
@@ -105,9 +90,8 @@ if(isset($_SESSION['alogin'])){
     }else{
       $_SESSION['error']="Invalid Employee Number!";
     }
-    $stmt->close();
-  } 
-}
+	  } 
+	}
 ?>
 <!doctype html>
 <html lang="en">

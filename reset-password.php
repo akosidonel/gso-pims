@@ -1,6 +1,6 @@
 <?php
 session_start();
-include('database/databaseConnection.php');
+require_once __DIR__ . '/auth/auth.php';
 
 // if(!isset($_GET['token'])){
 //   header("Location:404.php");
@@ -8,25 +8,21 @@ include('database/databaseConnection.php');
 // }
 
 if(isset($_POST['changeBtn'])){
-  $newPassword = mysqli_real_escape_string($conn,$_POST['newpassword']);
-  $confirmPassword = mysqli_real_escape_string($conn,$_POST['confirmpassword']);
+  $newPassword = trim((string)($_POST['newpassword'] ?? ''));
+  $confirmPassword = trim((string)($_POST['confirmpassword'] ?? ''));
   $password = password_hash($newPassword,PASSWORD_DEFAULT);
-  $token = mysqli_real_escape_string($conn,$_POST['token']);
+  $token = trim((string)($_POST['token'] ?? ''));
 
   if(!empty($token)){
     if(!empty($newPassword) && !empty($confirmPassword)){
-        $check_token = "SELECT token FROM administrator WHERE token ='$token'";
-        $query = mysqli_query($conn,$check_token);
-        if(mysqli_num_rows($query)>0){
+        $tokenRow = gso_fetch_administrator_by_reset_token($conn, $token);
+        if($tokenRow){
           if($newPassword == $confirmPassword){
-              $newpass = "UPDATE administrator SET password='$password' WHERE token ='$token' ";
-              $query2 = mysqli_query($conn,$newpass);
-              if($query2){
-                $newToken = md5(rand());
-                $updateToken = "UPDATE administrator SET token='$newToken' WHERE token ='$token' ";
-                $query3 = mysqli_query($conn,$updateToken);
+              if(gso_update_password_by_reset_token($conn, $password, $token)){
+                $newToken = bin2hex(random_bytes(32));
+                gso_rotate_password_reset_token($conn, $token, $newToken);
                 $_SESSION['success'] = "Password reset successfuly";
-                header("Location:reset-password.php?token=$updateToken");
+                header("Location:reset-password.php");
                 exit(0);
               }else{
                 $_SESSION['error'] = "Something went wrong";

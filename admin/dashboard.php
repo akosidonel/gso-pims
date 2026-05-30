@@ -2,6 +2,7 @@
 include_once('../config/session.php');
 include('../config/check_session.php');
 include_once('../config/auth_helpers.php');
+require_once('../auth/auth.php');
 
 check_admin_role_dynamic_redirect();
 
@@ -9,6 +10,10 @@ if (!isset($_SESSION['alogin'])) {
     header('Location:../index.php');
     exit();
 } else {
+    $adminId = (string)$_SESSION['alogin'];
+    $admin = gso_fetch_dashboard_admin_summary($conn, $adminId);
+    $approvedClearances = gso_fetch_dashboard_approved_clearances($conn, 4);
+
     include('../include/header.php'); // Header
     include('../include/navbar.php'); // Navbar
     include('../include/sidebar.php'); // Sidebar
@@ -22,18 +27,6 @@ if (!isset($_SESSION['alogin'])) {
         <!-- Main content -->
         <section class="content">
             <div class="container-fluid">
-
-            <?php
-                    $aid = $_SESSION['alogin'];
-                    $admin = null;
-                    $stmtAdmin = $conn->prepare("SELECT first_name, last_name, last_session, ip FROM administrator WHERE admin_id = ? LIMIT 1");
-                    $stmtAdmin->bind_param("s", $aid);
-                    $stmtAdmin->execute();
-                    $adminResult = $stmtAdmin->get_result();
-                    if ($adminResult && $adminResult->num_rows > 0) {
-                            $admin = $adminResult->fetch_assoc();
-                    }
-            ?>
 
             <div class="card gso-hero mb-4">
                 <div class="card-body">
@@ -97,23 +90,8 @@ if (!isset($_SESSION['alogin'])) {
                                     </tr>
                                     </thead>
                                     <tbody>
-                                        <?php
-                                    $stmt = $conn->prepare("
-                                        SELECT e.emp_name, h.created_at, h.status, h.release_date AS date, c.clearance_name 
-                                        FROM clearance_history AS h 
-                                        JOIN employee AS e ON h.emp_id = e.emp_id 
-                                        JOIN clearance_type AS c ON h.ctype_id = c.clearance_code 
-                                        WHERE h.status = ? 
-                                        ORDER BY h.created_at DESC 
-                                        LIMIT 4
-                                ");
-                                $status = 1;
-                                $stmt->bind_param("i", $status);
-                                $stmt->execute();
-                                $results = $stmt->get_result();
-
-                                if ($results->num_rows > 0):
-                                        foreach ($results as $result): ?>
+                                        <?php if (!empty($approvedClearances)): ?>
+                                        <?php foreach ($approvedClearances as $result): ?>
                                                 <tr>
                                                         <td><?= htmlspecialchars($result['emp_name']); ?></td>
                                                         <td><?= date('F j, Y, g:i a', strtotime($result['created_at'])); ?></td>
@@ -125,8 +103,8 @@ if (!isset($_SESSION['alogin'])) {
                                                                 </small>
                                                         </td>
                                                 </tr>
-                                        <?php endforeach;
-                                else: ?>
+                                        <?php endforeach; ?>
+                                <?php else: ?>
                                         <tr class="text-center">
                                                 <td colspan="4" class="py-4 text-muted">No approved clearances found.</td>
                                         </tr>
@@ -243,156 +221,3 @@ if (!isset($_SESSION['alogin'])) {
     include('../include/script.php'); // Script
 }
 ?>
-
-<script>
-    (function(){
-        var prefersReducedMotion = false;
-        try {
-            prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        } catch (e) {}
-
-        function parseNumberFromText(text){
-            if (text == null) return null;
-            var s = String(text);
-            // keep digits, minus, decimal
-            var cleaned = s.replace(/[^0-9.\-]/g, '');
-            if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === '-.') return null;
-            var n = Number(cleaned);
-            return Number.isFinite(n) ? n : null;
-        }
-
-        function easeOutSpring(t){
-            // Softer, more "liquid" spring-ish ease. Final value is snapped at the end.
-            // t in [0,1]
-            return 1 - (Math.exp(-4.5 * t) * Math.cos(6 * t));
-        }
-
-        function animateValue($el, toValue, opts){
-            opts = opts || {};
-            var duration = Number(opts.duration || 1800);
-            var formatter = typeof opts.formatter === 'function' ? opts.formatter : function(v){ return String(v); };
-            var decimals = Number.isFinite(opts.decimals) ? opts.decimals : 0;
-
-            if (!$el || !$el.length) return;
-            if (!Number.isFinite(toValue)) {
-                $el.text(opts.fallbackText != null ? String(opts.fallbackText) : 'N/A');
-                return;
-            }
-
-            if (prefersReducedMotion) {
-                $el.text(formatter(decimals > 0 ? Number(toValue.toFixed(decimals)) : Math.round(toValue)));
-                return;
-            }
-
-            // Prevent overlapping animations per element
-            var existingAnim = $el.data('gsoAnim');
-            if (existingAnim && existingAnim.cancel) existingAnim.cancel();
-
-            var fromValue = parseNumberFromText($el.text());
-            if (!Number.isFinite(fromValue)) fromValue = 0;
-            var direction = (toValue >= fromValue) ? 1 : -1;
-
-            var rafId = 0;
-            var cancelled = false;
-            var start = 0;
-
-            function cancel(){
-                cancelled = true;
-                if (rafId) cancelAnimationFrame(rafId);
-                $el.removeClass('gso-counting');
-            }
-
-            $el.data('gsoAnim', { cancel: cancel });
-
-            // trigger a subtle "fluid" pulse while counting
-            $el.removeClass('gso-counting');
-            // force reflow so the animation can replay
-            void $el[0].offsetWidth;
-            $el.addClass('gso-counting');
-
-            function step(ts){
-                if (cancelled) return;
-                if (!start) start = ts;
-                var t = Math.min(1, (ts - start) / duration);
-                var eased = easeOutSpring(t);
-                if (eased < 0) eased = 0;
-                if (eased > 1) eased = 1;
-                var current = fromValue + (toValue - fromValue) * eased;
-
-                var shown;
-                if (decimals > 0) {
-                    shown = Number(current.toFixed(decimals));
-                } else {
-                    // keep it monotonic (no bouncing digits)
-                    shown = direction >= 0 ? Math.floor(current) : Math.ceil(current);
-                }
-                $el.text(formatter(shown));
-
-                if (t < 1) {
-                    rafId = requestAnimationFrame(step);
-                } else {
-                    // ensure final value is exact
-                    var finalShown = decimals > 0 ? Number(toValue.toFixed(decimals)) : Math.round(toValue);
-                    $el.text(formatter(finalShown));
-                    $el.removeData('gsoAnim');
-                    $el.removeClass('gso-counting');
-                }
-            }
-
-            rafId = requestAnimationFrame(step);
-        }
-
-        function setMetric(key, value, opts){
-            var $targets = $('[data-metric="' + key + '"]');
-            if (!$targets.length) return;
-
-            // If value is a string like 'N/A', just set text
-            if (typeof value === 'string' && parseNumberFromText(value) == null) {
-                $targets.text(value);
-                return;
-            }
-
-            var num = (typeof value === 'number') ? value : parseNumberFromText(value);
-            $targets.each(function(){
-                animateValue($(this), Number(num), opts);
-            });
-        }
-
-        function formatCurrency(num){
-            try {
-                return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(Number(num || 0));
-            } catch (e) {
-                var n = Number(num || 0);
-                return '₱ ' + n.toFixed(2);
-            }
-        }
-
-        $.ajax({
-            url: '../auth/fetch_dashboard_metrics.php',
-            type: 'GET',
-            dataType: 'json',
-            success: function (resp) {
-                if (!resp) return;
-                setMetric('gftotal_currency', resp.gftotal ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-                setMetric('seftotal_currency', resp.seftotal ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-                setMetric('trust_fund_total_currency', resp.trust_fund_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-                setMetric('donation_total_currency', resp.donation_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-                setMetric('new_purchase_total_currency', resp.new_purchase_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-
-                setMetric('admin_count', resp.admin_count ?? 0, { duration: 1800 });
-                setMetric('desktop_count', resp.desktop_count ?? 0, { duration: 1800 });
-                setMetric('laptop_count', resp.laptop_count ?? 0, { duration: 1800 });
-                setMetric('aircon_count', resp.aircon_count ?? 0, { duration: 1800 });
-                setMetric('vehicle_count', resp.vehicle_count ?? 0, { duration: 1800 });
-                setMetric('printer_count', resp.printer_count ?? 0, { duration: 1800 });
-                setMetric('server_count', resp.server_count ?? 0, { duration: 1800 });
-                setMetric('machinery_count', resp.machinery_count ?? 0, { duration: 1800 });
-                setMetric('furniture_count', resp.furniture_count ?? 0, { duration: 1800 });
-
-                setMetric('infrastructure_gf_currency', resp.infrastructure_gf_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-                setMetric('infrastructure_sef_currency', resp.infrastructure_sef_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-                setMetric('land_total_currency', resp.land_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-            }
-        });
-    })();
-</script>

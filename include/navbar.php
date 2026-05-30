@@ -1,14 +1,14 @@
 <?php
+require_once __DIR__ . '/../auth/auth.php';
+
 $adminName = isset($_SESSION['admin_name']) ? trim((string)$_SESSION['admin_name']) : '';
 $roleLabel = isset($_SESSION['role']) ? strtoupper(trim((string)$_SESSION['role'])) : '';
 
 // Fallback for older sessions where admin_name wasn't set at login
 if ($adminName === '' && isset($_SESSION['alogin']) && isset($conn)) {
-  $adminId = mysqli_real_escape_string($conn, (string)$_SESSION['alogin']);
-  $q = mysqli_query($conn, "SELECT first_name, last_name FROM administrator WHERE admin_id='$adminId' LIMIT 1");
-  if ($q && mysqli_num_rows($q) === 1) {
-    $row = mysqli_fetch_assoc($q);
-    $adminName = trim(((string)($row['first_name'] ?? '')) . ' ' . ((string)($row['last_name'] ?? '')));
+  $admin = gso_fetch_administrator_by_id($conn, (string)$_SESSION['alogin']);
+  if ($admin) {
+    $adminName = trim(((string)($admin['first_name'] ?? '')) . ' ' . ((string)($admin['last_name'] ?? '')));
     if ($adminName !== '') {
       $_SESSION['admin_name'] = $adminName;
     }

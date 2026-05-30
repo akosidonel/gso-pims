@@ -1,6 +1,7 @@
 <?php 
 include_once('../config/session.php');
 include('../config/check_session.php');
+require_once('../auth/auth.php');
 
 if(!isset($_SESSION['alogin'])){
   header('Location:../index.php');
@@ -20,23 +21,11 @@ if(!isset($_SESSION['alogin'])){
 
   <?php
     // Fetch departments once
-    $departments = [];
-    $dept_query = mysqli_query($conn, "SELECT * FROM department ORDER BY department_name ASC");
-    if ($dept_query && mysqli_num_rows($dept_query) > 0) {
-        while ($row = mysqli_fetch_assoc($dept_query)) {
-            $departments[] = $row;
-        }
-    }
+    $departments = gso_fetch_departments($conn);
     // Prepare clearance types for the modal
     // NOTE: Do not hard-code a name list here; it causes newly-added clearance types
     // (or names with different casing/spacing) to never appear in the dropdown.
-    $propertyClearanceTypes = [];
-    $pct_query = mysqli_query($conn, "SELECT * FROM clearance_type ORDER BY clearance_name ASC");
-    if ($pct_query && mysqli_num_rows($pct_query) > 0) {
-      while ($row = mysqli_fetch_assoc($pct_query)) {
-        $propertyClearanceTypes[] = $row;
-      }
-    }
+    $propertyClearanceTypes = gso_fetch_clearance_types($conn);
    // City options as a PHP array
   $cities = [
       "ANTIPOLO CITY RIZAL","BACOOR CITY","BULACAN","CALOOCAN CITY","DASMARIÑAS CITY CAVITE","IMUS CAVITE","LAS PIÑAS CITY","MAKATI CITY","MALABON CITY",

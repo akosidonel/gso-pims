@@ -1,6 +1,6 @@
 <?php
 session_start();
-include('database/databaseConnection.php');
+require_once __DIR__ . '/auth/auth.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\SMTP;
@@ -26,7 +26,10 @@ function send_password_reset($getEmail,$token){
   $mail->addReplyTo('no-reply@gmail.com', 'No reply');
   
   // Content
-  $url = "http://localhost/gso-master/reset-password.php?token=$token";
+  $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+  $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+  $basePath = rtrim(str_replace('\\', '/', dirname($_SERVER['PHP_SELF'] ?? '/')), '/');
+  $url = $scheme . '://' . $host . ($basePath === '' ? '' : $basePath) . '/reset-password.php?token=' . urlencode($token);
   $mail->isHTML(true);                                  // Set email format to HTML
   $mail->Subject = 'Your Password reset link';
   $mail->Body    = "Hello,<br>
@@ -38,20 +41,14 @@ function send_password_reset($getEmail,$token){
 
 if(isset($_POST['resetBtn'])){
 
-  $email = mysqli_real_escape_string($conn, $_POST['email']);
-  $token = md5(rand());
+  $email = trim((string)($_POST['email'] ?? ''));
+  $token = bin2hex(random_bytes(32));
+  $adminRow = gso_fetch_administrator_by_email($conn, $email);
 
-  $checkEmail = "SELECT email FROM administrator WHERE email= '$email' ";
-  $query = mysqli_query($conn,$checkEmail);
+  if($adminRow){
+    $getEmail = (string)$adminRow['email'];
 
-  if(mysqli_num_rows($query) > 0){
-    $row = mysqli_fetch_array($query);
-    $getEmail = $row['email'];
-
-    $updateToken = "UPDATE administrator SET token ='$token' WHERE email ='$getEmail' LIMIT 1";
-    $query2 = mysqli_query($conn,$updateToken);
-
-    if($query2){
+    if(gso_store_administrator_reset_token($conn, $getEmail, $token)){
       send_password_reset($getEmail,$token);
       $_SESSION['success'] = "Link has been Send to your Email";
       header("Location:forgot-password.php");

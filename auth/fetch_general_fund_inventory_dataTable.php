@@ -1,85 +1,41 @@
 <?php
 session_start();
-include '../database/databaseConnection.php';
-
-// DataTables server-side processing for General Fund inventory
+require_once __DIR__ . '/../database/databaseConnection.php';
+require_once __DIR__ . '/datatable_helpers.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
+$draw = isset($_POST['draw']) ? (int)$_POST['draw'] : 0;
 $deptCode = isset($_POST['dept']) ? (int)$_POST['dept'] : 0;
-$status = 1;
-
-// Department values are mixed in legacy data: some rows store department_code,
-// some store department.dept_id, and some are only reliable through employee.
 $deptPk = 0;
+
 if ($deptCode > 0) {
-    if ($st = mysqli_prepare($conn, 'SELECT dept_id FROM department WHERE department_code = ? LIMIT 1')) {
-        mysqli_stmt_bind_param($st, 'i', $deptCode);
-        mysqli_stmt_execute($st);
-        $rs = mysqli_stmt_get_result($st);
-        if ($rs && ($r = mysqli_fetch_assoc($rs))) {
-            $deptPk = isset($r['dept_id']) ? (int)$r['dept_id'] : 0;
-        }
-        mysqli_stmt_close($st);
-    }
+    $deptRow = dt_execute_one(
+        $conn,
+        'SELECT dept_id FROM department WHERE department_code = ? LIMIT 1',
+        'i',
+        array($deptCode)
+    );
+    $deptPk = (int)($deptRow['dept_id'] ?? 0);
 }
 
-$where = "WHERE g.status = $status";
+$whereParts = array('g.status = ?');
+$whereTypes = 'i';
+$whereParams = array(1);
+
 if ($deptCode > 0) {
-    $deptMatches = array("e.department_code = $deptCode", "g.dept_id = $deptCode");
     if ($deptPk > 0 && $deptPk !== $deptCode) {
-        $deptMatches[] = "g.dept_id = $deptPk";
+        $whereParts[] = '(e.department_code = ? OR g.dept_id = ? OR g.dept_id = ?)';
+        $whereTypes .= 'iii';
+        $whereParams[] = $deptCode;
+        $whereParams[] = $deptCode;
+        $whereParams[] = $deptPk;
+    } else {
+        $whereParts[] = '(e.department_code = ? OR g.dept_id = ?)';
+        $whereTypes .= 'ii';
+        $whereParams[] = $deptCode;
+        $whereParams[] = $deptCode;
     }
-    $where .= ' AND (' . implode(' OR ', $deptMatches) . ')';
-}
-
-$unitSelect = "'' AS unit";
-if ($unitColRes = mysqli_query($conn, "SHOW COLUMNS FROM par_gen_fund LIKE 'unit'")) {
-    if (mysqli_num_rows($unitColRes) > 0) {
-        $unitSelect = 'p.unit';
-    }
-    mysqli_free_result($unitColRes);
-}
-
-// Total records for the scoped department.
-$countSql = "SELECT COUNT(*) AS cnt
-             FROM general_fund_property_history AS g
-             STRAIGHT_JOIN employee e ON g.emp_id = e.emp_id
-             $where";
-$countRes = mysqli_query($conn, $countSql);
-$totalData = 0;
-if ($countRes && ($row = mysqli_fetch_assoc($countRes))) {
-    $totalData = (int)$row['cnt'];
-}
-
-// Main query
-// IMPORTANT:
-// We must start from `general_fund_property_history` so the dept/status filter is applied early.
-// Without this, MySQL may choose a bad plan (e.g., starting from `employee` or `par_gen_fund`),
-// which makes DataTables requests feel "super slow" on large datasets.
-$tableSql = "SELECT
-                p.item,
-                p.model,
-                p.description,
-                p.serial_number,
-                p.serial_number_2,
-                p.par_number,
-                $unitSelect,
-                p.date_aquired,
-                p.category,
-                e.emp_name
-            FROM general_fund_property_history AS g
-            STRAIGHT_JOIN par_gen_fund p ON g.par_number = p.par_number
-            STRAIGHT_JOIN employee e ON g.emp_id = e.emp_id
-            $where";
-
-// Column-specific filters (from explicit params or DataTables column search)
-function dt_extract_exact_value($rawValue) {
-    $rawValue = trim((string)$rawValue);
-    if (preg_match('/^\^(.*)\$$/s', $rawValue, $m)) {
-        return $m[1];
-    }
-    return $rawValue;
 }
 
 $colSearch = isset($_POST['columns']) && is_array($_POST['columns']) ? $_POST['columns'] : array();
@@ -87,9 +43,9 @@ $itemFilter = '';
 $empFilter = '';
 $parIcsFilter = '';
 
-$explicitItem = isset($_POST['asset_class']) ? trim((string)$_POST['asset_class']) : '';
-$explicitEmp  = isset($_POST['end_user']) ? trim((string)$_POST['end_user']) : '';
-$explicitParIcs = isset($_POST['par_ics']) ? strtoupper(trim((string)$_POST['par_ics'])) : '';
+$explicitItem = trim((string)($_POST['asset_class'] ?? ''));
+$explicitEmp = trim((string)($_POST['end_user'] ?? ''));
+$explicitParIcs = strtoupper(trim((string)($_POST['par_ics'] ?? '')));
 
 if ($explicitItem !== '') {
     $itemFilter = $explicitItem;
@@ -108,37 +64,73 @@ if ($explicitParIcs === 'PAR' || $explicitParIcs === 'ICS') {
 }
 
 if ($itemFilter !== '') {
-    $safeItem = mysqli_real_escape_string($conn, $itemFilter);
-    $tableSql .= " AND p.item = '$safeItem'";
+    $whereParts[] = 'p.item = ?';
+    $whereTypes .= 's';
+    $whereParams[] = $itemFilter;
 }
 if ($empFilter !== '') {
-    $safeEmp = mysqli_real_escape_string($conn, $empFilter);
-    $tableSql .= " AND e.emp_name = '$safeEmp'";
+    $whereParts[] = 'e.emp_name = ?';
+    $whereTypes .= 's';
+    $whereParams[] = $empFilter;
 }
 if ($parIcsFilter !== '') {
-    $safeParIcs = mysqli_real_escape_string($conn, $parIcsFilter);
-    $tableSql .= " AND UPPER(TRIM(p.category)) = '$safeParIcs'";
+    $whereParts[] = 'UPPER(TRIM(p.category)) = ?';
+    $whereTypes .= 's';
+    $whereParams[] = $parIcsFilter;
 }
 
-// Global search
-$searchValue = isset($_POST['search']['value']) ? trim($_POST['search']['value']) : '';
+$searchValue = trim((string)($_POST['search']['value'] ?? ''));
 if ($searchValue !== '') {
-    $safe = mysqli_real_escape_string($conn, $searchValue);
-    $tableSql .= " AND (
-        p.item LIKE '%$safe%' OR
-        p.model LIKE '%$safe%' OR
-        p.description LIKE '%$safe%' OR
-        p.serial_number LIKE '%$safe%' OR
-        p.serial_number_2 LIKE '%$safe%' OR
-        p.par_number LIKE '%$safe%' OR
-        e.emp_name LIKE '%$safe%'
-    )";
+    $like = '%' . $searchValue . '%';
+    $whereParts[] = '(p.item LIKE ? OR p.model LIKE ? OR p.description LIKE ? OR p.serial_number LIKE ? OR p.serial_number_2 LIKE ? OR p.par_number LIKE ? OR e.emp_name LIKE ?)';
+    $whereTypes .= 'sssssss';
+    for ($i = 0; $i < 7; $i++) {
+        $whereParams[] = $like;
+    }
 }
 
-// Order mapping (matches DataTable columns)
+$whereSql = ' WHERE ' . implode(' AND ', $whereParts);
+$unitSelect = dt_information_schema_column_exists($conn, 'par_gen_fund', 'unit') ? 'p.unit' : "'' AS unit";
+
+$baseFromSql = "FROM general_fund_property_history AS g
+                STRAIGHT_JOIN par_gen_fund AS p ON g.par_number = p.par_number
+                STRAIGHT_JOIN employee AS e ON g.emp_id = e.emp_id";
+
+$countSql = "SELECT COUNT(*) AS cnt {$baseFromSql}{$whereSql}";
+$countRow = dt_execute_one($conn, $countSql, $whereTypes, $whereParams);
+$recordsFiltered = (int)($countRow['cnt'] ?? 0);
+
+$totalParams = array(1);
+$totalTypes = 'i';
+if ($deptCode > 0) {
+    if ($deptPk > 0 && $deptPk !== $deptCode) {
+        $totalSql = "SELECT COUNT(*) AS cnt
+                     FROM general_fund_property_history AS g
+                     STRAIGHT_JOIN employee AS e ON g.emp_id = e.emp_id
+                     WHERE g.status = ? AND (e.department_code = ? OR g.dept_id = ? OR g.dept_id = ?)";
+        $totalTypes .= 'iii';
+        $totalParams[] = $deptCode;
+        $totalParams[] = $deptCode;
+        $totalParams[] = $deptPk;
+    } else {
+        $totalSql = "SELECT COUNT(*) AS cnt
+                     FROM general_fund_property_history AS g
+                     STRAIGHT_JOIN employee AS e ON g.emp_id = e.emp_id
+                     WHERE g.status = ? AND (e.department_code = ? OR g.dept_id = ?)";
+        $totalTypes .= 'ii';
+        $totalParams[] = $deptCode;
+        $totalParams[] = $deptCode;
+    }
+} else {
+    $totalSql = "SELECT COUNT(*) AS cnt
+                 FROM general_fund_property_history AS g
+                 STRAIGHT_JOIN employee AS e ON g.emp_id = e.emp_id
+                 WHERE g.status = ?";
+}
+$totalRow = dt_execute_one($conn, $totalSql, $totalTypes, $totalParams);
+$recordsTotal = (int)($totalRow['cnt'] ?? 0);
+
 $columns = array(
-    0 => null,
-    1 => null,
     2 => 'p.item',
     3 => 'p.model',
     4 => 'p.serial_number',
@@ -146,104 +138,58 @@ $columns = array(
     6 => 'p.par_number',
     7 => 'e.emp_name',
 );
+$orderColumn = isset($_POST['order'][0]['column']) ? (int)$_POST['order'][0]['column'] : 2;
+$orderDir = strtolower((string)($_POST['order'][0]['dir'] ?? 'asc')) === 'desc' ? 'DESC' : 'ASC';
+$orderBy = isset($columns[$orderColumn]) ? $columns[$orderColumn] : 'p.item';
 
-if (isset($_POST['order'][0]['column'])) {
-    $colIdx = (int)$_POST['order'][0]['column'];
-    $dir = (isset($_POST['order'][0]['dir']) && $_POST['order'][0]['dir'] === 'desc') ? 'DESC' : 'ASC';
-    if (isset($columns[$colIdx]) && $columns[$colIdx] !== null) {
-        $tableSql .= ' ORDER BY ' . $columns[$colIdx] . ' ' . $dir;
-    } else {
-        $tableSql .= ' ORDER BY p.item ASC';
-    }
-} else {
-    $tableSql .= ' ORDER BY p.item ASC';
-}
+$dataSql = "SELECT
+                p.item,
+                p.model,
+                p.description,
+                p.serial_number,
+                p.serial_number_2,
+                p.par_number,
+                {$unitSelect},
+                p.date_aquired,
+                p.category,
+                e.emp_name
+            {$baseFromSql}
+            {$whereSql}
+            ORDER BY {$orderBy} {$orderDir}";
 
-// Paging
-$start = isset($_POST['start']) ? (int)$_POST['start'] : 0;
-$length = isset($_POST['length']) ? (int)$_POST['length'] : 10;
+$dataTypes = $whereTypes;
+$dataParams = $whereParams;
+$start = isset($_POST['start']) ? max(0, (int)$_POST['start']) : 0;
+$length = isset($_POST['length']) ? (int)($_POST['length'] ?? 10) : 10;
 if ($length !== -1) {
-    $tableSql .= ' LIMIT ' . $start . ',' . $length;
+    $dataSql .= ' LIMIT ?, ?';
+    $dataTypes .= 'ii';
+    $dataParams[] = $start;
+    $dataParams[] = max(0, $length);
 }
 
-$runQuery = mysqli_query($conn, $tableSql);
+list($stmt, $rows) = dt_execute_all($conn, $dataSql, $dataTypes, $dataParams);
+dt_close_stmt($stmt);
+
 $data = array();
-
-if ($runQuery) {
-    while ($row = mysqli_fetch_assoc($runQuery)) {
-        $data[] = array(
-            'item' => $row['item'],
-            'model' => $row['model'],
-            'description' => $row['description'],
-            'serial_number' => $row['serial_number'],
-            'serial_number_2' => $row['serial_number_2'],
-            'par_number' => $row['par_number'],
-            'unit' => $row['unit'],
-            'date_aquired' => $row['date_aquired'],
-            'category' => $row['category'],
-            'emp_name' => $row['emp_name'],
-        );
-    }
+foreach ($rows as $row) {
+    $data[] = array(
+        'item' => (string)($row['item'] ?? ''),
+        'model' => (string)($row['model'] ?? ''),
+        'description' => (string)($row['description'] ?? ''),
+        'serial_number' => (string)($row['serial_number'] ?? ''),
+        'serial_number_2' => (string)($row['serial_number_2'] ?? ''),
+        'par_number' => (string)($row['par_number'] ?? ''),
+        'unit' => (string)($row['unit'] ?? ''),
+        'date_aquired' => (string)($row['date_aquired'] ?? ''),
+        'category' => (string)($row['category'] ?? ''),
+        'emp_name' => (string)($row['emp_name'] ?? ''),
+    );
 }
 
-// Filtered count
-$needsFiltersCount = ($itemFilter !== '' || $empFilter !== '' || $parIcsFilter !== '');
-$hasSearch = ($searchValue !== '');
-
-if (!$hasSearch && !$needsFiltersCount) {
-    $totalFiltered = $totalData;
-} else {
-    $countFilteredSql = 'SELECT COUNT(*) AS cnt FROM general_fund_property_history AS g';
-
-    if ($deptCode > 0 || $empFilter !== '' || $hasSearch) {
-        $countFilteredSql .= ' STRAIGHT_JOIN employee e ON g.emp_id = e.emp_id';
-    }
-
-    // Only join tables we need for filters/search
-    if ($itemFilter !== '' || $parIcsFilter !== '' || $hasSearch) {
-        $countFilteredSql .= ' STRAIGHT_JOIN par_gen_fund p ON g.par_number = p.par_number';
-    }
-
-    $countFilteredSql .= " $where";
-
-    if ($itemFilter !== '') {
-        $safeItem2 = mysqli_real_escape_string($conn, $itemFilter);
-        $countFilteredSql .= " AND p.item = '$safeItem2'";
-    }
-    if ($empFilter !== '') {
-        $safeEmp2 = mysqli_real_escape_string($conn, $empFilter);
-        $countFilteredSql .= " AND e.emp_name = '$safeEmp2'";
-    }
-    if ($parIcsFilter !== '') {
-        $safeParIcs2 = mysqli_real_escape_string($conn, $parIcsFilter);
-        $countFilteredSql .= " AND UPPER(TRIM(p.category)) = '$safeParIcs2'";
-    }
-
-    if ($hasSearch) {
-        $safe = mysqli_real_escape_string($conn, $searchValue);
-        $countFilteredSql .= " AND (
-            p.item LIKE '%$safe%' OR
-            p.model LIKE '%$safe%' OR
-            p.description LIKE '%$safe%' OR
-            p.serial_number LIKE '%$safe%' OR
-            p.serial_number_2 LIKE '%$safe%' OR
-            p.par_number LIKE '%$safe%' OR
-            e.emp_name LIKE '%$safe%'
-        )";
-    }
-
-    $countFilteredRes = mysqli_query($conn, $countFilteredSql);
-    $totalFiltered = 0;
-    if ($countFilteredRes && ($row2 = mysqli_fetch_assoc($countFilteredRes))) {
-        $totalFiltered = (int)$row2['cnt'];
-    }
-}
-
-$output = array(
-    'draw' => isset($_POST['draw']) ? (int)$_POST['draw'] : 0,
-    'recordsTotal' => $totalData,
-    'recordsFiltered' => $totalFiltered,
+echo json_encode(array(
+    'draw' => $draw,
+    'recordsTotal' => $recordsTotal,
+    'recordsFiltered' => $recordsFiltered,
     'data' => $data,
-);
-
-echo json_encode($output);
+));

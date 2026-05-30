@@ -250,6 +250,171 @@ window.GSO.AdminPresencePanel = window.GSO.AdminPresencePanel || (function(){
   return { start: start };
 })();
 
+window.GSO.DashboardMetrics = window.GSO.DashboardMetrics || (function(){
+  function isDashboardPage(){
+    return $('.gso-dashboard').length > 0;
+  }
+
+  function parseNumberFromText(text){
+    if (text == null) { return null; }
+    var cleaned = String(text).replace(/[^0-9.\-]/g, '');
+    if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === '-.') { return null; }
+    var value = Number(cleaned);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function prefersReducedMotion(){
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function easeOutSpring(t){
+    return 1 - (Math.exp(-4.5 * t) * Math.cos(6 * t));
+  }
+
+  function animateValue($element, targetValue, options){
+    var opts = options || {};
+    var duration = Number(opts.duration || 1800);
+    var formatter = typeof opts.formatter === 'function' ? opts.formatter : function(value){ return String(value); };
+    var decimals = Number.isFinite(opts.decimals) ? opts.decimals : 0;
+
+    if (!$element || !$element.length) { return; }
+    if (!Number.isFinite(targetValue)) {
+      $element.text(opts.fallbackText != null ? String(opts.fallbackText) : 'N/A');
+      return;
+    }
+
+    if (prefersReducedMotion()) {
+      $element.text(formatter(decimals > 0 ? Number(targetValue.toFixed(decimals)) : Math.round(targetValue)));
+      return;
+    }
+
+    var currentAnimation = $element.data('gsoAnim');
+    if (currentAnimation && currentAnimation.cancel) {
+      currentAnimation.cancel();
+    }
+
+    var fromValue = parseNumberFromText($element.text());
+    if (!Number.isFinite(fromValue)) {
+      fromValue = 0;
+    }
+    var direction = targetValue >= fromValue ? 1 : -1;
+    var animationFrameId = 0;
+    var isCancelled = false;
+    var startTime = 0;
+
+    function cancel(){
+      isCancelled = true;
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+      $element.removeClass('gso-counting');
+    }
+
+    $element.data('gsoAnim', { cancel: cancel });
+    $element.removeClass('gso-counting');
+    void $element[0].offsetWidth;
+    $element.addClass('gso-counting');
+
+    function step(timestamp){
+      if (isCancelled) { return; }
+      if (!startTime) {
+        startTime = timestamp;
+      }
+
+      var progress = Math.min(1, (timestamp - startTime) / duration);
+      var easedProgress = Math.min(1, Math.max(0, easeOutSpring(progress)));
+      var currentValue = fromValue + (targetValue - fromValue) * easedProgress;
+      var shownValue = decimals > 0
+        ? Number(currentValue.toFixed(decimals))
+        : (direction >= 0 ? Math.floor(currentValue) : Math.ceil(currentValue));
+
+      $element.text(formatter(shownValue));
+
+      if (progress < 1) {
+        animationFrameId = requestAnimationFrame(step);
+        return;
+      }
+
+      var finalValue = decimals > 0 ? Number(targetValue.toFixed(decimals)) : Math.round(targetValue);
+      $element.text(formatter(finalValue));
+      $element.removeData('gsoAnim');
+      $element.removeClass('gso-counting');
+    }
+
+    animationFrameId = requestAnimationFrame(step);
+  }
+
+  function setMetric(metricKey, value, options){
+    var $targets = $('[data-metric="' + metricKey + '"]');
+    if (!$targets.length) { return; }
+
+    if (typeof value === 'string' && parseNumberFromText(value) == null) {
+      $targets.text(value);
+      return;
+    }
+
+    var numericValue = typeof value === 'number' ? value : parseNumberFromText(value);
+    $targets.each(function(){
+      animateValue($(this), Number(numericValue), options);
+    });
+  }
+
+  function formatCurrency(value){
+    try {
+      return new Intl.NumberFormat('en-PH', {
+        style: 'currency',
+        currency: 'PHP',
+        maximumFractionDigits: 2
+      }).format(Number(value || 0));
+    } catch (e) {
+      return '₱ ' + Number(value || 0).toFixed(2);
+    }
+  }
+
+  function init(){
+    if (!isDashboardPage()) { return; }
+
+    $.ajax({
+      url: '../auth/fetch_dashboard_metrics.php',
+      type: 'GET',
+      dataType: 'json',
+      success: function(resp){
+        if (!resp) { return; }
+
+        setMetric('gftotal_currency', resp.gftotal ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+        setMetric('seftotal_currency', resp.seftotal ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+        setMetric('trust_fund_total_currency', resp.trust_fund_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+        setMetric('donation_total_currency', resp.donation_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+        setMetric('new_purchase_total_currency', resp.new_purchase_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+
+        setMetric('admin_count', resp.admin_count ?? 0, { duration: 1800 });
+        setMetric('desktop_count', resp.desktop_count ?? 0, { duration: 1800 });
+        setMetric('laptop_count', resp.laptop_count ?? 0, { duration: 1800 });
+        setMetric('aircon_count', resp.aircon_count ?? 0, { duration: 1800 });
+        setMetric('vehicle_count', resp.vehicle_count ?? 0, { duration: 1800 });
+        setMetric('printer_count', resp.printer_count ?? 0, { duration: 1800 });
+        setMetric('server_count', resp.server_count ?? 0, { duration: 1800 });
+        setMetric('machinery_count', resp.machinery_count ?? 0, { duration: 1800 });
+        setMetric('furniture_count', resp.furniture_count ?? 0, { duration: 1800 });
+
+        setMetric('infrastructure_gf_currency', resp.infrastructure_gf_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+        setMetric('infrastructure_sef_currency', resp.infrastructure_sef_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+        setMetric('land_total_currency', resp.land_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
+      }
+    });
+  }
+
+  return { init: init };
+})();
+
+$(function(){
+  if (window.GSO && window.GSO.DashboardMetrics) { window.GSO.DashboardMetrics.init(); }
+});
+
 // Select2 + datalist helpers (reusable)
 window.GSO.UI = window.GSO.UI || {};
 
@@ -3934,6 +4099,17 @@ $(function(){
       return match;
     }
 
+    function npDetailResetEmployeeSelection() {
+      $.each(npDetailState.items, function (_, item) {
+        item.emp_id = '';
+        item.emp_name = '';
+      });
+      $('#edit_np_emp_single').val('');
+      $('#edit_np_new_emp').val('').prop('disabled', true);
+      $('#edit_np_position').val('').prop('disabled', true);
+      $('#edit_np_add_new_employee').hide();
+    }
+
     function npDetailRenderEndUserRows() {
       var $single = $('#edit_np_emp_single');
       var $multiWrap = $('#editNpEndUserRows');
@@ -4716,11 +4892,17 @@ $(function(){
     $(document)
       .off('input.editNpDeptSearch change.editNpDeptSearch', '#editNpDeptSearch')
       .on('input.editNpDeptSearch change.editNpDeptSearch', '#editNpDeptSearch', function () {
+        var $deptSelect = $('#edit_np_dept');
+        var currentCode = String($deptSelect.val() || '').trim();
         var code = npDetailFindDeptCodeByName($(this).val());
         if (code) {
-          $('#edit_np_dept').val(code);
+          if (code !== currentCode) {
+            $deptSelect.val(code).trigger('change');
+          }
         } else if (!$(this).val()) {
-          $('#edit_np_dept').val('');
+          if (currentCode) {
+            $deptSelect.val('').trigger('change');
+          }
         }
       });
 
@@ -4728,6 +4910,7 @@ $(function(){
       .off('change.editNpDeptSelect', '#edit_np_dept')
       .on('change.editNpDeptSelect', '#edit_np_dept', function () {
         npDetailSyncDeptInput();
+        npDetailResetEmployeeSelection();
         npDetailLoadEmployees(String($(this).val() || '').trim(), function () {
           npDetailRefreshAllProperties();
         });
@@ -6529,10 +6712,10 @@ $(function(){
   });
   
   //adminstrator
-  $(document).on('submit','#admin_form',function (e){// to save adminstrator information
-    e.preventDefault();
-    var fd = new FormData(this);
-    fd.append("save_admin_info", true);
+	  $(document).on('submit','#admin_form',function (e){// to save adminstrator information
+	    e.preventDefault();
+	    var fd = new FormData(this);
+	    fd.append("save_admin_info", true);
   
     $.ajax({
       type: "POST",
@@ -6616,18 +6799,20 @@ $(function(){
       }
     });
  });
- $(document).on('click','.delAdmin', function(e){// to delete administrator information
-  e.preventDefault();
-  if(confirm("Are you sure? ")){
-  var deladmin = $(this).val();
+	 $(document).on('click','.delAdmin', function(e){// to delete administrator information
+	  e.preventDefault();
+	  if(confirm("Are you sure? ")){
+	  var deladmin = $(this).val();
+	  var adminFormToken = String($('#admin_form_token').val() || '').trim();
 
-  $.ajax({
-    type: "POST",
-    url: "../auth/auth.php",
-    data:{
-      'delete_admin':true,
-      'deladmin':deladmin
-    },
+	  $.ajax({
+	    type: "POST",
+	    url: "../auth/auth.php",
+	    data:{
+	      'delete_admin':true,
+	      'deladmin':deladmin,
+	      'admin_form_token': adminFormToken
+	    },
     success:function(response){
       var res = jQuery.parseJSON(response);
       if(res.status == 500){

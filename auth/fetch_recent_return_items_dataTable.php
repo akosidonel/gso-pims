@@ -1,6 +1,7 @@
 <?php
 session_start();
-include '../database/databaseConnection.php';
+require_once __DIR__ . '/../database/databaseConnection.php';
+require_once __DIR__ . '/datatable_helpers.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -11,23 +12,9 @@ $draw = isset($_POST['draw']) ? (int)$_POST['draw'] : 0;
 // - unserviceable_items (items marked unserviceable; date from latest history)
 $limit = 50;
 
-function dt_empty($draw, $error = null) {
-    $out = array(
-        'draw' => $draw,
-        'recordsTotal' => 0,
-        'recordsFiltered' => 0,
-        'data' => array(),
-    );
-    if ($error !== null) {
-        $out['error'] = $error;
-    }
-    echo json_encode($out);
-    exit;
-}
-
 if (!isset($_SESSION['alogin'])) {
     http_response_code(401);
-    dt_empty($draw, 'Unauthorized');
+    dt_json_empty($draw, 'Unauthorized', 401);
 }
 
 $latestHistJoin = "
@@ -75,32 +62,38 @@ $sql = "
         {$latestHistJoin}
     ) AS x
     ORDER BY x.event_at DESC
-    LIMIT {$limit}
+    LIMIT ?
 ";
 
-$res = mysqli_query($conn, $sql);
+$stmt = $conn->prepare($sql);
 $data = array();
-if ($res) {
-    while ($row = mysqli_fetch_assoc($res)) {
-        $createdAtRaw = (string)($row['event_at'] ?? '');
-        $createdAt = '';
-        if ($createdAtRaw !== '') {
-            $ts = strtotime($createdAtRaw);
-            $createdAt = $ts ? date('M d, Y h:i A', $ts) : $createdAtRaw;
-        }
+if ($stmt) {
+    $stmt->bind_param('i', $limit);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    if ($result) {
+        while ($row = mysqli_fetch_assoc($result)) {
+            $createdAtRaw = (string)($row['event_at'] ?? '');
+            $createdAt = '';
+            if ($createdAtRaw !== '') {
+                $ts = strtotime($createdAtRaw);
+                $createdAt = $ts ? date('M d, Y h:i A', $ts) : $createdAtRaw;
+            }
 
-        $data[] = array(
-            'created_at' => $createdAt,
-            'return_type' => $row['return_type'] ?? '',
-            'fund' => $row['fund'] ?? '',
-            'category' => $row['category'] ?? '',
-            'item' => $row['item'] ?? '',
-            'model' => $row['model'] ?? '',
-            'serial_number' => $row['serial_number'] ?? '',
-            'serial_number_2' => $row['serial_number_2'] ?? '',
-            'par_number' => $row['par_number'] ?? '',
-        );
+            $data[] = array(
+                'created_at' => $createdAt,
+                'return_type' => $row['return_type'] ?? '',
+                'fund' => $row['fund'] ?? '',
+                'category' => $row['category'] ?? '',
+                'item' => $row['item'] ?? '',
+                'model' => $row['model'] ?? '',
+                'serial_number' => $row['serial_number'] ?? '',
+                'serial_number_2' => $row['serial_number_2'] ?? '',
+                'par_number' => $row['par_number'] ?? '',
+            );
+        }
     }
+    $stmt->close();
 }
 
 $returnedCount = count($data);

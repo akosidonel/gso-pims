@@ -17,27 +17,8 @@ if (!in_array($fundKey, ['trust', 'donation'], true)) {
   exit();
 }
 
-$accountCodeOptions = array();
-$departmentOptions = array();
-$accountCodeQuery = mysqli_query($conn, "SELECT account_code, account_name FROM account_code ORDER BY account_code ASC");
-if ($accountCodeQuery && mysqli_num_rows($accountCodeQuery) > 0) {
-  while ($accountCodeRow = mysqli_fetch_assoc($accountCodeQuery)) {
-    $accountCodeOptions[] = array(
-      'account_code' => (string)($accountCodeRow['account_code'] ?? ''),
-      'account_name' => (string)($accountCodeRow['account_name'] ?? ''),
-    );
-  }
-}
-
-$departmentQuery = mysqli_query($conn, "SELECT department_code, department_name FROM department ORDER BY department_name ASC");
-if ($departmentQuery && mysqli_num_rows($departmentQuery) > 0) {
-  while ($departmentRow = mysqli_fetch_assoc($departmentQuery)) {
-    $departmentOptions[] = array(
-      'department_code' => (string)($departmentRow['department_code'] ?? ''),
-      'department_name' => (string)($departmentRow['department_name'] ?? ''),
-    );
-  }
-}
+$accountCodeOptions = gso_fetch_account_codes($conn);
+$departmentOptions = gso_fetch_departments($conn);
 
 $itemUnits = array('PC', 'UNIT', 'LOT', 'GAL', 'L', 'BOX', 'PACK', 'ROLL', 'METER', 'SET');
 $assetClasses = array(

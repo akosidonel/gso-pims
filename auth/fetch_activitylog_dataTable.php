@@ -1,51 +1,89 @@
 <?php
 session_start();
-include '../database/databaseConnection.php';
-@extract($_REQUEST);
+require_once __DIR__ . '/../database/databaseConnection.php';
+require_once __DIR__ . '/datatable_helpers.php';
 
-$output= array();
-$table_sql = "SELECT administrator.admin_id, administrator.first_name, administrator.last_name, administrator.role,
-activity_log.admin_id, activity_log.ip_address, activity_log.activity, activity_log.time FROM activity_log JOIN administrator ON activity_log.admin_id = administrator.admin_id ";
-$table_query = mysqli_query($conn,$table_sql);
-$count_all_rows = mysqli_num_rows($table_query);
+header('Content-Type: application/json; charset=utf-8');
 
-$columns = array(
-    0 => 'time',
-	1 => 'user',
-	2 => 'role',
-	3 => 'ip_address',
-	4 => 'activity',
+$draw = isset($_POST['draw']) ? (int)$_POST['draw'] : 0;
+$start = isset($_POST['start']) ? max(0, (int)$_POST['start']) : 0;
+$length = isset($_POST['length']) ? (int)$_POST['length'] : 10;
+$length = ($length === -1) ? -1 : max(0, $length);
+
+$searchValue = trim((string)($_POST['search']['value'] ?? ''));
+$orderColumn = isset($_POST['order'][0]['column']) ? (int)$_POST['order'][0]['column'] : 0;
+$orderDir = strtolower((string)($_POST['order'][0]['dir'] ?? 'desc')) === 'asc' ? 'ASC' : 'DESC';
+
+$orderMap = array(
+    0 => 'activity_log.time',
+    1 => 'administrator.first_name',
+    2 => 'administrator.role',
+    3 => 'activity_log.ip_address',
+    4 => 'activity_log.activity',
 );
+$orderBy = isset($orderMap[$orderColumn]) ? $orderMap[$orderColumn] : 'activity_log.time';
 
-if(isset($_POST['search']['value'])){
-    $search_value = $_POST['search']['value'];
-    $table_sql .=" WHERE first_name like '%".$search_value."%' ";
-    $table_sql .=" OR last_name like '%".$search_value."%' ";
-    $table_sql .=" OR ip_address like '%".$search_value."%' ";
-    $table_sql .=" OR activity like '%".$search_value."%' ";
-    $table_sql .=" OR time like '%".$search_value."%' ";
-}
-if(isset($_POST['order'])){
-    $column_name = $_POST['order'][0]['column'];
-    $order = $_POST['order'][0]['dir'];
-    $table_query .=" ORDER BY ".$columns[$column_name]." ".$order." ";
-}else{
-    $table_sql .=" ORDER BY time DESC";
-}
+$fromSql = "FROM activity_log
+            INNER JOIN administrator ON activity_log.admin_id = administrator.admin_id";
 
-if($_POST['length'] != -1){
-    $start = $_POST['start'];
-    $length = $_POST['length'];
-    $table_sql .=" LIMIT ".$start.",".$length;
+$whereSql = '';
+$types = '';
+$params = array();
+if ($searchValue !== '') {
+    $whereSql = " WHERE (
+        administrator.first_name LIKE ? OR
+        administrator.last_name LIKE ? OR
+        activity_log.ip_address LIKE ? OR
+        activity_log.activity LIKE ? OR
+        activity_log.time LIKE ?
+    )";
+    $like = '%' . $searchValue . '%';
+    $types = 'sssss';
+    $params = array($like, $like, $like, $like, $like);
 }
 
-$run_query = mysqli_query($conn,$table_sql);
-$filtered_rows = mysqli_num_rows($run_query);
+$countRow = dt_execute_one(
+    $conn,
+    "SELECT COUNT(*) AS cnt {$fromSql}",
+    '',
+    array()
+);
+$recordsTotal = (int)($countRow['cnt'] ?? 0);
+
+$filteredRow = dt_execute_one(
+    $conn,
+    "SELECT COUNT(*) AS cnt {$fromSql}{$whereSql}",
+    $types,
+    $params
+);
+$recordsFiltered = (int)($filteredRow['cnt'] ?? 0);
+
+$dataSql = "SELECT
+                administrator.first_name,
+                administrator.last_name,
+                administrator.role,
+                activity_log.ip_address,
+                activity_log.activity,
+                activity_log.time
+            {$fromSql}
+            {$whereSql}
+            ORDER BY {$orderBy} {$orderDir}";
+
+$dataTypes = $types;
+$dataParams = $params;
+if ($length !== -1) {
+    $dataSql .= ' LIMIT ?, ?';
+    $dataTypes .= 'ii';
+    $dataParams[] = $start;
+    $dataParams[] = $length;
+}
+
+list($stmt, $rows) = dt_execute_all($conn, $dataSql, $dataTypes, $dataParams);
+dt_close_stmt($stmt);
+
 $data = array();
-while($row = mysqli_fetch_assoc($run_query)){
-
-    $activityText = $row['activity'];
-    // Human-friendly formatting for structured log entries
+foreach ($rows as $row) {
+    $activityText = (string)($row['activity'] ?? '');
     if (strpos($activityText, 'PROPERTY CLEARANCE REPRINT|CTRL=') === 0) {
         $ctrl = '';
         $reason = '';
@@ -67,25 +105,21 @@ while($row = mysqli_fetch_assoc($run_query)){
         }
         $ctrl = trim($ctrl);
         $reason = trim($reason);
-        $activityText = 'Re-printed Property Clearance (CTRL: ' . $ctrl . ')' . ($reason !== '' ? ' — Reason: ' . $reason : '');
+        $activityText = 'Re-printed Property Clearance (CTRL: ' . $ctrl . ')' . ($reason !== '' ? ' - Reason: ' . $reason : '');
     }
 
-    $subarray = array();
-    $subarray[]= date('F j, Y, g:i a',strtotime($row['time']));
-    $subarray[]= $row['first_name']." ".$row['last_name'];
-    $subarray[]= $row['role']; 
-    $subarray[]= $row['ip_address'];
-    $subarray[]= $activityText;
-    $data[]= $subarray;
+    $data[] = array(
+        date('F j, Y, g:i a', strtotime((string)($row['time'] ?? 'now'))),
+        trim((string)($row['first_name'] ?? '') . ' ' . (string)($row['last_name'] ?? '')),
+        (string)($row['role'] ?? ''),
+        (string)($row['ip_address'] ?? ''),
+        $activityText,
+    );
 }
 
-$output = array(
-     'draw'=>intval($_POST['draw']),
-     'recordsTotal'=>$filtered_rows,
-     'recordsFiltered'=>$count_all_rows,
-     'data'=>$data,
-);
-
-echo json_encode($output);
-
-?>
+echo json_encode(array(
+    'draw' => $draw,
+    'recordsTotal' => $recordsTotal,
+    'recordsFiltered' => $recordsFiltered,
+    'data' => $data,
+));

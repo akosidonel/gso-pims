@@ -39,31 +39,11 @@ if(!isset($_SESSION['alogin'])){
   if(!isset($_SESSION['form_tokens']['np_transfer'])){ $_SESSION['form_tokens']['np_transfer'] = []; }
   $np_transfer_token = bin2hex(random_bytes(16));
   $_SESSION['form_tokens']['np_transfer'][$np_transfer_token] = time();
-  // emp_id is allocated by the server at save time (concurrency-safe)
-  $next_emp_id = null;
-  $accountCodeOptions = [];
-  $departmentOptions = [];
-  $accountCodeSql = "SELECT account_code, account_name FROM account_code ORDER BY account_code ASC";
-  $accountCodeQuery = mysqli_query($conn, $accountCodeSql);
-  if ($accountCodeQuery && mysqli_num_rows($accountCodeQuery) > 0) {
-    while ($accountCodeRow = mysqli_fetch_assoc($accountCodeQuery)) {
-      $accountCodeOptions[] = [
-        'account_code' => (string)($accountCodeRow['account_code'] ?? ''),
-        'account_name' => (string)($accountCodeRow['account_name'] ?? ''),
-      ];
-    }
-  }
-  $departmentSql = "SELECT department_code, department_name FROM department ORDER BY department_name ASC";
-  $departmentQuery = mysqli_query($conn, $departmentSql);
-  if ($departmentQuery && mysqli_num_rows($departmentQuery) > 0) {
-    while ($departmentRow = mysqli_fetch_assoc($departmentQuery)) {
-      $departmentOptions[] = [
-        'department_code' => (string)($departmentRow['department_code'] ?? ''),
-        'department_name' => (string)($departmentRow['department_name'] ?? ''),
-      ];
-    }
-  }
-?>
+	  // emp_id is allocated by the server at save time (concurrency-safe)
+	  $next_emp_id = null;
+	  $accountCodeOptions = gso_fetch_account_codes($conn);
+	  $departmentOptions = gso_fetch_departments($conn);
+	?>
   <?php include('../include/header.php')?><!--Header-->
   
   <?php include('../include/navbar.php')?><!-- Navbar -->

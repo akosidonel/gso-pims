@@ -160,7 +160,7 @@ $sqlNew = "
     LIMIT 1
   )
   LEFT JOIN employee AS e ON e.emp_id = h.emp_id
-  JOIN department AS d ON d.dept_id = h.dept_id
+  LEFT JOIN department AS d ON (d.dept_id = h.dept_id OR d.department_code = h.dept_id)
   WHERE h.reference_number = ?
     AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
@@ -214,8 +214,8 @@ $sqlGf = "
     d.department_name AS department_name
   FROM general_fund_property_history AS h
   JOIN par_gen_fund AS p ON p.par_number = h.par_number
-  JOIN employee AS e ON e.emp_id = h.emp_id
-  JOIN department AS d ON d.dept_id = h.dept_id
+  LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+  LEFT JOIN department AS d ON (d.dept_id = h.dept_id OR d.department_code = h.dept_id)
   WHERE h.reference_number = ?
     AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1

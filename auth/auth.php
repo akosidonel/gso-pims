@@ -1,5 +1,7 @@
 <?php
-session_start();
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
 require_once __DIR__ . '/../database/databaseConnection.php';
 require_once __DIR__ . '/../include/getuser_ipaddress.php';
 require_once __DIR__ . '/../include/generate_par_ics_number.php';
@@ -16,14 +18,364 @@ if(!function_exists('json_response')){
 }
 if(!function_exists('gso_log_activity')){
     function gso_log_activity($conn, $uid, $uip, $activity){
-        $uidEsc = mysqli_real_escape_string($conn, (string)$uid);
-        $uipEsc = mysqli_real_escape_string($conn, (string)$uip);
-        $actEsc = mysqli_real_escape_string($conn, (string)$activity);
-        return mysqli_query($conn, "INSERT INTO activity_log(admin_id,ip_address,activity) VALUES('$uidEsc','$uipEsc','$actEsc')");
+        $uid = (string)$uid;
+        $uip = (string)$uip;
+        $activity = (string)$activity;
+        $stmt = mysqli_prepare($conn, 'INSERT INTO activity_log(admin_id, ip_address, activity) VALUES(?, ?, ?)');
+        if (!$stmt) { return false; }
+        mysqli_stmt_bind_param($stmt, 'sss', $uid, $uip, $activity);
+        $ok = mysqli_stmt_execute($stmt);
+        mysqli_stmt_close($stmt);
+        return (bool)$ok;
     }
 }
 if(!function_exists('escape_up')){ function escape_up($conn,$v){ return mysqli_real_escape_string($conn,strtoupper($v)); } }
 if(!function_exists('escape_raw')){ function escape_raw($conn,$v){ return mysqli_real_escape_string($conn,$v); } }
+if(!function_exists('gso_current_role')){
+    function gso_current_role(){
+        return strtoupper(trim((string)($_SESSION['role'] ?? '')));
+    }
+}
+if(!function_exists('gso_user_has_role')){
+    function gso_user_has_role(array $roles){
+        $role = gso_current_role();
+        foreach ($roles as $allowedRole) {
+            if ($role === strtoupper(trim((string)$allowedRole))) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+if(!function_exists('gso_require_role_json')){
+    function gso_require_role_json(array $roles){
+        if (empty($_SESSION['alogin'])) {
+            echo json_encode(['status' => 401, 'message' => 'Not logged in']);
+            return false;
+        }
+        if (!gso_user_has_role($roles)) {
+            echo json_encode(['status' => 403, 'message' => 'Forbidden']);
+            return false;
+        }
+        return true;
+    }
+}
+if(!function_exists('gso_issue_form_token')){
+    function gso_issue_form_token($group){
+        $group = trim((string)$group);
+        if ($group === '') { return ''; }
+        if (!isset($_SESSION['form_tokens']) || !is_array($_SESSION['form_tokens'])) {
+            $_SESSION['form_tokens'] = [];
+        }
+        if (!isset($_SESSION['form_tokens'][$group]) || !is_array($_SESSION['form_tokens'][$group])) {
+            $_SESSION['form_tokens'][$group] = [];
+        }
+        $token = bin2hex(random_bytes(16));
+        $_SESSION['form_tokens'][$group][$token] = time();
+        return $token;
+    }
+}
+if(!function_exists('gso_validate_form_token')){
+    function gso_validate_form_token($group, $token, $maxAgeSeconds = 1800, $consume = false){
+        $group = trim((string)$group);
+        $token = trim((string)$token);
+        if ($group === '' || $token === '') { return false; }
+        if (!isset($_SESSION['form_tokens'][$group]) || !is_array($_SESSION['form_tokens'][$group])) {
+            return false;
+        }
+        foreach ($_SESSION['form_tokens'][$group] as $storedToken => $createdAt) {
+            if ((int)$createdAt < time() - (int)$maxAgeSeconds) {
+                unset($_SESSION['form_tokens'][$group][$storedToken]);
+            }
+        }
+        if (!isset($_SESSION['form_tokens'][$group][$token])) {
+            return false;
+        }
+        if ($consume) {
+            unset($_SESSION['form_tokens'][$group][$token]);
+        }
+        return true;
+    }
+}
+if(!function_exists('gso_fetch_all_rows')){
+    function gso_fetch_all_rows(mysqli_stmt $stmt){
+        $rows = [];
+        $result = mysqli_stmt_get_result($stmt);
+        if ($result) {
+            while ($row = mysqli_fetch_assoc($result)) {
+                $rows[] = $row;
+            }
+        }
+        return $rows;
+    }
+}
+if(!function_exists('gso_fetch_one_row')){
+    function gso_fetch_one_row(mysqli_stmt $stmt){
+        $result = mysqli_stmt_get_result($stmt);
+        if ($result && ($row = mysqli_fetch_assoc($result))) {
+            return $row;
+        }
+        return null;
+    }
+}
+if(!function_exists('gso_query_all')){
+    function gso_query_all(mysqli $conn, $sql, $types = '', array $params = array()){
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) { return array(null, array()); }
+        if ($types !== '') {
+            gso_stmt_bind_params($stmt, $types, $params);
+        }
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return array(null, array());
+        }
+        return array($stmt, gso_fetch_all_rows($stmt));
+    }
+}
+if(!function_exists('gso_query_one')){
+    function gso_query_one(mysqli $conn, $sql, $types = '', array $params = array()){
+        list($stmt, $rows) = gso_query_all($conn, $sql, $types, $params);
+        if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
+        return !empty($rows) ? $rows[0] : null;
+    }
+}
+if(!function_exists('gso_fetch_administrator_by_emp_number')){
+    function gso_fetch_administrator_by_emp_number(mysqli $conn, $employeeNumber){
+        $employeeNumber = trim((string)$employeeNumber);
+        $stmt = $conn->prepare('SELECT * FROM administrator WHERE emp_number = ? LIMIT 1');
+        if (!$stmt) { return null; }
+        $stmt->bind_param('s', $employeeNumber);
+        $stmt->execute();
+        $row = gso_fetch_one_row($stmt);
+        $stmt->close();
+        return $row;
+    }
+}
+if(!function_exists('gso_fetch_administrator_by_email')){
+    function gso_fetch_administrator_by_email(mysqli $conn, $email){
+        $email = trim((string)$email);
+        $stmt = $conn->prepare('SELECT admin_id, email FROM administrator WHERE email = ? LIMIT 1');
+        if (!$stmt) { return null; }
+        $stmt->bind_param('s', $email);
+        $stmt->execute();
+        $row = gso_fetch_one_row($stmt);
+        $stmt->close();
+        return $row;
+    }
+}
+if(!function_exists('gso_store_administrator_reset_token')){
+    function gso_store_administrator_reset_token(mysqli $conn, $email, $token){
+        $email = trim((string)$email);
+        $token = trim((string)$token);
+        $stmt = $conn->prepare('UPDATE administrator SET token = ? WHERE email = ? LIMIT 1');
+        if (!$stmt) { return false; }
+        $stmt->bind_param('ss', $token, $email);
+        $ok = $stmt->execute();
+        $stmt->close();
+        return (bool)$ok;
+    }
+}
+if(!function_exists('gso_fetch_administrator_by_reset_token')){
+    function gso_fetch_administrator_by_reset_token(mysqli $conn, $token){
+        $token = trim((string)$token);
+        $stmt = $conn->prepare('SELECT admin_id, token FROM administrator WHERE token = ? LIMIT 1');
+        if (!$stmt) { return null; }
+        $stmt->bind_param('s', $token);
+        $stmt->execute();
+        $row = gso_fetch_one_row($stmt);
+        $stmt->close();
+        return $row;
+    }
+}
+if(!function_exists('gso_update_password_by_reset_token')){
+    function gso_update_password_by_reset_token(mysqli $conn, $passwordHash, $token){
+        $passwordHash = (string)$passwordHash;
+        $token = trim((string)$token);
+        $stmt = $conn->prepare('UPDATE administrator SET password = ? WHERE token = ? LIMIT 1');
+        if (!$stmt) { return false; }
+        $stmt->bind_param('ss', $passwordHash, $token);
+        $ok = $stmt->execute();
+        $stmt->close();
+        return (bool)$ok;
+    }
+}
+if(!function_exists('gso_rotate_password_reset_token')){
+    function gso_rotate_password_reset_token(mysqli $conn, $currentToken, $newToken){
+        $currentToken = trim((string)$currentToken);
+        $newToken = trim((string)$newToken);
+        $stmt = $conn->prepare('UPDATE administrator SET token = ? WHERE token = ? LIMIT 1');
+        if (!$stmt) { return false; }
+        $stmt->bind_param('ss', $newToken, $currentToken);
+        $ok = $stmt->execute();
+        $stmt->close();
+        return (bool)$ok;
+    }
+}
+if(!function_exists('gso_fetch_account_codes')){
+    function gso_fetch_account_codes(mysqli $conn){
+        $stmt = $conn->prepare('SELECT account_code, account_name FROM account_code ORDER BY account_code ASC');
+        if (!$stmt) { return []; }
+        $stmt->execute();
+        $rows = gso_fetch_all_rows($stmt);
+        $stmt->close();
+        return $rows;
+    }
+}
+if(!function_exists('gso_fetch_departments')){
+    function gso_fetch_departments(mysqli $conn){
+        $stmt = $conn->prepare('SELECT department_code, department_name, dept_id FROM department ORDER BY department_name ASC');
+        if (!$stmt) { return []; }
+        $stmt->execute();
+        $rows = gso_fetch_all_rows($stmt);
+        $stmt->close();
+        return $rows;
+    }
+}
+if(!function_exists('gso_fetch_clearance_types')){
+    function gso_fetch_clearance_types(mysqli $conn){
+        $stmt = $conn->prepare('SELECT clearance_code, clearance_name FROM clearance_type ORDER BY clearance_name ASC');
+        if (!$stmt) { return []; }
+        $stmt->execute();
+        $rows = gso_fetch_all_rows($stmt);
+        $stmt->close();
+        return $rows;
+    }
+}
+if(!function_exists('gso_fetch_administrator_by_id')){
+    function gso_fetch_administrator_by_id(mysqli $conn, $adminId){
+        $adminId = (string)$adminId;
+        $stmt = $conn->prepare('SELECT admin_id, first_name, last_name, contact_number, email, role, emp_number FROM administrator WHERE admin_id = ? LIMIT 1');
+        if (!$stmt) { return null; }
+        $stmt->bind_param('s', $adminId);
+        $stmt->execute();
+        $row = gso_fetch_one_row($stmt);
+        $stmt->close();
+        return $row;
+    }
+}
+if(!function_exists('gso_fetch_dashboard_admin_summary')){
+    function gso_fetch_dashboard_admin_summary(mysqli $conn, $adminId){
+        $adminId = trim((string)$adminId);
+        if ($adminId === '') { return null; }
+        $stmt = $conn->prepare(
+            'SELECT first_name, last_name, last_session, ip
+             FROM administrator
+             WHERE admin_id = ?
+             LIMIT 1'
+        );
+        if (!$stmt) { return null; }
+        $stmt->bind_param('s', $adminId);
+        $stmt->execute();
+        $row = gso_fetch_one_row($stmt);
+        $stmt->close();
+        return $row;
+    }
+}
+if(!function_exists('gso_fetch_dashboard_approved_clearances')){
+    function gso_fetch_dashboard_approved_clearances(mysqli $conn, $limit = 4){
+        $limit = (int)$limit;
+        if ($limit <= 0) {
+            $limit = 4;
+        }
+        $sql = "
+            SELECT e.emp_name, h.created_at, h.status, h.release_date AS date, c.clearance_name
+            FROM clearance_history AS h
+            JOIN employee AS e ON h.emp_id = e.emp_id
+            JOIN clearance_type AS c ON h.ctype_id = c.clearance_code
+            WHERE h.status = 1
+            ORDER BY h.created_at DESC
+            LIMIT {$limit}
+        ";
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) { return []; }
+        $stmt->execute();
+        $rows = gso_fetch_all_rows($stmt);
+        $stmt->close();
+        return $rows;
+    }
+}
+if(!function_exists('gso_insert_administrator')){
+    function gso_insert_administrator(mysqli $conn, array $data){
+        $stmt = $conn->prepare(
+            'INSERT INTO administrator (first_name, last_name, contact_number, email, role, emp_number, password, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        if (!$stmt) { return false; }
+        $stmt->bind_param(
+            'sssssssi',
+            $data['first_name'],
+            $data['last_name'],
+            $data['contact_number'],
+            $data['email'],
+            $data['role'],
+            $data['emp_number'],
+            $data['password'],
+            $data['status']
+        );
+        $ok = $stmt->execute();
+        $stmt->close();
+        return (bool)$ok;
+    }
+}
+if(!function_exists('gso_update_administrator')){
+    function gso_update_administrator(mysqli $conn, array $data){
+        $stmt = $conn->prepare(
+            'UPDATE administrator
+             SET first_name = ?, last_name = ?, contact_number = ?, email = ?, role = ?, emp_number = ?
+             WHERE admin_id = ?
+             LIMIT 1'
+        );
+        if (!$stmt) { return false; }
+        $stmt->bind_param(
+            'sssssss',
+            $data['first_name'],
+            $data['last_name'],
+            $data['contact_number'],
+            $data['email'],
+            $data['role'],
+            $data['emp_number'],
+            $data['admin_id']
+        );
+        $ok = $stmt->execute();
+        $stmt->close();
+        return (bool)$ok;
+    }
+}
+if(!function_exists('gso_delete_administrator')){
+    function gso_delete_administrator(mysqli $conn, $adminId){
+        $adminId = (string)$adminId;
+        $stmt = $conn->prepare('DELETE FROM administrator WHERE admin_id = ? LIMIT 1');
+        if (!$stmt) { return false; }
+        $stmt->bind_param('s', $adminId);
+        $ok = $stmt->execute();
+        $stmt->close();
+        return (bool)$ok;
+    }
+}
+if(!function_exists('gso_fetch_admin_panel_rows')){
+    function gso_fetch_admin_panel_rows(mysqli $conn, $timeoutSeconds = 90){
+        $timeoutSeconds = (int)$timeoutSeconds;
+        if ($timeoutSeconds <= 0) {
+            $timeoutSeconds = 90;
+        }
+        if (gso_admin_has_last_activity_column($conn)) {
+            $sql = "SELECT *,
+                           CASE
+                             WHEN status = 1 AND last_activity >= DATE_SUB(NOW(), INTERVAL {$timeoutSeconds} SECOND)
+                             THEN 1 ELSE 0
+                           END AS is_online
+                    FROM administrator";
+        } else {
+            $sql = 'SELECT *, status AS is_online FROM administrator';
+        }
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) { return []; }
+        $stmt->execute();
+        $rows = gso_fetch_all_rows($stmt);
+        $stmt->close();
+        return $rows;
+    }
+}
 if(!function_exists('gso_column_exists')){
     function gso_column_exists($conn, $table, $column){
         $table = preg_replace('/[^a-zA-Z0-9_]/', '', (string)$table);
@@ -1038,7 +1390,7 @@ if (!function_exists('gso_motor_vehicle_registration_info')) {
 }
 
 if (!function_exists('gso_motor_vehicle_dashboard_rows')) {
-    function gso_motor_vehicle_dashboard_rows(mysqli $conn, $fromSql, $vehicleDateColumn, $whereSql = '', $orderSql = '', $limitSql = '') {
+    function gso_motor_vehicle_dashboard_rows(mysqli $conn, $fromSql, $vehicleDateColumn, $whereSql = '', $orderSql = '', $limitSql = '', $types = '', array $params = array()) {
         $sql = "
             SELECT
                 v.source_table,
@@ -1063,13 +1415,8 @@ if (!function_exists('gso_motor_vehicle_dashboard_rows')) {
             {$limitSql}
         ";
 
-        $res = mysqli_query($conn, $sql);
-        $rows = [];
-        if ($res) {
-            while ($row = mysqli_fetch_assoc($res)) {
-                $rows[] = $row;
-            }
-        }
+        list($stmt, $rows) = gso_query_all($conn, $sql, $types, $params);
+        if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
         return $rows;
     }
 }
@@ -1100,8 +1447,8 @@ if (!function_exists('gso_motor_vehicle_dashboard_data')) {
 }
 
 if (!function_exists('gso_motor_vehicle_due_count')) {
-    function gso_motor_vehicle_due_count(mysqli $conn, $fromSql, $vehicleDateColumn, $whereSql = '') {
-        $rows = gso_motor_vehicle_dashboard_rows($conn, $fromSql, $vehicleDateColumn, $whereSql);
+    function gso_motor_vehicle_due_count(mysqli $conn, $fromSql, $vehicleDateColumn, $whereSql = '', $types = '', array $params = array()) {
+        $rows = gso_motor_vehicle_dashboard_rows($conn, $fromSql, $vehicleDateColumn, $whereSql, '', '', $types, $params);
         $count = 0;
         foreach ($rows as $row) {
             $registration = gso_motor_vehicle_registration_info($row);
@@ -1485,7 +1832,11 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $scope = strtolower(trim((string)($_POST['mv_scope'] ?? 'all')));
         $scope = in_array($scope, ['all', 'registered', 'unregistered', 'due_current_month'], true) ? $scope : 'all';
         $scopeParts = [];
+        $scopeTypes = '';
+        $scopeParams = [];
         $filterParts = [];
+        $filterTypes = '';
+        $filterParams = [];
 
         if ($scope === 'registered' || $scope === 'due_current_month') {
             $scopeParts[] = 'mv.motor_vehicle_id IS NOT NULL';
@@ -1494,29 +1845,33 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         }
 
         if ($searchValue !== '') {
-            $safe = mysqli_real_escape_string($conn, $searchValue);
             $filterParts[] = "(
-                v.brand_model LIKE '%{$safe}%'
-                OR v.date_aquired LIKE '%{$safe}%'
-                OR v.property_number LIKE '%{$safe}%'
-                OR v.primary_serial LIKE '%{$safe}%'
-                OR v.secondary_serial LIKE '%{$safe}%'
-                OR mv.chassis_no LIKE '%{$safe}%'
-                OR mv.engine_no LIKE '%{$safe}%'
-                OR mv.plate_no LIKE '%{$safe}%'
-                OR v.department_name LIKE '%{$safe}%'
-                OR v.end_user LIKE '%{$safe}%'
+                v.brand_model LIKE ?
+                OR v.date_aquired LIKE ?
+                OR v.property_number LIKE ?
+                OR v.primary_serial LIKE ?
+                OR v.secondary_serial LIKE ?
+                OR mv.chassis_no LIKE ?
+                OR mv.engine_no LIKE ?
+                OR mv.plate_no LIKE ?
+                OR v.department_name LIKE ?
+                OR v.end_user LIKE ?
             )";
+            $like = '%' . $searchValue . '%';
+            $filterTypes .= str_repeat('s', 10);
+            for ($i = 0; $i < 10; $i++) { $filterParams[] = $like; }
         }
 
         if ($yearFilter !== '') {
-            $safeYear = mysqli_real_escape_string($conn, $yearFilter);
-            $filterParts[] = "TRIM(v.date_aquired) = '{$safeYear}'";
+            $filterParts[] = "TRIM(v.date_aquired) = ?";
+            $filterTypes .= 's';
+            $filterParams[] = $yearFilter;
         }
 
         if ($departmentFilter !== '') {
-            $safeDepartment = mysqli_real_escape_string($conn, $departmentFilter);
-            $filterParts[] = "TRIM(v.department_name) = '{$safeDepartment}'";
+            $filterParts[] = "TRIM(v.department_name) = ?";
+            $filterTypes .= 's';
+            $filterParams[] = $departmentFilter;
         }
 
         $whereSql = function ($parts) {
@@ -1524,6 +1879,8 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         };
         $scopeWhereSql = $whereSql($scopeParts);
         $filteredWhereSql = $whereSql(array_merge($scopeParts, $filterParts));
+        $filteredTypes = $scopeTypes . $filterTypes;
+        $filteredParams = array_merge($scopeParams, $filterParams);
 
         $columns = [
             0 => 'v.brand_model',
@@ -1548,8 +1905,8 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $limitSql = $length !== -1 ? ' LIMIT ' . $start . ',' . max(0, $length) : '';
 
         if ($scope === 'due_current_month') {
-            $total = gso_motor_vehicle_due_count($conn, $dashboardFromSql, $vehicleDateColumn, $scopeWhereSql);
-            $rows = gso_motor_vehicle_dashboard_rows($conn, $dashboardFromSql, $vehicleDateColumn, $filteredWhereSql, $orderSql);
+            $total = gso_motor_vehicle_due_count($conn, $dashboardFromSql, $vehicleDateColumn, $scopeWhereSql, $scopeTypes, $scopeParams);
+            $rows = gso_motor_vehicle_dashboard_rows($conn, $dashboardFromSql, $vehicleDateColumn, $filteredWhereSql, $orderSql, '', $filteredTypes, $filteredParams);
             $dueRows = [];
             foreach ($rows as $row) {
                 $registration = gso_motor_vehicle_registration_info($row);
@@ -1558,15 +1915,24 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
             $filtered = count($dueRows);
             $rows = $length !== -1 ? array_slice($dueRows, $start, max(0, $length)) : $dueRows;
         } else {
-            $totalRes = mysqli_query($conn, "SELECT COUNT(*) AS cnt {$dashboardFromSql} {$scopeWhereSql}");
-            $totalRow = $totalRes ? mysqli_fetch_assoc($totalRes) : [];
+            $totalRow = gso_query_one($conn, "SELECT COUNT(*) AS cnt {$dashboardFromSql} {$scopeWhereSql}", $scopeTypes, $scopeParams);
             $total = (int)($totalRow['cnt'] ?? 0);
 
-            $filteredRes = mysqli_query($conn, "SELECT COUNT(*) AS cnt {$dashboardFromSql} {$filteredWhereSql}");
-            $filteredRow = $filteredRes ? mysqli_fetch_assoc($filteredRes) : [];
+            $filteredRow = gso_query_one($conn, "SELECT COUNT(*) AS cnt {$dashboardFromSql} {$filteredWhereSql}", $filteredTypes, $filteredParams);
             $filtered = (int)($filteredRow['cnt'] ?? 0);
 
-            $rows = gso_motor_vehicle_dashboard_rows($conn, $dashboardFromSql, $vehicleDateColumn, $filteredWhereSql, $orderSql, $limitSql);
+            $limitTypes = $filteredTypes;
+            $limitParams = $filteredParams;
+            if ($length !== -1) {
+                $limitTypes .= 'ii';
+                $limitParams[] = $start;
+                $limitParams[] = max(0, $length);
+                $limitSql = ' LIMIT ?, ?';
+            } else {
+                $limitSql = '';
+            }
+
+            $rows = gso_motor_vehicle_dashboard_rows($conn, $dashboardFromSql, $vehicleDateColumn, $filteredWhereSql, $orderSql, $limitSql, $limitTypes, $limitParams);
         }
 
         $data = [];
@@ -4060,53 +4426,96 @@ if (!function_exists('gso_admin_role_allowed')) {
 
 //add administrator
 if (isset($_POST['save_admin_info'])) {
-    $fname = escape_up($conn,$_POST['fname']);
-    $lname = escape_up($conn,$_POST['lname']);
-    $email = escape_raw($conn,$_POST['email']);
-    $contact = escape_raw($conn,$_POST['contact']);
-    $empnumber = escape_up($conn,$_POST['emp_number']);
-    $role = escape_up($conn,$_POST['role']);
+    header('Content-Type: application/json; charset=utf-8');
+    if (!gso_require_role_json(['SYSTEM-ADMIN'])) { return false; }
+    $formToken = (string)($_POST['admin_form_token'] ?? '');
+    if (!gso_validate_form_token('admin_panel', $formToken, 1800, false)) {
+        return json_response(419, 'Invalid or expired form token.');
+    }
+    $fname = strtoupper(trim((string)($_POST['fname'] ?? '')));
+    $lname = strtoupper(trim((string)($_POST['lname'] ?? '')));
+    $email = trim((string)($_POST['email'] ?? ''));
+    $contact = trim((string)($_POST['contact'] ?? ''));
+    $empnumber = strtoupper(trim((string)($_POST['emp_number'] ?? '')));
+    $role = strtoupper(trim((string)($_POST['role'] ?? '')));
     if (!gso_admin_role_allowed($role)) {
         return json_response(422, 'Invalid administrator role.');
     }
+    if ($fname === '' || $lname === '' || $email === '' || $empnumber === '') {
+        return json_response(422, 'Missing required administrator fields.');
+    }
     $password = password_hash('12345',PASSWORD_DEFAULT);
     $statusAdmin = 0;
-    $sql = "INSERT INTO administrator (first_name,last_name,contact_number,email,role,emp_number,password,status) VALUES('$fname','$lname','$contact','$email','$role','$empnumber','$password','$statusAdmin')";
-    if(mysqli_query($conn,$sql)){ return json_response(200,'Added succesfully!'); }
+    $payload = [
+        'first_name' => $fname,
+        'last_name' => $lname,
+        'contact_number' => $contact,
+        'email' => $email,
+        'role' => $role,
+        'emp_number' => $empnumber,
+        'password' => $password,
+        'status' => $statusAdmin,
+    ];
+    if(gso_insert_administrator($conn, $payload)){ return json_response(200,'Added succesfully!'); }
     return json_response(500,'opps..something went wrong..');
 }
 //to fetch administrator information
 if(isset($_GET['adminid'])){
-    $adminid = mysqli_real_escape_string($conn, $_GET['adminid']);
-    $sql = "SELECT admin_id,first_name,last_name,contact_number,email,role,emp_number FROM administrator WHERE admin_id='$adminid'";
-    $query = mysqli_query($conn,$sql);
-
-    if (mysqli_num_rows($query) == 1) { return json_response(200,'Admin id fetch successfully',mysqli_fetch_assoc($query)); }
+    header('Content-Type: application/json; charset=utf-8');
+    if (!gso_require_role_json(['SYSTEM-ADMIN'])) { return false; }
+    $adminid = (string)($_GET['adminid'] ?? '');
+    $adminRow = gso_fetch_administrator_by_id($conn, $adminid);
+    if ($adminRow) { return json_response(200,'Admin id fetch successfully',$adminRow); }
     return json_response(422,'No Admin id found');
 }
 
 
 //update administrator information
 if (isset($_POST['update_admin_info'])) {
-    $adminid = mysqli_real_escape_string($conn, $_POST['id']);
-    $first_name = escape_raw($conn, $_POST['efname']);
-    $last_name = escape_raw($conn, $_POST['elname']);
-    $email = escape_raw($conn, $_POST['eemail']);
-    $contact_number = escape_raw($conn, $_POST['econtact']);
-    $role = escape_up($conn, $_POST['erole']);
+    header('Content-Type: application/json; charset=utf-8');
+    if (!gso_require_role_json(['SYSTEM-ADMIN'])) { return false; }
+    $formToken = (string)($_POST['admin_form_token'] ?? '');
+    if (!gso_validate_form_token('admin_panel', $formToken, 1800, false)) {
+        return json_response(419, 'Invalid or expired form token.');
+    }
+    $adminid = trim((string)($_POST['id'] ?? ''));
+    $first_name = trim((string)($_POST['efname'] ?? ''));
+    $last_name = trim((string)($_POST['elname'] ?? ''));
+    $email = trim((string)($_POST['eemail'] ?? ''));
+    $contact_number = trim((string)($_POST['econtact'] ?? ''));
+    $role = strtoupper(trim((string)($_POST['erole'] ?? '')));
     if (!gso_admin_role_allowed($role)) {
         return json_response(422, 'Invalid administrator role.');
     }
-    $emp_number = escape_raw($conn, $_POST['empnumber']);
-    $sql = "UPDATE administrator SET first_name='$first_name', last_name='$last_name', contact_number='$contact_number', email='$email', role='$role',emp_number='$emp_number'  WHERE admin_id ='$adminid' ";
-    if(mysqli_query($conn,$sql)){ return json_response(200,'Updated succesfully!'); }
+    $emp_number = trim((string)($_POST['empnumber'] ?? ''));
+    if ($adminid === '' || $first_name === '' || $last_name === '' || $email === '' || $emp_number === '') {
+        return json_response(422, 'Missing required administrator fields.');
+    }
+    $payload = [
+        'admin_id' => $adminid,
+        'first_name' => $first_name,
+        'last_name' => $last_name,
+        'contact_number' => $contact_number,
+        'email' => $email,
+        'role' => $role,
+        'emp_number' => $emp_number,
+    ];
+    if(gso_update_administrator($conn, $payload)){ return json_response(200,'Updated succesfully!'); }
     return json_response(500,'opps..something went wrong..');
 }
 //delete administrator
 if (isset($_POST['delete_admin'])) {
-    $adid = mysqli_real_escape_string($conn,$_POST['deladmin']);
-    $sql = "DELETE FROM administrator WHERE admin_id = '$adid' ";
-    if(mysqli_query($conn,$sql)){ return json_response(200,'Admin Deleted succesfully!'); }
+    header('Content-Type: application/json; charset=utf-8');
+    if (!gso_require_role_json(['SYSTEM-ADMIN'])) { return false; }
+    $formToken = (string)($_POST['admin_form_token'] ?? '');
+    if (!gso_validate_form_token('admin_panel', $formToken, 1800, false)) {
+        return json_response(419, 'Invalid or expired form token.');
+    }
+    $adid = trim((string)($_POST['deladmin'] ?? ''));
+    if ($adid === '') {
+        return json_response(422, 'Missing administrator id.');
+    }
+    if(gso_delete_administrator($conn, $adid)){ return json_response(200,'Admin Deleted succesfully!'); }
     return json_response(500,'opps..something went wrong..');
 }
 //add employee
@@ -8357,7 +8766,27 @@ if (isset($_POST['save_item'])) {
     $supplier = empty($_POST['supplier']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['supplier'])) . "'";
     $po = $purchaseOrderRaw === '' ? 'NULL' : "'" . mysqli_real_escape_string($conn, $purchaseOrderRaw) . "'";
     $obr = empty($_POST['obr']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['obr'])) . "'";
-    $dept = mysqli_real_escape_string($conn,strtoupper($_POST['dept']));
+    $deptCode = strtoupper(trim((string)($_POST['dept'] ?? '')));
+    if ($deptCode === '') {
+        echo json_encode(['status' => 422, 'message' => 'Department is required.']);
+        return false;
+    }
+    $dept = mysqli_real_escape_string($conn, $deptCode);
+    $deptIdInt = null;
+    if ($stmtDept = mysqli_prepare($conn, 'SELECT dept_id FROM department WHERE department_code = ? LIMIT 1')) {
+        mysqli_stmt_bind_param($stmtDept, 's', $deptCode);
+        mysqli_stmt_execute($stmtDept);
+        $resDept = mysqli_stmt_get_result($stmtDept);
+        if ($resDept && mysqli_num_rows($resDept) === 1) {
+            $rowDept = mysqli_fetch_assoc($resDept);
+            $deptIdInt = isset($rowDept['dept_id']) ? (int)$rowDept['dept_id'] : null;
+        }
+        mysqli_stmt_close($stmtDept);
+    }
+    if ($deptIdInt === null) {
+        echo json_encode(['status' => 422, 'message' => 'Invalid department selected.']);
+        return false;
+    }
     $parEmpRaw = isset($_POST['parEmp']) ? $_POST['parEmp'] : '';
     $parEmpUpper = strtoupper(trim($parEmpRaw));
     $parEmpMulti = (isset($_POST['parEmp_multi']) && is_array($_POST['parEmp_multi'])) ? $_POST['parEmp_multi'] : null;
@@ -9141,7 +9570,7 @@ if (isset($_POST['save_item'])) {
 
             if ($isGF) {
                 $multi .= "INSERT INTO par_gen_fund(category,item,model,description,serial_number,serial_number_2,par_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
-                $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$deptIdInt."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
             } elseif ($isSEF) {
                 $multi .= "INSERT INTO property_sef(category,item,model,description,serial_number,serial_number_2,property_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
                 $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
@@ -9150,13 +9579,13 @@ if (isset($_POST['save_item'])) {
                 $nextTrustFundId--;
                 $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
                 $multi .= "INSERT INTO trust_fund(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','TRUST FUND','".$categoryForRow."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
-                $multi .= "INSERT INTO trust_fund_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                $multi .= "INSERT INTO trust_fund_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$deptIdInt."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
             } else {
                 $fundRecordId = $nextDonationId;
                 $nextDonationId--;
                 $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
                 $multi .= "INSERT INTO donation(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','DONATION','".$categoryForRow."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
-                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$deptIdInt."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
             }
 
             if (!in_array($referenceNumberForRow, $printRefs[$categoryForRow], true)) {
@@ -10245,28 +10674,29 @@ if (isset($_POST['gf_account_codes_dt'])) {
     ];
     $orderBy = isset($colMap[$orderCol]) ? $colMap[$orderCol] : 'a.account_code';
 
-    $catSafe = mysqli_real_escape_string($conn, $category);
-    $whereSql = " WHERE UPPER(TRIM(p.category)) = '{$catSafe}' ";
-
+    $whereSql = " WHERE UPPER(TRIM(p.category)) = ? ";
+    $whereTypes = 's';
+    $whereParams = [$category];
     if ($search !== '') {
-        $s = mysqli_real_escape_string($conn, $search);
-        $whereSql .= " AND (a.account_code LIKE '%{$s}%' OR a.account_name LIKE '%{$s}%') ";
+        $whereSql .= " AND (a.account_code LIKE ? OR a.account_name LIKE ?) ";
+        $whereTypes .= 'ss';
+        $likeSearch = '%' . $search . '%';
+        $whereParams[] = $likeSearch;
+        $whereParams[] = $likeSearch;
     }
 
     $totalRecords = 0;
-    $qTotal = mysqli_query($conn, "
+    $row = gso_query_one($conn, "
         SELECT COUNT(DISTINCT a.id) AS cnt
         FROM account_code AS a
         INNER JOIN par_gen_fund AS p ON a.account_code = p.account_code
-        WHERE UPPER(TRIM(p.category)) = '{$catSafe}'
-    ");
-    if ($qTotal && ($row = mysqli_fetch_assoc($qTotal))) {
-        $totalRecords = (int)($row['cnt'] ?? 0);
-    }
+        WHERE UPPER(TRIM(p.category)) = ?
+    ", 's', [$category]);
+    $totalRecords = (int)($row['cnt'] ?? 0);
 
     $filteredRecords = $totalRecords;
     if ($search !== '') {
-        $qFiltered = mysqli_query($conn, "
+        $rowF = gso_query_one($conn, "
             SELECT COUNT(*) AS cnt FROM (
                 SELECT a.id
                 FROM account_code AS a
@@ -10274,21 +10704,17 @@ if (isset($_POST['gf_account_codes_dt'])) {
                 {$whereSql}
                 GROUP BY a.id
             ) AS x
-        ");
-        if ($qFiltered && ($rowF = mysqli_fetch_assoc($qFiltered))) {
-            $filteredRecords = (int)($rowF['cnt'] ?? 0);
-        }
+        ", $whereTypes, $whereParams);
+        $filteredRecords = (int)($rowF['cnt'] ?? 0);
     }
 
     $totalAmount = 0.0;
-    $qAmount = mysqli_query($conn, "
+    $rowA = gso_query_one($conn, "
         SELECT COALESCE(SUM(p.unit_value), 0) AS total_amount
         FROM par_gen_fund AS p
-        WHERE UPPER(TRIM(p.category)) = '{$catSafe}'
-    ");
-    if ($qAmount && ($rowA = mysqli_fetch_assoc($qAmount))) {
-        $totalAmount = (float)($rowA['total_amount'] ?? 0);
-    }
+        WHERE UPPER(TRIM(p.category)) = ?
+    ", 's', [$category]);
+    $totalAmount = (float)($rowA['total_amount'] ?? 0);
 
     $sql = "
         SELECT
@@ -10301,20 +10727,23 @@ if (isset($_POST['gf_account_codes_dt'])) {
         {$whereSql}
         GROUP BY a.id, a.account_code, a.account_name
         ORDER BY {$orderBy} {$orderDir}
-        LIMIT {$start}, {$length}
+        LIMIT ?, ?
     ";
 
     $data = [];
-    $res = mysqli_query($conn, $sql);
-    if ($res) {
-        while ($r = mysqli_fetch_assoc($res)) {
-            $data[] = [
-                'id' => (int)($r['id'] ?? 0),
-                'account_code' => (string)($r['account_code'] ?? ''),
-                'account_name' => (string)($r['account_name'] ?? ''),
-                'total_value' => (float)($r['total_value'] ?? 0)
-            ];
-        }
+    $dataTypes = $whereTypes . 'ii';
+    $dataParams = $whereParams;
+    $dataParams[] = $start;
+    $dataParams[] = $length;
+    list($stmt, $rows) = gso_query_all($conn, $sql, $dataTypes, $dataParams);
+    if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
+    foreach ($rows as $r) {
+        $data[] = [
+            'id' => (int)($r['id'] ?? 0),
+            'account_code' => (string)($r['account_code'] ?? ''),
+            'account_name' => (string)($r['account_name'] ?? ''),
+            'total_value' => (float)($r['total_value'] ?? 0)
+        ];
     }
 
     echo json_encode([
@@ -10361,28 +10790,29 @@ if (isset($_POST['sef_account_codes_dt'])) {
     ];
     $orderBy = isset($colMap[$orderCol]) ? $colMap[$orderCol] : 'a.account_code';
 
-    $catSafe = mysqli_real_escape_string($conn, $category);
-    $whereSql = " WHERE UPPER(TRIM(s.category)) = '{$catSafe}' ";
-
+    $whereSql = " WHERE UPPER(TRIM(s.category)) = ? ";
+    $whereTypes = 's';
+    $whereParams = [$category];
     if ($search !== '') {
-        $s = mysqli_real_escape_string($conn, $search);
-        $whereSql .= " AND (a.account_code LIKE '%{$s}%' OR a.account_name LIKE '%{$s}%') ";
+        $whereSql .= " AND (a.account_code LIKE ? OR a.account_name LIKE ?) ";
+        $whereTypes .= 'ss';
+        $likeSearch = '%' . $search . '%';
+        $whereParams[] = $likeSearch;
+        $whereParams[] = $likeSearch;
     }
 
     $totalRecords = 0;
-    $qTotal = mysqli_query($conn, "
+    $row = gso_query_one($conn, "
         SELECT COUNT(DISTINCT a.id) AS cnt
         FROM account_code AS a
         INNER JOIN property_sef AS s ON a.account_code = s.account_code
-        WHERE UPPER(TRIM(s.category)) = '{$catSafe}'
-    ");
-    if ($qTotal && ($row = mysqli_fetch_assoc($qTotal))) {
-        $totalRecords = (int)($row['cnt'] ?? 0);
-    }
+        WHERE UPPER(TRIM(s.category)) = ?
+    ", 's', [$category]);
+    $totalRecords = (int)($row['cnt'] ?? 0);
 
     $filteredRecords = $totalRecords;
     if ($search !== '') {
-        $qFiltered = mysqli_query($conn, "
+        $rowF = gso_query_one($conn, "
             SELECT COUNT(*) AS cnt FROM (
                 SELECT a.id
                 FROM account_code AS a
@@ -10390,21 +10820,17 @@ if (isset($_POST['sef_account_codes_dt'])) {
                 {$whereSql}
                 GROUP BY a.id
             ) AS x
-        ");
-        if ($qFiltered && ($rowF = mysqli_fetch_assoc($qFiltered))) {
-            $filteredRecords = (int)($rowF['cnt'] ?? 0);
-        }
+        ", $whereTypes, $whereParams);
+        $filteredRecords = (int)($rowF['cnt'] ?? 0);
     }
 
     $totalAmount = 0.0;
-    $qAmount = mysqli_query($conn, "
+    $rowA = gso_query_one($conn, "
         SELECT COALESCE(SUM(s.unit_value), 0) AS total_amount
         FROM property_sef AS s
-        WHERE UPPER(TRIM(s.category)) = '{$catSafe}'
-    ");
-    if ($qAmount && ($rowA = mysqli_fetch_assoc($qAmount))) {
-        $totalAmount = (float)($rowA['total_amount'] ?? 0);
-    }
+        WHERE UPPER(TRIM(s.category)) = ?
+    ", 's', [$category]);
+    $totalAmount = (float)($rowA['total_amount'] ?? 0);
 
     $sql = "
         SELECT
@@ -10417,20 +10843,23 @@ if (isset($_POST['sef_account_codes_dt'])) {
         {$whereSql}
         GROUP BY a.id, a.account_code, a.account_name
         ORDER BY {$orderBy} {$orderDir}
-        LIMIT {$start}, {$length}
+        LIMIT ?, ?
     ";
 
     $data = [];
-    $res = mysqli_query($conn, $sql);
-    if ($res) {
-        while ($r = mysqli_fetch_assoc($res)) {
-            $data[] = [
-                'id' => (int)($r['id'] ?? 0),
-                'account_code' => (string)($r['account_code'] ?? ''),
-                'account_name' => (string)($r['account_name'] ?? ''),
-                'total_value' => (float)($r['total_value'] ?? 0)
-            ];
-        }
+    $dataTypes = $whereTypes . 'ii';
+    $dataParams = $whereParams;
+    $dataParams[] = $start;
+    $dataParams[] = $length;
+    list($stmt, $rows) = gso_query_all($conn, $sql, $dataTypes, $dataParams);
+    if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
+    foreach ($rows as $r) {
+        $data[] = [
+            'id' => (int)($r['id'] ?? 0),
+            'account_code' => (string)($r['account_code'] ?? ''),
+            'account_name' => (string)($r['account_name'] ?? ''),
+            'total_value' => (float)($r['total_value'] ?? 0)
+        ];
     }
 
     echo json_encode([
@@ -11179,26 +11608,27 @@ if (isset($_POST['unserviceable_account_codes_dt'])) {
 
     $codeExpr = "COALESCE(NULLIF(TRIM(u.account_code), ''), '(NO ACCOUNT CODE)')";
 
-    $totalRecords = 0;
-    $qTotal = mysqli_query($conn, "
+    $row = gso_query_one($conn, "
         SELECT COUNT(DISTINCT {$codeExpr}) AS cnt
         FROM unserviceable_items AS u
         {$latestHistoryJoin}
         WHERE COALESCE(h.status, 0) = 0
     ");
-    if ($qTotal && ($row = mysqli_fetch_assoc($qTotal))) {
-        $totalRecords = (int)($row['cnt'] ?? 0);
-    }
+    $totalRecords = (int)($row['cnt'] ?? 0);
 
     $whereSql = ' WHERE COALESCE(h.status, 0) = 0 ';
+    $whereTypes = '';
+    $whereParams = [];
     if ($search !== '') {
-        $s = mysqli_real_escape_string($conn, $search);
-        $whereSql .= " AND ({$codeExpr} LIKE '%{$s}%' OR COALESCE(ac.account_name, '') LIKE '%{$s}%') ";
+        $whereSql .= " AND ({$codeExpr} LIKE ? OR COALESCE(ac.account_name, '') LIKE ?) ";
+        $likeSearch = '%' . $search . '%';
+        $whereTypes = 'ss';
+        $whereParams = [$likeSearch, $likeSearch];
     }
 
     $filteredRecords = $totalRecords;
     if ($search !== '') {
-        $qFiltered = mysqli_query($conn, "
+        $rowF = gso_query_one($conn, "
             SELECT COUNT(*) AS cnt FROM (
                 SELECT {$codeExpr} AS code_key
                 FROM unserviceable_items AS u
@@ -11207,10 +11637,8 @@ if (isset($_POST['unserviceable_account_codes_dt'])) {
                 {$whereSql}
                 GROUP BY code_key
             ) AS x
-        ");
-        if ($qFiltered && ($rowF = mysqli_fetch_assoc($qFiltered))) {
-            $filteredRecords = (int)($rowF['cnt'] ?? 0);
-        }
+        ", $whereTypes, $whereParams);
+        $filteredRecords = (int)($rowF['cnt'] ?? 0);
     }
 
     $sql = "
@@ -11225,21 +11653,24 @@ if (isset($_POST['unserviceable_account_codes_dt'])) {
         {$whereSql}
         GROUP BY account_code, account_name
         ORDER BY {$orderBy} {$orderDir}
-        LIMIT {$start}, {$length}
+        LIMIT ?, ?
     ";
 
     $data = [];
-    $res = mysqli_query($conn, $sql);
-    if ($res) {
-        while ($r = mysqli_fetch_assoc($res)) {
-            $code = (string)($r['account_code'] ?? '');
-            $data[] = [
-                'account_code' => $code,
-                'account_name' => (string)($r['account_name'] ?? ''),
-                'item_count' => (int)($r['item_count'] ?? 0),
-                'total_value' => (float)($r['total_value'] ?? 0)
-            ];
-        }
+    $dataTypes = $whereTypes . 'ii';
+    $dataParams = $whereParams;
+    $dataParams[] = $start;
+    $dataParams[] = $length;
+    list($stmt, $rows) = gso_query_all($conn, $sql, $dataTypes, $dataParams);
+    if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
+    foreach ($rows as $r) {
+        $code = (string)($r['account_code'] ?? '');
+        $data[] = [
+            'account_code' => $code,
+            'account_name' => (string)($r['account_name'] ?? ''),
+            'item_count' => (int)($r['item_count'] ?? 0),
+            'total_value' => (float)($r['total_value'] ?? 0)
+        ];
     }
 
     echo json_encode([
@@ -11293,17 +11724,21 @@ if (isset($_POST['unserviceable_items_by_account_code_dt'])) {
     $orderBy = isset($colMap[$orderCol]) ? $colMap[$orderCol] : 'last_update';
 
     $codeExpr = "COALESCE(NULLIF(TRIM(u.account_code), ''), '(NO ACCOUNT CODE)')";
-    $codeSafe = mysqli_real_escape_string($conn, $code);
-    $whereCode = " WHERE {$codeExpr} = '{$codeSafe}' AND COALESCE(h.status, 0) = 0 ";
+    $whereCode = " WHERE {$codeExpr} = ? AND COALESCE(h.status, 0) = 0 ";
+    $baseTypes = 's';
+    $baseParams = [$code];
 
     $whereSearch = '';
+    $searchTypes = '';
+    $searchParams = [];
     if ($search !== '') {
-        $s = mysqli_real_escape_string($conn, $search);
-        $whereSearch = " AND (u.par_number LIKE '%{$s}%' OR COALESCE(u.model,'') LIKE '%{$s}%' OR COALESCE(u.description,'') LIKE '%{$s}%' OR COALESCE(u.serial_number,'') LIKE '%{$s}%' OR COALESCE(u.serial_number_2,'') LIKE '%{$s}%' OR COALESCE(d.department_name,'') LIKE '%{$s}%') ";
+        $whereSearch = " AND (u.par_number LIKE ? OR COALESCE(u.model,'') LIKE ? OR COALESCE(u.description,'') LIKE ? OR COALESCE(u.serial_number,'') LIKE ? OR COALESCE(u.serial_number_2,'') LIKE ? OR COALESCE(d.department_name,'') LIKE ?) ";
+        $likeSearch = '%' . $search . '%';
+        $searchTypes = 'ssssss';
+        $searchParams = [$likeSearch, $likeSearch, $likeSearch, $likeSearch, $likeSearch, $likeSearch];
     }
 
-    $totalRecords = 0;
-        $qTotal = mysqli_query($conn, "
+    $row = gso_query_one($conn, "
                 SELECT COUNT(*) AS cnt
                 FROM unserviceable_items AS u
                 LEFT JOIN (
@@ -11318,14 +11753,12 @@ if (isset($_POST['unserviceable_items_by_account_code_dt'])) {
                      AND h1.created_at = h2.max_created_at
                 ) AS h ON h.par_number = u.par_number
                 {$whereCode}
-        ");
-    if ($qTotal && ($row = mysqli_fetch_assoc($qTotal))) {
-        $totalRecords = (int)($row['cnt'] ?? 0);
-    }
+        ", $baseTypes, $baseParams);
+    $totalRecords = (int)($row['cnt'] ?? 0);
 
     $filteredRecords = $totalRecords;
     if ($whereSearch !== '') {
-        $qFiltered = mysqli_query($conn, "
+        $rowF = gso_query_one($conn, "
             SELECT COUNT(*) AS cnt
             FROM unserviceable_items AS u
             LEFT JOIN (
@@ -11342,10 +11775,8 @@ if (isset($_POST['unserviceable_items_by_account_code_dt'])) {
             LEFT JOIN department AS d ON h.dept_id = d.department_code
             {$whereCode}
             {$whereSearch}
-        ");
-        if ($qFiltered && ($rowF = mysqli_fetch_assoc($qFiltered))) {
-            $filteredRecords = (int)($rowF['cnt'] ?? 0);
-        }
+        ", $baseTypes . $searchTypes, array_merge($baseParams, $searchParams));
+        $filteredRecords = (int)($rowF['cnt'] ?? 0);
     }
 
     $sql = "
@@ -11377,23 +11808,24 @@ if (isset($_POST['unserviceable_items_by_account_code_dt'])) {
         {$whereCode}
         {$whereSearch}
         ORDER BY {$orderBy} {$orderDir}
-        LIMIT {$start}, {$length}
+        LIMIT ?, ?
     ";
 
     $data = [];
-    $res = mysqli_query($conn, $sql);
-    if ($res) {
-        while ($r = mysqli_fetch_assoc($res)) {
-            $data[] = [
-                'status' => (int)($r['status'] ?? 0),
-                'particular' => (string)($r['particular'] ?? ''),
-                'serial_number' => (string)($r['serial_number'] ?? ''),
-                'serial_number_2' => (string)($r['serial_number_2'] ?? ''),
-                'par_number' => (string)($r['par_number'] ?? ''),
-                'department_name' => (string)($r['department_name'] ?? ''),
-                'last_update' => (string)($r['last_update'] ?? '')
-            ];
-        }
+    $dataTypes = $baseTypes . $searchTypes . 'ii';
+    $dataParams = array_merge($baseParams, $searchParams, [$start, $length]);
+    list($stmt, $rows) = gso_query_all($conn, $sql, $dataTypes, $dataParams);
+    if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
+    foreach ($rows as $r) {
+        $data[] = [
+            'status' => (int)($r['status'] ?? 0),
+            'particular' => (string)($r['particular'] ?? ''),
+            'serial_number' => (string)($r['serial_number'] ?? ''),
+            'serial_number_2' => (string)($r['serial_number_2'] ?? ''),
+            'par_number' => (string)($r['par_number'] ?? ''),
+            'department_name' => (string)($r['department_name'] ?? ''),
+            'last_update' => (string)($r['last_update'] ?? '')
+        ];
     }
 
     echo json_encode([
@@ -11791,34 +12223,36 @@ if (isset($_POST['disposal_activities_dt'])) {
     $colMap = [0=>'created_at',1=>'disposal_reference',2=>'status',3=>'created_at'];
     $orderBy = isset($colMap[$orderCol]) ? $colMap[$orderCol] : 'created_at';
 
-    $totalRecords = 0;
-    $qTotal = mysqli_query($conn, "SELECT COUNT(*) AS cnt FROM disposal");
-    if ($qTotal && ($r = mysqli_fetch_assoc($qTotal))) { $totalRecords = (int)($r['cnt'] ?? 0); }
+    $row = gso_query_one($conn, "SELECT COUNT(*) AS cnt FROM disposal");
+    $totalRecords = (int)($row['cnt'] ?? 0);
 
     $whereSql = '';
+    $whereTypes = '';
+    $whereParams = [];
     if ($search !== '') {
-        $s = mysqli_real_escape_string($conn, $search);
-        $whereSql = " WHERE (disposal_reference LIKE '%{$s}%' OR DATE_FORMAT(created_at, '%Y-%m-%d') LIKE '%{$s}%') ";
+        $whereSql = " WHERE (disposal_reference LIKE ? OR DATE_FORMAT(created_at, '%Y-%m-%d') LIKE ?) ";
+        $likeSearch = '%' . $search . '%';
+        $whereTypes = 'ss';
+        $whereParams = [$likeSearch, $likeSearch];
     }
 
     $filteredRecords = $totalRecords;
     if ($whereSql !== '') {
-        $qFiltered = mysqli_query($conn, "SELECT COUNT(*) AS cnt FROM disposal {$whereSql}");
-        if ($qFiltered && ($rf = mysqli_fetch_assoc($qFiltered))) { $filteredRecords = (int)($rf['cnt'] ?? 0); }
+        $rf = gso_query_one($conn, "SELECT COUNT(*) AS cnt FROM disposal {$whereSql}", $whereTypes, $whereParams);
+        $filteredRecords = (int)($rf['cnt'] ?? 0);
     }
 
-    $sql = "SELECT id, disposal_reference, status, created_at FROM disposal {$whereSql} ORDER BY {$orderBy} {$orderDir} LIMIT {$start}, {$length}";
+    $sql = "SELECT id, disposal_reference, status, created_at FROM disposal {$whereSql} ORDER BY {$orderBy} {$orderDir} LIMIT ?, ?";
     $data = [];
-    $res = mysqli_query($conn, $sql);
-    if ($res) {
-        while ($row = mysqli_fetch_assoc($res)) {
-            $data[] = [
-                'id' => (int)($row['id'] ?? 0),
-                'disposal_reference' => (string)($row['disposal_reference'] ?? ''),
-                'status' => (int)($row['status'] ?? 0),
-                'created_at' => (string)($row['created_at'] ?? '')
-            ];
-        }
+    list($stmt, $rows) = gso_query_all($conn, $sql, $whereTypes . 'ii', array_merge($whereParams, [$start, $length]));
+    if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
+    foreach ($rows as $row) {
+        $data[] = [
+            'id' => (int)($row['id'] ?? 0),
+            'disposal_reference' => (string)($row['disposal_reference'] ?? ''),
+            'status' => (int)($row['status'] ?? 0),
+            'created_at' => (string)($row['created_at'] ?? '')
+        ];
     }
 
     echo json_encode([
@@ -12943,8 +13377,6 @@ if (isset($_POST['disposal_account_codes_dt'])) {
         echo json_encode(['draw'=>0,'recordsTotal'=>0,'recordsFiltered'=>0,'data'=>[]]);
         return false;
     }
-    $refSafe = mysqli_real_escape_string($conn, $ref);
-
     $draw = isset($_POST['draw']) ? (int)$_POST['draw'] : 0;
     $start = isset($_POST['start']) ? max(0, (int)$_POST['start']) : 0;
     $length = isset($_POST['length']) ? (int)$_POST['length'] : 10;
@@ -12976,26 +13408,32 @@ if (isset($_POST['disposal_account_codes_dt'])) {
             ) AS h ON h.par_number = i.par_number
     ";
 
-    $totalRecords = 0;
-    $qTotal = mysqli_query($conn, "
+    $baseTypes = 's';
+    $baseParams = [$ref];
+    $row = gso_query_one($conn, "
         SELECT COUNT(DISTINCT {$codeExpr}) AS cnt
         FROM iirup_report_items AS i
         LEFT JOIN unserviceable_items AS u ON u.par_number = i.par_number
         {$latestHistoryJoin}
         WHERE COALESCE(h.status, 0) = 1
-          AND COALESCE(i.disposal_reference,'') = '{$refSafe}'
-    ");
-    if ($qTotal && ($r = mysqli_fetch_assoc($qTotal))) { $totalRecords = (int)($r['cnt'] ?? 0); }
+          AND COALESCE(i.disposal_reference,'') = ?
+    ", $baseTypes, $baseParams);
+    $totalRecords = (int)($row['cnt'] ?? 0);
 
-    $whereSql = " WHERE COALESCE(h.status, 0) = 1 AND COALESCE(i.disposal_reference,'') = '{$refSafe}' ";
+    $whereSql = " WHERE COALESCE(h.status, 0) = 1 AND COALESCE(i.disposal_reference,'') = ? ";
+    $whereTypes = $baseTypes;
+    $whereParams = $baseParams;
     if ($search !== '') {
-        $s = mysqli_real_escape_string($conn, $search);
-        $whereSql .= " AND ({$codeExpr} LIKE '%{$s}%' OR COALESCE(ac.account_name, '') LIKE '%{$s}%') ";
+        $whereSql .= " AND ({$codeExpr} LIKE ? OR COALESCE(ac.account_name, '') LIKE ?) ";
+        $likeSearch = '%' . $search . '%';
+        $whereTypes .= 'ss';
+        $whereParams[] = $likeSearch;
+        $whereParams[] = $likeSearch;
     }
 
     $filteredRecords = $totalRecords;
     if ($search !== '') {
-        $qFiltered = mysqli_query($conn, "
+        $rf = gso_query_one($conn, "
             SELECT COUNT(*) AS cnt FROM (
                 SELECT {$codeExpr} AS code_key
                 FROM iirup_report_items AS i
@@ -13005,8 +13443,8 @@ if (isset($_POST['disposal_account_codes_dt'])) {
                 {$whereSql}
                 GROUP BY code_key
             ) AS x
-        ");
-        if ($qFiltered && ($rf = mysqli_fetch_assoc($qFiltered))) { $filteredRecords = (int)($rf['cnt'] ?? 0); }
+        ", $whereTypes, $whereParams);
+        $filteredRecords = (int)($rf['cnt'] ?? 0);
     }
 
     $sql = "
@@ -13024,21 +13462,20 @@ if (isset($_POST['disposal_account_codes_dt'])) {
         {$whereSql}
         GROUP BY account_code, account_name
         ORDER BY {$orderBy} {$orderDir}
-        LIMIT {$start}, {$length}
+        LIMIT ?, ?
     ";
 
     $data = [];
-    $res = mysqli_query($conn, $sql);
-    if ($res) {
-        while ($row = mysqli_fetch_assoc($res)) {
-            $code = (string)($row['account_code'] ?? '');
-            $data[] = [
-                'account_code' => $code,
-                'account_name' => (string)($row['account_name'] ?? ''),
-                'item_count' => (int)($row['item_count'] ?? 0),
-                'total_appraise_value' => (float)($row['total_appraise_value'] ?? 0)
-            ];
-        }
+    list($stmt, $rows) = gso_query_all($conn, $sql, $whereTypes . 'ii', array_merge($whereParams, [$start, $length]));
+    if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
+    foreach ($rows as $row) {
+        $code = (string)($row['account_code'] ?? '');
+        $data[] = [
+            'account_code' => $code,
+            'account_name' => (string)($row['account_name'] ?? ''),
+            'item_count' => (int)($row['item_count'] ?? 0),
+            'total_appraise_value' => (float)($row['total_appraise_value'] ?? 0)
+        ];
     }
 
     echo json_encode([
@@ -13082,17 +13519,20 @@ if (isset($_POST['disposal_items_by_account_code_dt'])) {
     $orderBy = isset($colMap[$orderCol]) ? $colMap[$orderCol] : 'par_number';
 
     $codeExpr = "COALESCE(NULLIF(TRIM(u.account_code), ''), '(NO ACCOUNT CODE)')";
-    $codeSafe = mysqli_real_escape_string($conn, $code);
-    $refSafe = mysqli_real_escape_string($conn, $ref);
-
-    $where = " WHERE {$codeExpr} = '{$codeSafe}' AND COALESCE(h.status, 0) = 1 AND COALESCE(i.disposal_reference,'') = '{$refSafe}' ";
+    $where = " WHERE {$codeExpr} = ? AND COALESCE(h.status, 0) = 1 AND COALESCE(i.disposal_reference,'') = ? ";
+    $baseTypes = 'ss';
+    $baseParams = [$code, $ref];
     $whereSearch = '';
+    $searchTypes = '';
+    $searchParams = [];
     if ($search !== '') {
-        $s = mysqli_real_escape_string($conn, $search);
-        $whereSearch = " AND (COALESCE(i.fund,'') LIKE '%{$s}%' OR COALESCE(u.category,'') LIKE '%{$s}%' OR i.par_number LIKE '%{$s}%' OR COALESCE(i.particulars,'') LIKE '%{$s}%') ";
+        $whereSearch = " AND (COALESCE(i.fund,'') LIKE ? OR COALESCE(u.category,'') LIKE ? OR i.par_number LIKE ? OR COALESCE(i.particulars,'') LIKE ?) ";
+        $likeSearch = '%' . $search . '%';
+        $searchTypes = 'ssss';
+        $searchParams = [$likeSearch, $likeSearch, $likeSearch, $likeSearch];
     }
 
-    $qTotal = mysqli_query($conn, "
+    $rt = gso_query_one($conn, "
         SELECT COUNT(*) AS cnt
                 FROM iirup_report_items AS i
                 LEFT JOIN unserviceable_items AS u ON u.par_number = i.par_number
@@ -13108,12 +13548,12 @@ if (isset($_POST['disposal_items_by_account_code_dt'])) {
            AND h1.created_at = h2.max_created_at
         ) AS h ON h.par_number = i.par_number
         {$where}
-    ");
-    $totalRecords = ($qTotal && ($rt = mysqli_fetch_assoc($qTotal))) ? (int)($rt['cnt'] ?? 0) : 0;
+    ", $baseTypes, $baseParams);
+    $totalRecords = (int)($rt['cnt'] ?? 0);
 
     $filteredRecords = $totalRecords;
     if ($whereSearch !== '') {
-        $qFiltered = mysqli_query($conn, "
+        $rf = gso_query_one($conn, "
             SELECT COUNT(*) AS cnt
                         FROM iirup_report_items AS i
                         LEFT JOIN unserviceable_items AS u ON u.par_number = i.par_number
@@ -13130,8 +13570,8 @@ if (isset($_POST['disposal_items_by_account_code_dt'])) {
             ) AS h ON h.par_number = i.par_number
             {$where}
             {$whereSearch}
-        ");
-        if ($qFiltered && ($rf = mysqli_fetch_assoc($qFiltered))) { $filteredRecords = (int)($rf['cnt'] ?? 0); }
+        ", $baseTypes . $searchTypes, array_merge($baseParams, $searchParams));
+        $filteredRecords = (int)($rf['cnt'] ?? 0);
     }
 
     $sql = "
@@ -13161,25 +13601,24 @@ if (isset($_POST['disposal_items_by_account_code_dt'])) {
         {$where}
         {$whereSearch}
         ORDER BY {$orderBy} {$orderDir}
-        LIMIT {$start}, {$length}
+        LIMIT ?, ?
     ";
 
     $data = [];
-    $res = mysqli_query($conn, $sql);
-    if ($res) {
-        while ($r = mysqli_fetch_assoc($res)) {
-            $data[] = [
-                'iirup_id' => (int)($r['iirup_id'] ?? 0),
-                'fund' => (string)($r['fund'] ?? ''),
-                'category' => (string)($r['category'] ?? ''),
-                'qty' => (int)($r['qty'] ?? 1),
-                'particular' => (string)($r['particular'] ?? ''),
-                'par_number' => (string)($r['par_number'] ?? ''),
-                'unit_cost' => (float)($r['unit_cost'] ?? 0),
-                'appraise_value' => (float)($r['appraise_value'] ?? 0),
-                'total_appraise_value' => (float)($r['total_appraise_value'] ?? 0)
-            ];
-        }
+    list($stmt, $rows) = gso_query_all($conn, $sql, $baseTypes . $searchTypes . 'ii', array_merge($baseParams, $searchParams, [$start, $length]));
+    if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
+    foreach ($rows as $r) {
+        $data[] = [
+            'iirup_id' => (int)($r['iirup_id'] ?? 0),
+            'fund' => (string)($r['fund'] ?? ''),
+            'category' => (string)($r['category'] ?? ''),
+            'qty' => (int)($r['qty'] ?? 1),
+            'particular' => (string)($r['particular'] ?? ''),
+            'par_number' => (string)($r['par_number'] ?? ''),
+            'unit_cost' => (float)($r['unit_cost'] ?? 0),
+            'appraise_value' => (float)($r['appraise_value'] ?? 0),
+            'total_appraise_value' => (float)($r['total_appraise_value'] ?? 0)
+        ];
     }
 
     echo json_encode([
