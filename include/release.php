@@ -22,14 +22,49 @@ function pims_release_git_binary(): string {
   return 'git';
 }
 
+function pims_release_command_output(string $command): string {
+  $output = '';
+
+  if (function_exists('shell_exec')) {
+    $result = @shell_exec($command);
+    if (is_string($result) && $result !== '') {
+      return trim($result);
+    }
+  }
+
+  if (function_exists('exec')) {
+    $lines = [];
+    $status = 1;
+    @exec($command, $lines, $status);
+    if ($status === 0 && !empty($lines)) {
+      return trim(implode("\n", $lines));
+    }
+  }
+
+  if (function_exists('popen')) {
+    $handle = @popen($command, 'r');
+    if (is_resource($handle)) {
+      while (!feof($handle)) {
+        $output .= (string) fgets($handle);
+      }
+      @pclose($handle);
+      if ($output !== '') {
+        return trim($output);
+      }
+    }
+  }
+
+  return '';
+}
+
 function pims_release_git_available(): bool {
   $command = escapeshellarg(pims_release_git_binary()) . ' -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' rev-parse --is-inside-work-tree 2>/dev/null';
-  return trim((string) @shell_exec($command)) === 'true';
+  return pims_release_command_output($command) === 'true';
 }
 
 function pims_release_git(string $command): string {
   $binary = escapeshellarg(pims_release_git_binary());
-  return trim((string) @shell_exec($binary . ' -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' ' . $command . ' 2>/dev/null'));
+  return pims_release_command_output($binary . ' -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' ' . $command . ' 2>/dev/null');
 }
 
 function pims_release_commit_log_format(): string {

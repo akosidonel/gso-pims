@@ -10,3 +10,4 @@ This file is generated from git history by `php tools/release.php`.
 ### Fixed
 - Bug fix on change log and version number
 - General bug fixes and maintenance improvements
+- Minor bug fix and improvements
