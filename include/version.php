@@ -251,20 +251,24 @@ function pims_version_patch_timeline(?string $baseVersion, array $commits): arra
   return $timeline;
 }
 
-function pims_version_apply_numeric_display(array $payload): array {
-  $parts = pims_version_parse_numeric((string) ($payload['version'] ?? $payload['full'] ?? '0.0.0'));
-  $basePatch = (int) $parts['patch'] + max(0, (int) ($payload['commits_since_tag'] ?? 0));
-  $majorMinorKey = (int) $parts['major'] . '.' . (int) $parts['minor'];
-  $fingerprint = '';
+function pims_version_baseline_state(): array {
+  $baseline = pims_release_load_changelog_baseline();
+  $baselineHash = trim((string) ($baseline['hash'] ?? ''));
+  $baselineVersion = trim((string) ($baseline['version'] ?? ''));
 
-  if (!empty($payload['dirty_fingerprint'])) {
-    $fingerprint = (string) $payload['dirty_fingerprint'];
-  } elseif (!empty($payload['live_fingerprint'])) {
-    $fingerprint = (string) $payload['live_fingerprint'];
+  if ($baselineVersion === '') {
+    $latestTag = pims_release_latest_tag();
+    $baselineVersion = $latestTag ? ltrim($latestTag, 'v') : pims_release_format_version(pims_release_initial_version());
   }
 
-  $parts['patch'] = pims_version_live_patch_number($majorMinorKey, $basePatch, $fingerprint);
+  return [
+    'hash' => $baselineHash,
+    'version' => $baselineVersion,
+  ];
+}
 
+function pims_version_apply_numeric_display(array $payload): array {
+  $parts = pims_version_parse_numeric((string) ($payload['version'] ?? $payload['full'] ?? '0.0.0'));
   $numeric = pims_version_numeric_string($parts);
   $payload['version'] = $numeric;
   $payload['full'] = $numeric;
@@ -334,14 +338,28 @@ function pims_version_compute_git_payload(): array {
   $latestTag = null;
   $commitsSinceTag = null;
   $totalCommits = 0;
+  $baselineState = pims_version_baseline_state();
+  $baselineHash = $baselineState['hash'];
+  $baselineVersion = $baselineState['version'];
 
   $commitDate = pims_release_git('log -1 --format=%cd --date=short') ?: $commitDate;
   $totalCommits = (int) pims_release_git('rev-list --count HEAD');
   $latestTag = pims_release_latest_tag();
   $exactTag = pims_release_exact_tag();
-  $commitsSinceTag = pims_release_commit_count($latestTag);
+  $baseRef = $baselineHash !== '' ? $baselineHash : $latestTag;
+  $commitsSinceTag = pims_release_commit_count($baseRef);
 
-  if ($exactTag) {
+  if ($baselineVersion !== '') {
+    $timeline = pims_version_patch_timeline($baselineVersion, pims_release_commits($baseRef));
+    if ($timeline) {
+      $lastVersion = trim((string) ($timeline[count($timeline) - 1]['version'] ?? ''));
+      $version = $lastVersion !== '' ? $lastVersion : $baselineVersion;
+    } else {
+      $version = $baselineVersion;
+    }
+    $full = 'v' . $version;
+    $commitsSinceTag = 0;
+  } elseif ($exactTag) {
     $version = ltrim($exactTag, 'v');
     $full = $exactTag;
     $commitsSinceTag = 0;

@@ -302,6 +302,66 @@ if(!function_exists('gso_release_sync_version_snapshot')){
         return pims_version_write_snapshot($snapshot);
     }
 }
+if(!function_exists('gso_release_snapshot_version_number')){
+    function gso_release_snapshot_version_number(){
+        if (!function_exists('pims_version_load_snapshot')) {
+            return '';
+        }
+        $snapshot = pims_version_load_snapshot();
+        if (!is_array($snapshot)) {
+            return '';
+        }
+        return trim((string)($snapshot['full'] ?? $snapshot['version'] ?? ''));
+    }
+}
+if(!function_exists('gso_release_flatten_changelog_entries')){
+    function gso_release_flatten_changelog_entries(array $entries, $limit = 12){
+        $rows = [];
+        $limit = max(1, (int)$limit);
+
+        foreach ($entries as $entry) {
+            $tag = trim((string)($entry['tag'] ?? ''));
+            $patchVersion = preg_match('/v?(\d+\.\d+\.\d+)/', $tag, $matches) ? $matches[1] : '';
+            $sections = is_array($entry['sections'] ?? null) ? $entry['sections'] : [];
+            foreach ($sections as $items) {
+                if (!is_array($items)) {
+                    continue;
+                }
+                foreach ($items as $item) {
+                    $subject = trim((string)$item);
+                    if ($subject === '') {
+                        continue;
+                    }
+                    $rows[] = [
+                        'hash' => null,
+                        'short_hash' => '',
+                        'patch_version' => $patchVersion,
+                        'subject' => $subject,
+                        'raw_subject' => $subject,
+                        'author' => '',
+                        'committed_at' => null,
+                        'committed_timestamp' => 0,
+                        'committed_ago' => trim((string)($entry['date'] ?? '')),
+                    ];
+                    if (count($rows) >= $limit) {
+                        return $rows;
+                    }
+                }
+            }
+        }
+
+        return $rows;
+    }
+}
+if(!function_exists('gso_release_fallback_changelog_comments')){
+    function gso_release_fallback_changelog_comments($limit = 12){
+        $entries = pims_release_parse_changelog();
+        if (!$entries) {
+            return [];
+        }
+        return gso_release_flatten_changelog_entries($entries, $limit);
+    }
+}
 if(!function_exists('gso_release_sync_database')){
     function gso_release_sync_database(mysqli $conn){
         gso_release_ensure_tables($conn);
@@ -389,6 +449,8 @@ if(!function_exists('gso_release_sync_database')){
             $latestPatchVersion = trim((string)($lastTimeline['version'] ?? $baselineVersion)) ?: $baselineVersion;
         } elseif ($gitAvailable) {
             $latestPatchVersion = $baselineVersion;
+        } else {
+            $latestPatchVersion = gso_release_snapshot_version_number() ?: $latestPatchVersion;
         }
 
         $currentVersion = $latestPatchVersion;
@@ -457,6 +519,9 @@ if(!function_exists('gso_release_fetch_changelog_comments')){
         list($stmt, $rows) = gso_query_all($conn, $sql, 'si', [$baselineHash, $limit]);
         if ($stmt instanceof mysqli_stmt) {
             $stmt->close();
+        }
+        if (!$rows) {
+            return gso_release_fallback_changelog_comments($limit);
         }
         foreach ($rows as $index => $row) {
             $rows[$index]['committed_ago'] = pims_release_relative_time((int)($row['committed_timestamp'] ?? 0));
