@@ -11,3 +11,4 @@ This file is generated from git history by `php tools/release.php`.
 - Bug fix on change log and version number
 - General bug fixes and maintenance improvements
 - Minor bug fix and improvements
+- Bug fix in the change log and auth files

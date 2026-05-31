@@ -119,6 +119,15 @@ if(!function_exists('gso_fetch_one_row')){
         return null;
     }
 }
+if(!function_exists('gso_stmt_bind_params')){
+    function gso_stmt_bind_params(mysqli_stmt $stmt, $types, array &$params){
+        $refs = [$stmt, $types];
+        foreach ($params as $key => &$value) {
+            $refs[] = &$value;
+        }
+        return call_user_func_array('mysqli_stmt_bind_param', $refs);
+    }
+}
 if(!function_exists('gso_query_all')){
     function gso_query_all(mysqli $conn, $sql, $types = '', array $params = array()){
         $stmt = $conn->prepare($sql);
@@ -142,9 +151,340 @@ if(!function_exists('gso_query_one')){
 }
 if(!function_exists('gso_release_version_payload')){
     function gso_release_version_payload(){
+        static $cachedPayload = null;
+        if (is_array($cachedPayload)) {
+            return $cachedPayload;
+        }
+        if (function_exists('pims_compute_version_autoload')) {
+            $cachedPayload = pims_compute_version_autoload();
+            return is_array($cachedPayload) ? $cachedPayload : [];
+        }
         $returnVersionArray = true;
         $payload = require __DIR__ . '/../include/version.php';
-        return is_array($payload) ? $payload : [];
+        $cachedPayload = is_array($payload) ? $payload : [];
+        return $cachedPayload;
+    }
+}
+if(!function_exists('gso_release_changelog_table')){
+    function gso_release_changelog_table(){
+        return 'system_changelog';
+    }
+}
+if(!function_exists('gso_release_version_state_table')){
+    function gso_release_version_state_table(){
+        return 'system_version_state';
+    }
+}
+if(!function_exists('gso_release_baseline_version')){
+    function gso_release_baseline_version(){
+        $baseline = pims_release_load_changelog_baseline();
+        $version = trim((string)($baseline['version'] ?? ''));
+        if ($version !== '') {
+            return $version;
+        }
+        return pims_release_format_version(pims_release_initial_version());
+    }
+}
+if(!function_exists('gso_release_baseline_hash')){
+    function gso_release_baseline_hash(){
+        $baseline = pims_release_load_changelog_baseline();
+        return trim((string)($baseline['hash'] ?? ''));
+    }
+}
+if(!function_exists('gso_release_normalize_version_payload')){
+    function gso_release_normalize_version_payload(array $payload, $versionOverride = null){
+        $versionNumber = trim((string)$versionOverride);
+        if ($versionNumber === '') {
+            $versionNumber = trim((string)($payload['full'] ?? $payload['version'] ?? '0.0.0'));
+        }
+        if ($versionNumber === '') {
+            $versionNumber = '0.0.0';
+        }
+        $payload['name'] = trim((string)($payload['name'] ?? PIMS_RELEASE_NAME)) ?: PIMS_RELEASE_NAME;
+        $payload['version'] = $versionNumber;
+        $payload['full'] = $versionNumber;
+        $payload['meta_label'] = '';
+        return $payload;
+    }
+}
+if(!function_exists('gso_release_mysql_datetime')){
+    function gso_release_mysql_datetime($value, $fallbackTimestamp = 0){
+        $timestamp = strtotime(trim((string)$value));
+        if ($timestamp === false || $timestamp <= 0) {
+            $timestamp = (int)$fallbackTimestamp;
+        }
+        if ($timestamp <= 0) {
+            return null;
+        }
+        return date('Y-m-d H:i:s', $timestamp);
+    }
+}
+if(!function_exists('gso_release_ensure_tables')){
+    function gso_release_ensure_tables(mysqli $conn){
+        $changelogTable = gso_release_changelog_table();
+        $versionTable = gso_release_version_state_table();
+
+        mysqli_query($conn, "CREATE TABLE IF NOT EXISTS `{$changelogTable}` (
+            `changelog_id` INT NOT NULL AUTO_INCREMENT,
+            `baseline_hash` VARCHAR(64) NOT NULL DEFAULT '',
+            `commit_hash` VARCHAR(64) NOT NULL,
+            `short_hash` VARCHAR(20) NOT NULL DEFAULT '',
+            `patch_version` VARCHAR(20) NOT NULL,
+            `commit_message` TEXT NOT NULL,
+            `commit_author` VARCHAR(150) DEFAULT NULL,
+            `committed_at` DATETIME DEFAULT NULL,
+            `committed_timestamp` BIGINT DEFAULT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`changelog_id`),
+            UNIQUE KEY `uniq_commit_hash` (`commit_hash`),
+            KEY `idx_baseline_timestamp` (`baseline_hash`, `committed_timestamp`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        mysqli_query($conn, "CREATE TABLE IF NOT EXISTS `{$versionTable}` (
+            `version_state_id` INT NOT NULL AUTO_INCREMENT,
+            `state_key` VARCHAR(50) NOT NULL,
+            `current_version` VARCHAR(20) NOT NULL,
+            `latest_patch_version` VARCHAR(20) NOT NULL,
+            `version_hash` VARCHAR(64) DEFAULT NULL,
+            `version_source` VARCHAR(30) DEFAULT NULL,
+            `baseline_hash` VARCHAR(64) NOT NULL DEFAULT '',
+            `baseline_version` VARCHAR(20) NOT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`version_state_id`),
+            UNIQUE KEY `uniq_state_key` (`state_key`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
+}
+if(!function_exists('gso_release_store_version_state')){
+    function gso_release_store_version_state(mysqli $conn, array $state){
+        $table = gso_release_version_state_table();
+        $sql = "INSERT INTO `{$table}` (
+                    state_key,
+                    current_version,
+                    latest_patch_version,
+                    version_hash,
+                    version_source,
+                    baseline_hash,
+                    baseline_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    current_version = VALUES(current_version),
+                    latest_patch_version = VALUES(latest_patch_version),
+                    version_hash = VALUES(version_hash),
+                    version_source = VALUES(version_source),
+                    baseline_hash = VALUES(baseline_hash),
+                    baseline_version = VALUES(baseline_version)";
+        $stmt = mysqli_prepare($conn, $sql);
+        if (!$stmt) { return false; }
+
+        $stateKey = 'current';
+        $currentVersion = trim((string)($state['current_version'] ?? '0.0.0')) ?: '0.0.0';
+        $latestPatchVersion = trim((string)($state['latest_patch_version'] ?? $currentVersion)) ?: $currentVersion;
+        $versionHash = trim((string)($state['version_hash'] ?? ''));
+        $versionSource = trim((string)($state['version_source'] ?? 'database'));
+        $baselineHash = trim((string)($state['baseline_hash'] ?? ''));
+        $baselineVersion = trim((string)($state['baseline_version'] ?? gso_release_baseline_version())) ?: gso_release_baseline_version();
+
+        mysqli_stmt_bind_param($stmt, 'sssssss', $stateKey, $currentVersion, $latestPatchVersion, $versionHash, $versionSource, $baselineHash, $baselineVersion);
+        $ok = mysqli_stmt_execute($stmt);
+        mysqli_stmt_close($stmt);
+        return (bool)$ok;
+    }
+}
+if(!function_exists('gso_release_sync_database')){
+    function gso_release_sync_database(mysqli $conn){
+        gso_release_ensure_tables($conn);
+
+        $baselineHash = gso_release_baseline_hash();
+        $baselineVersion = gso_release_baseline_version();
+        $liveVersion = gso_release_normalize_version_payload(gso_release_version_payload());
+        $gitAvailable = pims_release_git_available();
+        $baseRef = $baselineHash !== '' ? $baselineHash : pims_release_latest_tag();
+        $gitCommits = $gitAvailable ? pims_release_commits($baseRef) : [];
+        $timeline = pims_version_patch_timeline($baselineVersion, $gitCommits);
+        $timelineByHash = [];
+
+        foreach ($timeline as $item) {
+            $hash = trim((string)($item['hash'] ?? ''));
+            if ($hash === '') {
+                continue;
+            }
+            $timelineByHash[$hash] = trim((string)($item['version'] ?? ''));
+        }
+
+        $table = gso_release_changelog_table();
+        if ($gitAvailable) {
+            $upsertSql = "INSERT INTO `{$table}` (
+                    baseline_hash,
+                    commit_hash,
+                    short_hash,
+                    patch_version,
+                    commit_message,
+                    commit_author,
+                    committed_at,
+                    committed_timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    baseline_hash = VALUES(baseline_hash),
+                    short_hash = VALUES(short_hash),
+                    patch_version = VALUES(patch_version),
+                    commit_message = VALUES(commit_message),
+                    commit_author = VALUES(commit_author),
+                    committed_at = VALUES(committed_at),
+                    committed_timestamp = VALUES(committed_timestamp)";
+            $upsertStmt = mysqli_prepare($conn, $upsertSql);
+
+            if ($upsertStmt) {
+                foreach ($gitCommits as $commit) {
+                    $commitHash = trim((string)($commit['hash'] ?? ''));
+                    if ($commitHash === '') {
+                        continue;
+                    }
+
+                    $shortHash = trim((string)($commit['short_hash'] ?? ''));
+                    $patchVersion = trim((string)($timelineByHash[$commitHash] ?? ''));
+                    $commitMessage = trim((string)($commit['raw_subject'] ?? $commit['subject'] ?? 'Updated project files'));
+                    $commitAuthor = trim((string)($commit['author'] ?? ''));
+                    $committedAt = gso_release_mysql_datetime($commit['committed_at'] ?? null, (int)($commit['committed_timestamp'] ?? 0));
+                    $committedTimestamp = (int)($commit['committed_timestamp'] ?? 0);
+
+                    mysqli_stmt_bind_param($upsertStmt, 'sssssssi', $baselineHash, $commitHash, $shortHash, $patchVersion, $commitMessage, $commitAuthor, $committedAt, $committedTimestamp);
+                    mysqli_stmt_execute($upsertStmt);
+                }
+                mysqli_stmt_close($upsertStmt);
+            }
+
+            $escapedBaselineHash = mysqli_real_escape_string($conn, $baselineHash);
+            if (!$gitCommits) {
+                mysqli_query($conn, "DELETE FROM `{$table}` WHERE baseline_hash = '{$escapedBaselineHash}'");
+            } else {
+                $hashList = [];
+                foreach ($gitCommits as $commit) {
+                    $commitHash = trim((string)($commit['hash'] ?? ''));
+                    if ($commitHash === '') {
+                        continue;
+                    }
+                    $hashList[] = "'" . mysqli_real_escape_string($conn, $commitHash) . "'";
+                }
+                if ($hashList) {
+                    mysqli_query($conn, "DELETE FROM `{$table}` WHERE baseline_hash = '{$escapedBaselineHash}' AND commit_hash NOT IN (" . implode(',', $hashList) . ")");
+                }
+            }
+        }
+
+        $latestPatchVersion = gso_release_latest_saved_patch_version($conn);
+        if ($timeline) {
+            $lastTimeline = end($timeline);
+            $latestPatchVersion = trim((string)($lastTimeline['version'] ?? $baselineVersion)) ?: $baselineVersion;
+        } elseif ($gitAvailable) {
+            $latestPatchVersion = $baselineVersion;
+        }
+
+        gso_release_store_version_state($conn, [
+            'current_version' => trim((string)($liveVersion['full'] ?? $latestPatchVersion)) ?: $latestPatchVersion,
+            'latest_patch_version' => $latestPatchVersion,
+            'version_hash' => trim((string)($liveVersion['hash'] ?? '')),
+            'version_source' => trim((string)($liveVersion['source'] ?? 'git')) ?: 'git',
+            'baseline_hash' => $baselineHash,
+            'baseline_version' => $baselineVersion,
+        ]);
+
+        return [
+            'baseline_hash' => $baselineHash,
+            'baseline_version' => $baselineVersion,
+            'live_version' => $liveVersion,
+            'latest_patch_version' => $latestPatchVersion,
+        ];
+    }
+}
+if(!function_exists('gso_release_fetch_live_version')){
+    function gso_release_fetch_live_version(mysqli $conn){
+        gso_release_sync_database($conn);
+        $table = gso_release_version_state_table();
+        $row = gso_query_one($conn, "SELECT current_version, latest_patch_version, version_hash, version_source, baseline_hash, baseline_version, updated_at FROM `{$table}` WHERE state_key = ? LIMIT 1", 's', ['current']);
+        if (!$row) {
+            return gso_release_normalize_version_payload(gso_release_version_payload());
+        }
+
+        return [
+            'name' => PIMS_RELEASE_NAME,
+            'version' => trim((string)($row['current_version'] ?? '0.0.0')) ?: '0.0.0',
+            'full' => trim((string)($row['current_version'] ?? '0.0.0')) ?: '0.0.0',
+            'source' => trim((string)($row['version_source'] ?? 'database')) ?: 'database',
+            'hash' => trim((string)($row['version_hash'] ?? '')) ?: null,
+            'latest_patch_version' => trim((string)($row['latest_patch_version'] ?? '')),
+            'baseline_hash' => trim((string)($row['baseline_hash'] ?? '')),
+            'baseline_version' => trim((string)($row['baseline_version'] ?? '')),
+            'updated_at' => trim((string)($row['updated_at'] ?? '')),
+            'meta_label' => '',
+        ];
+    }
+}
+if(!function_exists('gso_release_fetch_changelog_comments')){
+    function gso_release_fetch_changelog_comments(mysqli $conn, $limit = 12){
+        gso_release_ensure_tables($conn);
+        $table = gso_release_changelog_table();
+        $baselineHash = gso_release_baseline_hash();
+        $limit = max(1, (int)$limit);
+        $sql = "SELECT
+                    commit_hash AS hash,
+                    short_hash,
+                    patch_version,
+                    commit_message AS subject,
+                    commit_message AS raw_subject,
+                    commit_author AS author,
+                    committed_at,
+                    committed_timestamp
+                FROM `{$table}`
+                WHERE baseline_hash = ?
+                ORDER BY committed_timestamp DESC, changelog_id DESC
+                LIMIT ?";
+        list($stmt, $rows) = gso_query_all($conn, $sql, 'si', [$baselineHash, $limit]);
+        if ($stmt instanceof mysqli_stmt) {
+            $stmt->close();
+        }
+        foreach ($rows as $index => $row) {
+            $rows[$index]['committed_ago'] = pims_release_relative_time((int)($row['committed_timestamp'] ?? 0));
+        }
+        return $rows;
+    }
+}
+if(!function_exists('gso_release_latest_saved_patch_version')){
+    function gso_release_latest_saved_patch_version(mysqli $conn){
+        gso_release_ensure_tables($conn);
+        $table = gso_release_changelog_table();
+        $baselineHash = gso_release_baseline_hash();
+        $row = gso_query_one($conn, "SELECT patch_version FROM `{$table}` WHERE baseline_hash = ? ORDER BY committed_timestamp DESC, changelog_id DESC LIMIT 1", 's', [$baselineHash]);
+        $patchVersion = trim((string)($row['patch_version'] ?? ''));
+        if ($patchVersion !== '') {
+            return $patchVersion;
+        }
+        return gso_release_baseline_version();
+    }
+}
+if(!function_exists('gso_realtime_changelog_payload')){
+    function gso_realtime_changelog_payload(){
+        global $conn;
+        $version = gso_release_fetch_live_version($conn);
+        $recentCommits = gso_release_fetch_changelog_comments($conn, 12);
+        $currentPatchVersion = trim((string)($version['latest_patch_version'] ?? $version['full'] ?? '0.0.0')) ?: '0.0.0';
+        $displayVersion = $version;
+        $displayVersion['version'] = $currentPatchVersion;
+        $displayVersion['full'] = $currentPatchVersion;
+        return [
+            'version' => $displayVersion,
+            'recent_comments' => $recentCommits,
+            'current_patch_version' => $currentPatchVersion,
+            'baseline' => [
+                'hash' => gso_release_baseline_hash(),
+                'version' => gso_release_baseline_version(),
+            ],
+            'current_head' => $recentCommits[0]['hash'] ?? ($displayVersion['hash'] ?? null),
+            'updated_at' => date('c'),
+            'updated_label' => date('M j, Y g:i:s A'),
+        ];
     }
 }
 if(isset($_GET['fetch_live_version'])){
@@ -152,56 +492,9 @@ if(isset($_GET['fetch_live_version'])){
     echo json_encode([
         'status' => 200,
         'message' => 'OK',
-        'data' => gso_release_version_payload(),
+        'data' => gso_release_fetch_live_version($conn),
     ]);
     return;
-}
-if(!function_exists('gso_realtime_changelog_payload')){
-    function gso_realtime_changelog_payload(){
-        $snapshot = pims_release_sync_changelog_snapshot(false);
-        $version = gso_release_version_payload();
-        $pending = $snapshot['pending'] ?? [];
-        $baseline = is_array($pending['baseline'] ?? null) ? $pending['baseline'] : null;
-        $pendingCommits = is_array($pending['commits'] ?? null) ? $pending['commits'] : [];
-        $gitLatestTag = pims_release_latest_tag();
-        $gitCommits = pims_release_commits($gitLatestTag);
-        $recentCommits = pims_release_recent_commits(12);
-        $patchTimeline = pims_version_patch_timeline($gitLatestTag ? ltrim($gitLatestTag, 'v') : null, $gitCommits);
-        $patchVersionsByHash = [];
-
-        foreach ($patchTimeline as $item) {
-            $hash = trim((string) ($item['hash'] ?? ''));
-            if ($hash === '') {
-                continue;
-            }
-            $patchVersionsByHash[$hash] = (string) ($item['version'] ?? '');
-        }
-
-        foreach ($pendingCommits as $index => $commit) {
-            $hash = trim((string) ($commit['hash'] ?? ''));
-            $pendingCommits[$index]['patch_version'] = $patchVersionsByHash[$hash] ?? null;
-        }
-
-        foreach ($recentCommits as $index => $commit) {
-            $hash = trim((string) ($commit['hash'] ?? ''));
-            $recentCommits[$index]['patch_version'] = $patchVersionsByHash[$hash] ?? null;
-        }
-
-        $pending['commits'] = $pendingCommits;
-
-        return [
-            'version' => $version,
-            'pending' => $pending,
-            'entries' => $snapshot['entries'] ?? [],
-            'recent_comments' => $recentCommits,
-            'patch_timeline' => $pendingCommits,
-            'current_patch_version' => pims_version_current_live_patch_version($version),
-            'baseline' => $baseline,
-            'current_head' => $recentCommits[0]['hash'] ?? ($version['hash'] ?? null),
-            'updated_at' => date('c'),
-            'updated_label' => date('M j, Y g:i:s A'),
-        ];
-    }
 }
 if(isset($_GET['fetch_realtime_changelog'])){
     header('Content-Type: application/json');
