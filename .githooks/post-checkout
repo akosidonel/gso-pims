@@ -2,3 +2,4 @@
 set -euo pipefail
 
 /Applications/XAMPP/xamppfiles/bin/php tools/sync-changelog.php >/dev/null 2>&1 || true
+/Applications/XAMPP/xamppfiles/bin/php tools/sync-release-state.php >/dev/null 2>&1 || true

@@ -2,6 +2,10 @@
 
 declare(strict_types=1);
 
+if (PHP_SAPI === 'cli') {
+    ini_set('session.save_path', '/private/tmp');
+}
+
 $_SERVER['REMOTE_ADDR'] = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
 $_GET = [];
 $_POST = [];

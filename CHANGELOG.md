@@ -16,3 +16,4 @@ This file is generated from git history by `php tools/release.php`.
 - Bug fix in the change log and auth files
 - Fix the mitchmatch of the version number
 - Bug fix on versioning and changelog
+- Fix the version snapshot
