@@ -4,6 +4,9 @@
 <script src="../assets/dist/js/adminlte.min.js"></script><!-- Custom App -->
 <script>
 	window.currentUserRole = "<?php echo isset($_SESSION['role']) ? htmlspecialchars(strtoupper(trim((string)$_SESSION['role'])), ENT_QUOTES) : ''; ?>";
+	window.gsoFormTokens = Object.assign({}, window.gsoFormTokens || {}, {
+		disposalActions: "<?php echo htmlspecialchars(gso_issue_form_token('disposal_actions'), ENT_QUOTES, 'UTF-8'); ?>"
+	});
 </script>
 <?php
 	$__gsoScriptPath = __DIR__ . '/../assets/dist/js/script.js';

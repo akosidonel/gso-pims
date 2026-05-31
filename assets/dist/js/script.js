@@ -12,6 +12,20 @@ window.updateFundBadge = function(fundVal, badgeSelector){
   }
 };
 
+window.gsoGetFormToken = window.gsoGetFormToken || function(tokenKey){
+  var tokens = window.gsoFormTokens || {};
+  return String(tokens[tokenKey] || '').trim();
+};
+
+window.gsoAppendFormToken = window.gsoAppendFormToken || function(formData, fieldName, tokenKey){
+  if (!formData || typeof formData.append !== 'function') { return formData; }
+  var token = window.gsoGetFormToken(tokenKey);
+  if (token) {
+    formData.append(String(fieldName || 'form_token'), token);
+  }
+  return formData;
+};
+
 // Realtime notifications (reusable)
 // - Renders a bell dropdown in the shared navbar
 // - Uses polling + localStorage to detect "new" items
@@ -1420,6 +1434,7 @@ $(function(){
               var fd = new FormData();
               fd.append('unserviceable_mark_for_disposal', 1);
               fd.append('par_numbers', JSON.stringify(pars));
+              window.gsoAppendFormToken(fd, 'disposal_form_token', 'disposalActions');
               $.ajax({
                 type: 'POST',
                 url: '../auth/auth.php',
@@ -1824,7 +1839,7 @@ $(function(){
       return $.ajax({
         url: '../auth/auth.php',
         type: 'POST',
-        data: { iirup_info_get: 1, disposal_reference: ref },
+        data: { iirup_info_get: 1, disposal_reference: ref, disposal_form_token: window.gsoGetFormToken('disposalActions') },
         cache: false
       }).done(function(resp){
         var res = resp;
@@ -1845,7 +1860,7 @@ $(function(){
           $.ajax({
             url: '../auth/auth.php',
             type: 'POST',
-            data: { disposal_details_get: 1, disposal_reference: ref },
+            data: { disposal_details_get: 1, disposal_reference: ref, disposal_form_token: window.gsoGetFormToken('disposalActions') },
             cache: false
           }).done(function(r2){
             var rr = r2;
@@ -1898,7 +1913,7 @@ $(function(){
       return $.ajax({
         url: '../auth/auth.php',
         type: 'POST',
-        data: { disposal_get_active: 1 },
+        data: { disposal_get_active: 1, disposal_form_token: window.gsoGetFormToken('disposalActions') },
         cache: false
       }).done(function(resp){
         var res = resp;
@@ -1990,6 +2005,7 @@ $(function(){
         if (!r.isConfirmed) { return; }
         var fd = new FormData();
         fd.append('disposal_create', 1);
+        window.gsoAppendFormToken(fd, 'disposal_form_token', 'disposalActions');
         $.ajax({
           type: 'POST',
           url: '../auth/auth.php',
@@ -2030,6 +2046,7 @@ $(function(){
         var fd = new FormData();
         fd.append('disposal_close', 1);
         fd.append('disposal_reference', ref);
+        window.gsoAppendFormToken(fd, 'disposal_form_token', 'disposalActions');
         $.ajax({
           type: 'POST',
           url: '../auth/auth.php',
@@ -2112,6 +2129,7 @@ $(function(){
       fd.append('witness_name', payload.witness_name);
       fd.append('witness_position', payload.witness_position);
       fd.append('inspectors_json', JSON.stringify(payload.inspectors));
+      window.gsoAppendFormToken(fd, 'disposal_form_token', 'disposalActions');
 
       $.ajax({
         type: 'POST',
@@ -2504,6 +2522,7 @@ $(function(){
       fd.append('disposal_upload_documents', 1);
       fd.append('disposal_reference', ref);
       fd.append('docs[]', f);
+      window.gsoAppendFormToken(fd, 'disposal_form_token', 'disposalActions');
 
       $.ajax({
         type: 'POST',

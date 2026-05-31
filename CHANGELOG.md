@@ -17,3 +17,4 @@ This file is generated from git history by `php tools/release.php`.
 - Fix the mitchmatch of the version number
 - Bug fix on versioning and changelog
 - Fix the version snapshot
+- Bug fixes and security improvements

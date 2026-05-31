@@ -1,11 +1,6 @@
 <?php 
-// Start session with secure parameters
-session_set_cookie_params([
-  'httponly' => true,
-  'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on',
-  'samesite' => 'Strict',
-]);
-session_start();
+require_once __DIR__ . '/config/session_bootstrap.php';
+gso_start_secure_session();
 // Log errors to a file instead of suppressing
 ini_set('log_errors', 1);
 ini_set('error_log', __DIR__ . '/php-error.log');
@@ -27,6 +22,22 @@ if(isset($_SESSION['alogin'])){
 	    if($row){
 	      if(password_verify($password, $row['password'])){
 	        session_regenerate_id(true); // Prevent session fixation
+
+        if (!empty($row['password_must_change'])) {
+          $resetEmail = trim((string)($row['email'] ?? ''));
+          if ($resetEmail === '') {
+            $_SESSION['error'] = "Your account requires a password reset, but no email is configured.";
+          } else {
+            $resetToken = bin2hex(random_bytes(32));
+            $expiresAt = date('Y-m-d H:i:s', time() + 3600);
+            if (gso_store_administrator_reset_token($conn, $resetEmail, $resetToken, $expiresAt)) {
+              $_SESSION['success'] = "Please set a new password to continue.";
+              header('Location:reset-password.php?token=' . urlencode($resetToken));
+              exit();
+            }
+            $_SESSION['error'] = "Unable to start the password reset process for this account.";
+          }
+        } else {
 
         // Store display name for navbar usage
         $_SESSION['admin_name'] = trim(((string)($row['first_name'] ?? '')) . ' ' . ((string)($row['last_name'] ?? '')));
@@ -81,12 +92,13 @@ if(isset($_SESSION['alogin'])){
 	          gso_log_activity($conn, $uid, $uip, $actvty);
 	          gso_admin_touch_activity($conn, (string)$uid, $uip);
 	        }
-        else {
-          $_SESSION['error']="Unauthorized role!";
+	        else {
+	          $_SESSION['error']="Unauthorized role!";
+	        }
         }
-      }else{
-        $_SESSION['error']="Incorrect Password!";
-      }
+	      }else{
+	        $_SESSION['error']="Incorrect Password!";
+	      }
     }else{
       $_SESSION['error']="Invalid Employee Number!";
     }

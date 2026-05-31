@@ -1,6 +1,6 @@
 <?php
-session_set_cookie_params(0);
-session_start();
+require_once __DIR__ . '/session_bootstrap.php';
+gso_start_secure_session();
 error_reporting(0);
 
 include('../database/databaseConnection.php');

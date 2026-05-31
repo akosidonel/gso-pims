@@ -1,7 +1,6 @@
 <?php
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
-}
+require_once __DIR__ . '/../config/session_bootstrap.php';
+gso_start_secure_session();
 require_once __DIR__ . '/../database/databaseConnection.php';
 require_once __DIR__ . '/../include/getuser_ipaddress.php';
 require_once __DIR__ . '/../include/generate_par_ics_number.php';
@@ -9,7 +8,6 @@ require_once __DIR__ . '/../include/generate_ptr_number.php';
 require_once __DIR__ . '/../include/generate_ref_number.php';
 require_once __DIR__ . '/../include/release.php';
 date_default_timezone_set('Asia/Manila');
-@extract($_REQUEST);
 // Helper utilities (restored)
 if(!function_exists('json_response')){
     function json_response($status,$message,$data=null){
@@ -61,6 +59,14 @@ if(!function_exists('gso_require_role_json')){
         return true;
     }
 }
+if(!function_exists('gso_require_disposal_access_json')){
+    function gso_require_disposal_access_json($tokenField = 'disposal_form_token', $consumeToken = false){
+        if (!gso_require_role_json(['SYSTEM-ADMIN', 'DISPOSAL-ADMIN'])) {
+            return false;
+        }
+        return gso_require_form_token_json('disposal_actions', $tokenField, 1800, $consumeToken);
+    }
+}
 if(!function_exists('gso_issue_form_token')){
     function gso_issue_form_token($group){
         $group = trim((string)$group);
@@ -96,6 +102,57 @@ if(!function_exists('gso_validate_form_token')){
             unset($_SESSION['form_tokens'][$group][$token]);
         }
         return true;
+    }
+}
+if(!function_exists('gso_require_form_token_json')){
+    function gso_require_form_token_json($group, $tokenField = 'form_token', $maxAgeSeconds = 1800, $consume = false){
+        $token = trim((string)($_POST[$tokenField] ?? ''));
+        if (!gso_validate_form_token($group, $token, $maxAgeSeconds, $consume)) {
+            echo json_encode(['status' => 419, 'message' => 'Invalid or expired form token.']);
+            return false;
+        }
+        return true;
+    }
+}
+if(!function_exists('gso_app_base_url')){
+    function gso_app_base_url(){
+        $envUrl = trim((string)getenv('GSO_APP_URL'));
+        if ($envUrl !== '') {
+            return rtrim($envUrl, '/');
+        }
+
+        $scheme = (
+            (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (isset($_SERVER['SERVER_PORT']) && (string)$_SERVER['SERVER_PORT'] === '443')
+        ) ? 'https' : 'http';
+        $host = trim((string)($_SERVER['SERVER_NAME'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost'));
+        if ($host === '' || !preg_match('/\A[a-zA-Z0-9.\-]+(?::\d{1,5})?\z/', $host)) {
+            $host = 'localhost';
+        }
+
+        $scriptName = trim((string)($_SERVER['SCRIPT_NAME'] ?? ''));
+        $basePath = rtrim(str_replace('\\', '/', dirname($scriptName)), '/');
+
+        return $scheme . '://' . $host . ($basePath === '' ? '' : $basePath);
+    }
+}
+if(!function_exists('gso_build_app_url')){
+    function gso_build_app_url($path, array $query = []){
+        $path = '/' . ltrim((string)$path, '/');
+        $url = rtrim(gso_app_base_url(), '/') . $path;
+        if (!empty($query)) {
+            $url .= '?' . http_build_query($query);
+        }
+        return $url;
+    }
+}
+if(!function_exists('gso_secret')){
+    function gso_secret($envName, $default = ''){
+        $value = getenv((string)$envName);
+        if ($value === false) {
+            return (string)$default;
+        }
+        return trim((string)$value);
     }
 }
 if(!function_exists('gso_fetch_all_rows')){
@@ -147,6 +204,29 @@ if(!function_exists('gso_query_one')){
         list($stmt, $rows) = gso_query_all($conn, $sql, $types, $params);
         if ($stmt instanceof mysqli_stmt) { $stmt->close(); }
         return !empty($rows) ? $rows[0] : null;
+    }
+}
+if(!function_exists('gso_ensure_administrator_reset_columns')){
+    function gso_ensure_administrator_reset_columns(mysqli $conn){
+        static $checked = false;
+        if ($checked) { return true; }
+        $checked = true;
+
+        $requiredColumns = [
+            'reset_token_hash' => "ALTER TABLE administrator ADD COLUMN reset_token_hash VARCHAR(255) DEFAULT NULL",
+            'reset_token_expires_at' => "ALTER TABLE administrator ADD COLUMN reset_token_expires_at DATETIME DEFAULT NULL",
+            'password_must_change' => "ALTER TABLE administrator ADD COLUMN password_must_change TINYINT(1) NOT NULL DEFAULT 0",
+        ];
+
+        foreach ($requiredColumns as $column => $ddl) {
+            $safeColumn = mysqli_real_escape_string($conn, $column);
+            $check = mysqli_query($conn, "SHOW COLUMNS FROM administrator LIKE '{$safeColumn}'");
+            if (!$check || mysqli_num_rows($check) !== 1) {
+                @mysqli_query($conn, $ddl);
+            }
+        }
+
+        return true;
     }
 }
 if(!function_exists('gso_release_version_payload')){
@@ -591,6 +671,7 @@ if(isset($_GET['fetch_realtime_changelog'])){
 }
 if(!function_exists('gso_fetch_administrator_by_emp_number')){
     function gso_fetch_administrator_by_emp_number(mysqli $conn, $employeeNumber){
+        gso_ensure_administrator_reset_columns($conn);
         $employeeNumber = trim((string)$employeeNumber);
         $stmt = $conn->prepare('SELECT * FROM administrator WHERE emp_number = ? LIMIT 1');
         if (!$stmt) { return null; }
@@ -614,12 +695,16 @@ if(!function_exists('gso_fetch_administrator_by_email')){
     }
 }
 if(!function_exists('gso_store_administrator_reset_token')){
-    function gso_store_administrator_reset_token(mysqli $conn, $email, $token){
+    function gso_store_administrator_reset_token(mysqli $conn, $email, $token, $expiresAt){
+        gso_ensure_administrator_reset_columns($conn);
         $email = trim((string)$email);
         $token = trim((string)$token);
-        $stmt = $conn->prepare('UPDATE administrator SET token = ? WHERE email = ? LIMIT 1');
+        $expiresAt = trim((string)$expiresAt);
+        $tokenHash = password_hash($token, PASSWORD_DEFAULT);
+        if ($tokenHash === false) { return false; }
+        $stmt = $conn->prepare('UPDATE administrator SET token = NULL, reset_token_hash = ?, reset_token_expires_at = ? WHERE email = ? LIMIT 1');
         if (!$stmt) { return false; }
-        $stmt->bind_param('ss', $token, $email);
+        $stmt->bind_param('sss', $tokenHash, $expiresAt, $email);
         $ok = $stmt->execute();
         $stmt->close();
         return (bool)$ok;
@@ -627,23 +712,40 @@ if(!function_exists('gso_store_administrator_reset_token')){
 }
 if(!function_exists('gso_fetch_administrator_by_reset_token')){
     function gso_fetch_administrator_by_reset_token(mysqli $conn, $token){
+        gso_ensure_administrator_reset_columns($conn);
         $token = trim((string)$token);
-        $stmt = $conn->prepare('SELECT admin_id, token FROM administrator WHERE token = ? LIMIT 1');
+        if ($token === '') { return null; }
+        $stmt = $conn->prepare('SELECT admin_id, reset_token_hash, reset_token_expires_at FROM administrator WHERE reset_token_hash IS NOT NULL LIMIT 100');
         if (!$stmt) { return null; }
-        $stmt->bind_param('s', $token);
         $stmt->execute();
-        $row = gso_fetch_one_row($stmt);
+        $rows = gso_fetch_all_rows($stmt);
         $stmt->close();
-        return $row;
+        $now = time();
+        foreach ($rows as $row) {
+            $expiresAt = trim((string)($row['reset_token_expires_at'] ?? ''));
+            $expiresTs = $expiresAt !== '' ? strtotime($expiresAt) : false;
+            if ($expiresTs === false || $expiresTs < $now) {
+                continue;
+            }
+            $storedHash = (string)($row['reset_token_hash'] ?? '');
+            if ($storedHash !== '' && password_verify($token, $storedHash)) {
+                return $row;
+            }
+        }
+        return null;
     }
 }
 if(!function_exists('gso_update_password_by_reset_token')){
     function gso_update_password_by_reset_token(mysqli $conn, $passwordHash, $token){
+        gso_ensure_administrator_reset_columns($conn);
         $passwordHash = (string)$passwordHash;
-        $token = trim((string)$token);
-        $stmt = $conn->prepare('UPDATE administrator SET password = ? WHERE token = ? LIMIT 1');
+        $tokenRow = gso_fetch_administrator_by_reset_token($conn, $token);
+        if (!$tokenRow || empty($tokenRow['admin_id'])) { return false; }
+        $adminId = (string)$tokenRow['admin_id'];
+        $mustChange = 0;
+        $stmt = $conn->prepare('UPDATE administrator SET password = ?, password_must_change = ?, reset_token_hash = NULL, reset_token_expires_at = NULL, token = NULL WHERE admin_id = ? LIMIT 1');
         if (!$stmt) { return false; }
-        $stmt->bind_param('ss', $passwordHash, $token);
+        $stmt->bind_param('sis', $passwordHash, $mustChange, $adminId);
         $ok = $stmt->execute();
         $stmt->close();
         return (bool)$ok;
@@ -651,11 +753,16 @@ if(!function_exists('gso_update_password_by_reset_token')){
 }
 if(!function_exists('gso_rotate_password_reset_token')){
     function gso_rotate_password_reset_token(mysqli $conn, $currentToken, $newToken){
-        $currentToken = trim((string)$currentToken);
-        $newToken = trim((string)$newToken);
-        $stmt = $conn->prepare('UPDATE administrator SET token = ? WHERE token = ? LIMIT 1');
+        gso_ensure_administrator_reset_columns($conn);
+        $tokenRow = gso_fetch_administrator_by_reset_token($conn, $currentToken);
+        if (!$tokenRow || empty($tokenRow['admin_id'])) { return false; }
+        $adminId = (string)$tokenRow['admin_id'];
+        $nextTokenHash = password_hash((string)$newToken, PASSWORD_DEFAULT);
+        if ($nextTokenHash === false) { return false; }
+        $expiresAt = date('Y-m-d H:i:s', time() + 3600);
+        $stmt = $conn->prepare('UPDATE administrator SET reset_token_hash = ?, reset_token_expires_at = ?, token = NULL WHERE admin_id = ? LIMIT 1');
         if (!$stmt) { return false; }
-        $stmt->bind_param('ss', $newToken, $currentToken);
+        $stmt->bind_param('sss', $nextTokenHash, $expiresAt, $adminId);
         $ok = $stmt->execute();
         $stmt->close();
         return (bool)$ok;
@@ -746,13 +853,14 @@ if(!function_exists('gso_fetch_dashboard_approved_clearances')){
 }
 if(!function_exists('gso_insert_administrator')){
     function gso_insert_administrator(mysqli $conn, array $data){
+        gso_ensure_administrator_reset_columns($conn);
         $stmt = $conn->prepare(
-            'INSERT INTO administrator (first_name, last_name, contact_number, email, role, emp_number, password, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO administrator (first_name, last_name, contact_number, email, role, emp_number, password, status, password_must_change)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         if (!$stmt) { return false; }
         $stmt->bind_param(
-            'sssssssi',
+            'sssssssii',
             $data['first_name'],
             $data['last_name'],
             $data['contact_number'],
@@ -760,7 +868,8 @@ if(!function_exists('gso_insert_administrator')){
             $data['role'],
             $data['emp_number'],
             $data['password'],
-            $data['status']
+            $data['status'],
+            $data['password_must_change']
         );
         $ok = $stmt->execute();
         $stmt->close();
@@ -4894,7 +5003,8 @@ if (isset($_POST['save_admin_info'])) {
     if ($fname === '' || $lname === '' || $email === '' || $empnumber === '') {
         return json_response(422, 'Missing required administrator fields.');
     }
-    $password = password_hash('12345',PASSWORD_DEFAULT);
+    $initialPassword = bin2hex(random_bytes(16));
+    $password = password_hash($initialPassword, PASSWORD_DEFAULT);
     $statusAdmin = 0;
     $payload = [
         'first_name' => $fname,
@@ -4905,8 +5015,9 @@ if (isset($_POST['save_admin_info'])) {
         'emp_number' => $empnumber,
         'password' => $password,
         'status' => $statusAdmin,
+        'password_must_change' => 1,
     ];
-    if(gso_insert_administrator($conn, $payload)){ return json_response(200,'Added succesfully!'); }
+    if(gso_insert_administrator($conn, $payload)){ return json_response(200,'Administrator added. Use Forgot Password to set the initial password.'); }
     return json_response(500,'opps..something went wrong..');
 }
 //to fetch administrator information
@@ -12290,6 +12401,7 @@ if (isset($_POST['unserviceable_items_by_account_code_dt'])) {
 // Unserviceable - Bulk action: save to IIRUP + mark as FOR DISPOSAL (status=1)
 if (isset($_POST['unserviceable_mark_for_disposal'])) {
     header('Content-Type: application/json');
+    if (!gso_require_disposal_access_json()) { return false; }
 
     if (!function_exists('ensure_disposal_table')) {
         function ensure_disposal_table($conn) {
@@ -12635,6 +12747,7 @@ if (isset($_POST['unserviceable_undo_item'])) {
 // Disposal Activities - DataTables list
 if (isset($_POST['disposal_activities_dt'])) {
     header('Content-Type: application/json');
+    if (!gso_require_role_json(['SYSTEM-ADMIN', 'DISPOSAL-ADMIN'])) { return false; }
 
     if (!function_exists('ensure_disposal_table')) {
         function ensure_disposal_table($conn) {
@@ -12717,6 +12830,7 @@ if (isset($_POST['disposal_activities_dt'])) {
 // Disposal Activities - Create (only one active at a time)
 if (isset($_POST['disposal_create'])) {
     header('Content-Type: application/json');
+    if (!gso_require_disposal_access_json()) { return false; }
 
     if (!function_exists('ensure_disposal_table')) {
         function ensure_disposal_table($conn) {
@@ -12776,6 +12890,7 @@ if (isset($_POST['disposal_create'])) {
 // Disposal Activities - Get active (status=0)
 if (isset($_POST['disposal_get_active'])) {
     header('Content-Type: application/json');
+    if (!gso_require_role_json(['SYSTEM-ADMIN', 'DISPOSAL-ADMIN'])) { return false; }
 
     if (!function_exists('ensure_disposal_table')) {
         function ensure_disposal_table($conn) {
@@ -12864,6 +12979,7 @@ if (isset($_POST['disposal_get_info'])) {
 // IIRUP Info - Get (per disposal reference)
 if (isset($_POST['iirup_info_get'])) {
     header('Content-Type: application/json');
+    if (!gso_require_disposal_access_json()) { return false; }
 
     $ref = isset($_POST['disposal_reference']) ? trim((string)$_POST['disposal_reference']) : '';
     if ($ref === '') {
@@ -13066,6 +13182,7 @@ if (isset($_POST['iirup_info_get'])) {
 // IIRUP Info - Save (per disposal reference)
 if (isset($_POST['iirup_info_save'])) {
     header('Content-Type: application/json');
+    if (!gso_require_disposal_access_json()) { return false; }
 
     $ref = isset($_POST['disposal_reference']) ? trim((string)$_POST['disposal_reference']) : '';
     if ($ref === '') {
@@ -13386,6 +13503,7 @@ if (isset($_POST['iirup_info_save'])) {
 // Disposal Activities - Details (IIRUP-style header/signatories)
 if (isset($_POST['disposal_details_get'])) {
     header('Content-Type: application/json');
+    if (!gso_require_disposal_access_json()) { return false; }
 
     $ref = isset($_POST['disposal_reference']) ? trim((string)$_POST['disposal_reference']) : '';
     if ($ref === '') {
@@ -13489,6 +13607,7 @@ if (isset($_POST['disposal_details_get'])) {
 
 if (isset($_POST['disposal_details_save'])) {
     header('Content-Type: application/json');
+    if (!gso_require_disposal_access_json()) { return false; }
 
     $ref = isset($_POST['disposal_reference']) ? trim((string)$_POST['disposal_reference']) : '';
     if ($ref === '') {
@@ -13659,6 +13778,7 @@ if (isset($_POST['disposal_details_save'])) {
 // Disposal Activities - Upload documents
 if (isset($_POST['disposal_upload_documents'])) {
     header('Content-Type: application/json');
+    if (!gso_require_disposal_access_json()) { return false; }
 
     $ref = isset($_POST['disposal_reference']) ? trim((string)$_POST['disposal_reference']) : '';
     if ($ref === '') {
@@ -13789,6 +13909,7 @@ if (isset($_POST['disposal_upload_documents'])) {
 // Disposal Activities - Close (finish)
 if (isset($_POST['disposal_close'])) {
     header('Content-Type: application/json');
+    if (!gso_require_disposal_access_json()) { return false; }
 
     $ref = isset($_POST['disposal_reference']) ? trim((string)$_POST['disposal_reference']) : '';
     if ($ref === '') {

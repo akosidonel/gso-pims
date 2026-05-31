@@ -1,6 +1,8 @@
 <?php
-session_start();
+require_once __DIR__ . '/config/session_bootstrap.php';
+gso_start_secure_session();
 require_once __DIR__ . '/auth/auth.php';
+require_once __DIR__ . '/config/mail.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\SMTP;
@@ -10,57 +12,83 @@ use PHPMailer\PHPMailer\Exception;
 require 'vendor/autoload.php';
 
 function send_password_reset($getEmail,$token){
-  $mail = new PHPMailer(true);
-  $mail->isSMTP();                                            // Send using SMTP
-  $mail->Host       = 'smtp.gmail.com';                    // Set the SMTP server to send through
-  $mail->SMTPAuth   = true;                                   // Enable SMTP authentication
-  $mail->Username   = 'generalservicesoffice.pque@gmail.com';                     // SMTP username
-  $mail->Password   = 'sizjeaenppcxnxtp';                               // SMTP password
-  $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;         // Enable TLS encryption; `PHPMailer::ENCRYPTION_SMTPS` encouraged
-  $mail->SMTPKeepAlive = true; 
-  $mail->Port       = 465;                                    // TCP port to connect to, use 465 for `PHPMailer::ENCRYPTION_SMTPS` above
+  $mailSettings = gso_mail_settings();
+  $smtpHost = trim((string)($mailSettings['host'] ?? 'smtp.gmail.com'));
+  $smtpPort = (int)($mailSettings['port'] ?? 465);
+  $smtpUser = trim((string)($mailSettings['username'] ?? ''));
+  $smtpPass = trim((string)($mailSettings['password'] ?? ''));
+  $fromEmail = trim((string)($mailSettings['from_email'] ?? $smtpUser));
+  $fromName = trim((string)($mailSettings['from_name'] ?? 'General Services Office'));
+  $replyTo = trim((string)($mailSettings['reply_to'] ?? 'no-reply@localhost'));
+  $smtpEncryption = strtolower(trim((string)($mailSettings['encryption'] ?? 'smtps')));
 
-  //Recipients
-  $mail->setFrom('generalservicesoffice.pque@gmail.com', 'General Services Office');
-  $mail->addAddress($getEmail);     // Add a recipient
-  $mail->addReplyTo('no-reply@gmail.com', 'No reply');
-  
-  // Content
-  $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-  $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-  $basePath = rtrim(str_replace('\\', '/', dirname($_SERVER['PHP_SELF'] ?? '/')), '/');
-  $url = $scheme . '://' . $host . ($basePath === '' ? '' : $basePath) . '/reset-password.php?token=' . urlencode($token);
-  $mail->isHTML(true);                                  // Set email format to HTML
-  $mail->Subject = 'Your Password reset link';
-  $mail->Body    = "Hello,<br>
-  We've received your request to reset your P.T.M.S admin password.<br><br>
-  Reset your password <a href='$url' class='btn btn-success'>here</a>";
-  $mail->AltBody = 'This is the body in plain text for non-HTML mail clients';
-  $mail->send();
+  if ($smtpUser === '' || $smtpPass === '' || $fromEmail === '') {
+    return false;
+  }
+
+  $mail = new PHPMailer(true);
+
+  try {
+    $mail->isSMTP();
+    $mail->Host = $smtpHost;
+    $mail->SMTPAuth = true;
+    $mail->Username = $smtpUser;
+    $mail->Password = $smtpPass;
+    $mail->SMTPSecure = ($smtpEncryption === 'tls')
+      ? PHPMailer::ENCRYPTION_STARTTLS
+      : PHPMailer::ENCRYPTION_SMTPS;
+    $mail->SMTPKeepAlive = true;
+    $mail->Port = $smtpPort;
+
+    $mail->setFrom($fromEmail, $fromName);
+    $mail->addAddress($getEmail);
+    $mail->addReplyTo($replyTo, 'No reply');
+
+    $url = gso_build_app_url('reset-password.php', ['token' => $token]);
+    $mail->isHTML(true);
+    $mail->Subject = 'Your Password reset link';
+    $mail->Body = "Hello,<br>
+    We've received your request to reset your P.T.M.S admin password.<br><br>
+    Reset your password <a href='$url' class='btn btn-success'>here</a>";
+    $mail->AltBody = 'Open this link to reset your password: ' . $url;
+    $mail->send();
+    return true;
+  } catch (Exception $e) {
+    error_log('Password reset email failed: ' . $e->getMessage());
+    return false;
+  }
 }
 
+$resetFormToken = gso_issue_form_token('forgot_password');
+
 if(isset($_POST['resetBtn'])){
+  if (!gso_validate_form_token('forgot_password', (string)($_POST['reset_form_token'] ?? ''), 1800, true)) {
+    $_SESSION['error'] = "The reset request expired. Please try again.";
+    header("Location:forgot-password.php");
+    exit(0);
+  }
 
   $email = trim((string)($_POST['email'] ?? ''));
   $token = bin2hex(random_bytes(32));
   $adminRow = gso_fetch_administrator_by_email($conn, $email);
+  $expiresAt = date('Y-m-d H:i:s', time() + 3600);
+  $genericSuccessMessage = "If the email is registered, a reset link will be sent shortly.";
 
   if($adminRow){
     $getEmail = (string)$adminRow['email'];
 
-    if(gso_store_administrator_reset_token($conn, $getEmail, $token)){
-      send_password_reset($getEmail,$token);
-      $_SESSION['success'] = "Link has been Send to your Email";
+    if(gso_store_administrator_reset_token($conn, $getEmail, $token, $expiresAt) && send_password_reset($getEmail,$token)){
+      $_SESSION['success'] = $genericSuccessMessage;
       header("Location:forgot-password.php");
       exit(0);
     }else{
-      $_SESSION['error'] = "Something went wrong. #1";
+      $_SESSION['error'] = "Unable to process the reset request right now.";
       header("Location:forgot-password.php");
       exit(0);
     }
 
   }else{
-    $_SESSION['error'] = "Invalid Email";
+    $_SESSION['success'] = $genericSuccessMessage;
     header("Location:forgot-password.php");
     exit(0);
   }
@@ -95,6 +123,7 @@ if(isset($_POST['resetBtn'])){
             <h3 class="mb-2">Reset your password</h2>
             <p>Please enter your email address. You will received a link to create a new password via email. or Return to <a href="index.php" class="text-success" ><b>Login page</b></a> </p>
             <form method="post">
+              <input type="hidden" name="reset_form_token" value="<?= htmlspecialchars($resetFormToken, ENT_QUOTES, 'UTF-8') ?>">
               <div class="form-group last mb-4">
                 <input type="email" class="form-control" placeholder="Your Email Here..." name="email" id="email" autofocus required>
               </div>

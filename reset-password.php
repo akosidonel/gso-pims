@@ -1,16 +1,21 @@
 <?php
-session_start();
+require_once __DIR__ . '/config/session_bootstrap.php';
+gso_start_secure_session();
 require_once __DIR__ . '/auth/auth.php';
 
-// if(!isset($_GET['token'])){
-//   header("Location:404.php");
-//   exit(0);
-// }
+$resetToken = trim((string)($_GET['token'] ?? $_POST['token'] ?? ''));
+$resetFormToken = gso_issue_form_token('reset_password');
+$hasValidResetToken = ($resetToken !== '' && gso_fetch_administrator_by_reset_token($conn, $resetToken));
 
 if(isset($_POST['changeBtn'])){
+  if (!gso_validate_form_token('reset_password', (string)($_POST['reset_form_token'] ?? ''), 1800, true)) {
+    $_SESSION['error'] = "The reset form expired. Please try again.";
+    header("Location:reset-password.php" . ($resetToken !== '' ? '?token=' . urlencode($resetToken) : ''));
+    exit(0);
+  }
+
   $newPassword = trim((string)($_POST['newpassword'] ?? ''));
   $confirmPassword = trim((string)($_POST['confirmpassword'] ?? ''));
-  $password = password_hash($newPassword,PASSWORD_DEFAULT);
   $token = trim((string)($_POST['token'] ?? ''));
 
   if(!empty($token)){
@@ -18,9 +23,16 @@ if(isset($_POST['changeBtn'])){
         $tokenRow = gso_fetch_administrator_by_reset_token($conn, $token);
         if($tokenRow){
           if($newPassword == $confirmPassword){
+              if(strlen($newPassword) < 8){
+                $_SESSION['error'] = "Password must be at least 8 characters long.";
+                header("Location:reset-password.php?token=$token");
+                exit(0);
+              }
+
+              $password = password_hash($newPassword,PASSWORD_DEFAULT);
               if(gso_update_password_by_reset_token($conn, $password, $token)){
-                $newToken = bin2hex(random_bytes(32));
-                gso_rotate_password_reset_token($conn, $token, $newToken);
+                unset($_SESSION['alogin'], $_SESSION['role'], $_SESSION['admin_name'], $_SESSION['start']);
+                session_regenerate_id(true);
                 $_SESSION['success'] = "Password reset successfuly";
                 header("Location:reset-password.php");
                 exit(0);
@@ -79,7 +91,8 @@ if(isset($_POST['changeBtn'])){
             <h3 class="mb-2">Password</h2>
             <p>Use at least 8 characters. Don’t use a password from another site, or something too obvious like your pet’s name.</p>
             <form method="post">
-              <input type="hidden" value="<?php if(isset($_GET['token'])){echo $_GET['token'];} ?>" name="token" id="token">
+              <input type="hidden" value="<?= htmlspecialchars($resetToken, ENT_QUOTES, 'UTF-8') ?>" name="token" id="token">
+              <input type="hidden" value="<?= htmlspecialchars($resetFormToken, ENT_QUOTES, 'UTF-8') ?>" name="reset_form_token">
               <div class="form-group first">
                 <input type="password" class="form-control"  placeholder="New password" name="newpassword" id="newpassword" autofocus required>
               </div>
@@ -87,8 +100,10 @@ if(isset($_POST['changeBtn'])){
                 <input type="password" class="form-control" placeholder="Confirm new password" name="confirmpassword" id="confirmpassword" autofocus required>
               </div>
               <?php
-            if(!isset($_SESSION['success'])){?>
+            if(!isset($_SESSION['success']) && $hasValidResetToken){?>
             <input type="submit" value="Change password" name="changeBtn" class="btn btn-success btn btn-block">
+            <?php } elseif (!isset($_SESSION['success'])) { ?>
+              <a href="forgot-password.php" class="btn btn-outline-secondary btn btn-block mt-3">request a new reset link</a>
             <?php } else{?>
               <a href="index.php" class="btn btn-primary btn btn-block mt-3 text-white">back to login page</a>
             <?php }?>
