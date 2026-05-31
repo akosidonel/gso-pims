@@ -415,6 +415,118 @@ $(function(){
   if (window.GSO && window.GSO.DashboardMetrics) { window.GSO.DashboardMetrics.init(); }
 });
 
+window.GSO.DashboardClearanceAnalytics = window.GSO.DashboardClearanceAnalytics || (function(){
+  var charts = { monthly: null };
+
+  function hasWidget(){
+    return $('#dashboardClearanceMonthlyChart').length > 0;
+  }
+
+  function destroyChart(chart){
+    try {
+      if (chart && typeof chart.destroy === 'function') {
+        chart.destroy();
+      }
+    } catch (e) {}
+  }
+
+  function palette(index){
+    var colors = [
+      '#007bff', '#28a745', '#ffc107', '#dc3545', '#17a2b8', '#fd7e14',
+      '#6f42c1', '#20c997', '#6610f2', '#6c757d', '#e83e8c', '#343a40'
+    ];
+    return colors[index % colors.length];
+  }
+
+  function setSummary(text){
+    $('#dashboardClearanceSummary').text(String(text || ''));
+  }
+
+  function render(payload){
+    if (!payload) { return; }
+
+    var months = Array.isArray(payload.months) ? payload.months : ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var types = Array.isArray(payload.types) ? payload.types : [];
+    var series = payload.series || {};
+    var totalReleased = Number(payload.total_released || 0) || 0;
+    var year = Number(payload.year || new Date().getFullYear()) || new Date().getFullYear();
+
+    if (!types.length || totalReleased <= 0) {
+      setSummary('No released clearances found for ' + year + '.');
+    } else {
+      setSummary('Monthly released clearances for ' + year + '.');
+    }
+
+    if (!window.Chart) { return; }
+
+    var monthlyCanvas = $('#dashboardClearanceMonthlyChart').get(0);
+    if (monthlyCanvas && monthlyCanvas.getContext) {
+      destroyChart(charts.monthly);
+      charts.monthly = new Chart(monthlyCanvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: months,
+          datasets: types.map(function(typeName, index){
+            return {
+              label: typeName,
+              data: Array.isArray(series[typeName]) ? series[typeName] : new Array(12).fill(0),
+              backgroundColor: palette(index),
+              borderColor: palette(index),
+              borderWidth: 1
+            };
+          })
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            xAxes: [{ stacked: true }],
+            yAxes: [{ stacked: true, ticks: { beginAtZero: true, precision: 0 } }]
+          },
+          legend: { display: true, position: 'bottom' },
+          tooltips: { mode: 'index', intersect: false }
+        }
+      });
+    }
+
+  }
+
+  function init(){
+    if (!hasWidget()) { return; }
+
+    $.ajax({
+      url: '../auth/auth.php',
+      type: 'GET',
+      cache: false,
+      dataType: 'json',
+      data: {
+        fetch_clearance_statistics: 1,
+        year: new Date().getFullYear(),
+        _ts: Date.now()
+      },
+      success: function(resp){
+        if (typeof resp === 'string') {
+          try { resp = JSON.parse(resp); } catch (e) { resp = null; }
+        }
+        if (!resp || resp.status !== 200 || !resp.data) {
+          setSummary('Unable to load clearance analytics.');
+          return;
+        }
+        render(resp.data);
+      },
+      error: function(){
+        setSummary('Server error while loading clearance analytics.');
+      }
+    });
+  }
+
+  return { init: init };
+})();
+
+$(function(){
+  if (window.GSO && window.GSO.DashboardClearanceAnalytics) { window.GSO.DashboardClearanceAnalytics.init(); }
+});
+
 // Select2 + datalist helpers (reusable)
 window.GSO.UI = window.GSO.UI || {};
 

@@ -6,6 +6,7 @@ This file is generated from git history by `php tools/release.php`.
 
 ### Changed
 - Updated internal project files
+- Re-arraged the infobox in the dashboard for better user experience
 
 ### Fixed
 - Bug fix on change log and version number

@@ -9,7 +9,6 @@ if (!isset($_SESSION['alogin'])) {
 }
 
 $changeLogPayload = gso_realtime_changelog_payload();
-$versionPayload = is_array($changeLogPayload['version'] ?? null) ? $changeLogPayload['version'] : [];
 $gitCommits = is_array($changeLogPayload['recent_comments'] ?? null) ? $changeLogPayload['recent_comments'] : [];
 ?>
 <?php include('../include/header.php') ?><!--Header-->
@@ -22,17 +21,6 @@ $gitCommits = is_array($changeLogPayload['recent_comments'] ?? null) ? $changeLo
   <section class="content">
     <div class="container-fluid gso-changelog-shell gso-realtime-changelog" data-changelog-live="1">
       <h1 class="gso-changelog-title">Changelog</h1>
-
-      <section class="gso-live-grid">
-        <article class="gso-live-card">
-          <div id="gsoChangeLogVersion">
-            <div class="gso-live-cardhead">
-              <h2 class="gso-live-cardtitle">Current Version</h2>
-            </div>
-            <div class="gso-live-version"><?= htmlspecialchars($versionPayload['full'] ?? 'Unavailable'); ?></div>
-          </div>
-        </article>
-      </section>
 
       <section class="gso-live-card">
         <div id="gsoChangeLogComments">

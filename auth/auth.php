@@ -4282,7 +4282,7 @@ if (isset($_GET['fetch_pc_ready_notifications'])) {
 // Used by services/clearance-statistic.php
 if (isset($_GET['fetch_clearance_statistics'])) {
     $role = isset($_SESSION['role']) ? strtoupper(trim((string)$_SESSION['role'])) : '';
-    if (empty($_SESSION['alogin']) || !in_array($role, ['CLEARANCE-ADMIN', 'SYSTEM-ADMIN'], true)) {
+    if (empty($_SESSION['alogin']) || !in_array($role, ['CLEARANCE-ADMIN', 'SYSTEM-ADMIN', 'GF/SEF-ADMIN', 'DISPOSAL-ADMIN'], true)) {
         return json_response(403, 'Unauthorized.');
     }
 
