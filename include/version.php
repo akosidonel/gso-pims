@@ -308,7 +308,7 @@ function pims_version_write_snapshot(array $payload): bool {
   $path = pims_version_snapshot_path();
   $export = '<?php return ' . var_export($payload, true) . ';' . PHP_EOL;
 
-  return file_put_contents($path, $export) !== false;
+  return @file_put_contents($path, $export) !== false;
 }
 
 function pims_version_compute_git_payload(): array {
@@ -393,12 +393,17 @@ function pims_compute_version_autoload(): array {
 
   $snapshot = pims_version_load_snapshot();
   if ($snapshot) {
-    return pims_version_apply_live_filesystem_suffix($snapshot);
+    return gso_version_snapshot_payload($snapshot);
   }
 
-  return pims_version_apply_live_filesystem_suffix(
-    pims_version_payload_from_value('0.0.0-local', 'fallback')
+  return gso_version_snapshot_payload(
+    pims_version_payload_from_value('0.0.0', 'fallback')
   );
+}
+
+function gso_version_snapshot_payload(array $payload): array {
+  $version = trim((string) ($payload['full'] ?? $payload['version'] ?? '0.0.0'));
+  return pims_version_payload_from_value($version, (string) ($payload['source'] ?? 'snapshot'), $payload);
 }
 
 $versionPayload = pims_compute_version_autoload();

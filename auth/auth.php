@@ -293,6 +293,15 @@ if(!function_exists('gso_release_store_version_state')){
         return (bool)$ok;
     }
 }
+if(!function_exists('gso_release_sync_version_snapshot')){
+    function gso_release_sync_version_snapshot(array $versionPayload, string $versionNumber){
+        if (!function_exists('pims_version_write_snapshot')) {
+            return false;
+        }
+        $snapshot = gso_release_normalize_version_payload($versionPayload, $versionNumber);
+        return pims_version_write_snapshot($snapshot);
+    }
+}
 if(!function_exists('gso_release_sync_database')){
     function gso_release_sync_database(mysqli $conn){
         gso_release_ensure_tables($conn);
@@ -382,20 +391,24 @@ if(!function_exists('gso_release_sync_database')){
             $latestPatchVersion = $baselineVersion;
         }
 
+        $currentVersion = $latestPatchVersion;
+
         gso_release_store_version_state($conn, [
-            'current_version' => trim((string)($liveVersion['full'] ?? $latestPatchVersion)) ?: $latestPatchVersion,
+            'current_version' => $currentVersion,
             'latest_patch_version' => $latestPatchVersion,
             'version_hash' => trim((string)($liveVersion['hash'] ?? '')),
             'version_source' => trim((string)($liveVersion['source'] ?? 'git')) ?: 'git',
             'baseline_hash' => $baselineHash,
             'baseline_version' => $baselineVersion,
         ]);
+        gso_release_sync_version_snapshot($liveVersion, $currentVersion);
 
         return [
             'baseline_hash' => $baselineHash,
             'baseline_version' => $baselineVersion,
             'live_version' => $liveVersion,
             'latest_patch_version' => $latestPatchVersion,
+            'current_version' => $currentVersion,
         ];
     }
 }
