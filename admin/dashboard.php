@@ -132,19 +132,19 @@ if (!isset($_SESSION['alogin'])) {
 	                <div class="col-12 mb-3">
 	                    <div class="row">
 	              <?php 
-	                //Render info-boxes
+		                //Render info-boxes
 		                echo renderInfoBox('general-fund-department.php', 'fa-cart-flatbed', 'Property Inventory', 'gftotal_currency', 'General Fund', 'blue');
 	                echo renderInfoBox('add-infrastructure.php', 'fa-city', 'Infrastructure', 'infrastructure_gf_currency', 'General Fund', 'orange');
+	                echo renderInfoBox('trust-fund-inventory.php', 'fa-hand-holding-dollar', 'Trust Fund', 'trust_fund_total_currency', 'Total Amount', 'amber');
 	                echo renderInfoBox('sef-institution.php', 'fa-boxes', 'Property Inventory', 'seftotal_currency', 'Special Education Fund', 'teal');
 	                echo renderInfoBox('add-infrastructure.php', 'fa-university', 'Infrastructure', 'infrastructure_sef_currency', 'Special Education Fund', 'indigo'); 
-	                echo renderInfoBox('trust-fund-inventory.php', 'fa-hand-holding-dollar', 'Trust Fund', 'trust_fund_total_currency', 'Total Amount', 'amber');
 	                echo renderInfoBox('donation-inventory.php', 'fa-gift', 'Donations', 'donation_total_currency', 'Total Amount', 'pink');
-	                echo renderInfoBox('add-item.php', 'fa-file-invoice-dollar', 'New Purchase', 'new_purchase_total_currency', 'Total Amount', 'emerald');
 	                //Render Administrator and Land info-box for SYSTEM-ADMIN only
 	                if (hasRole(['SYSTEM-ADMIN'])):
-	                    echo renderInfoBox('admin-panel.php', 'fa-users', 'Administrator', 'admin_count', 'General Fund', 'violet');
 		                    echo renderInfoBox('add-land.php', 'fa-map-marked-alt', 'Land', 'land_total_currency', 'Total Amount', 'red');
+	                    echo renderInfoBox('admin-panel.php', 'fa-users', 'Administrator', 'admin_count', 'General Fund', 'violet');
 	                endif;
+	                echo renderInfoBox('add-item.php', 'fa-file-invoice-dollar', 'New Purchase', 'new_purchase_total_currency', 'Total Amount', 'emerald');
 	              ?>
 	                    </div>
 	                </div>
