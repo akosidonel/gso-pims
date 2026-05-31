@@ -26,6 +26,62 @@ window.gsoAppendFormToken = window.gsoAppendFormToken || function(formData, fiel
   return formData;
 };
 
+window.GSO = window.GSO || {};
+window.GSO.LoginLockout = window.GSO.LoginLockout || (function(){
+  var timerId = null;
+
+  function formatRemaining(seconds){
+    var totalSeconds = Math.max(0, Number(seconds || 0) || 0);
+    var minutes = Math.floor(totalSeconds / 60);
+    var secs = totalSeconds % 60;
+    if (minutes > 0) {
+      return minutes + 'm ' + String(secs).padStart(2, '0') + 's';
+    }
+    return secs + 's';
+  }
+
+  function setFrozen(isFrozen){
+    $('#empid, #password, input[name="signinbtn"]').prop('disabled', !!isFrozen);
+  }
+
+  function render(lockout){
+    var $notice = $('#loginLockoutNotice');
+    if (!$notice.length) { return; }
+
+    var remainingSeconds = Math.max(0, Number(lockout.remaining_seconds || 0) || 0);
+    if (!lockout.is_locked || remainingSeconds <= 0) {
+      setFrozen(false);
+      $notice.hide().text('');
+      return;
+    }
+
+    setFrozen(true);
+    $notice.text('Login temporarily locked. Try again in ' + formatRemaining(remainingSeconds) + '.').show();
+  }
+
+  function start(){
+    var lockout = window.gsoLoginLockout || {};
+    if (!lockout || !lockout.is_locked) { return; }
+
+    render(lockout);
+    if (timerId) {
+      clearInterval(timerId);
+      timerId = null;
+    }
+
+    timerId = setInterval(function(){
+      lockout.remaining_seconds = Math.max(0, Number(lockout.remaining_seconds || 0) - 1);
+      render(lockout);
+      if (lockout.remaining_seconds <= 0) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+    }, 1000);
+  }
+
+  return { start: start };
+})();
+
 // Realtime notifications (reusable)
 // - Renders a bell dropdown in the shared navbar
 // - Uses polling + localStorage to detect "new" items
@@ -13776,6 +13832,7 @@ window.GSO.LiveVersion = window.GSO.LiveVersion || (function(){
 // Global init
 $(function(){
   try {
+    if (window.GSO && window.GSO.LoginLockout) { window.GSO.LoginLockout.start(); }
     if (window.currentUserRole && window.GSO && window.GSO.SessionGuard) { window.GSO.SessionGuard.init(); }
     if (window.currentUserRole && window.GSO && window.GSO.AdminPresencePanel) { window.GSO.AdminPresencePanel.start(); }
     if (window.GSO && window.GSO.ChangeLogLive) { window.GSO.ChangeLogLive.init(); }

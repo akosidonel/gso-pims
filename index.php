@@ -8,6 +8,27 @@ error_reporting(E_ALL);
 
 require_once __DIR__ . '/auth/auth.php';
 
+$loginLockout = [
+  'is_locked' => false,
+  'remaining_seconds' => 0,
+  'unlock_at' => '',
+  'message' => '',
+];
+
+if (isset($_SESSION['login_lockout']) && is_array($_SESSION['login_lockout'])) {
+  $sessionLockout = gso_login_lockout_state($_SESSION['login_lockout']['unlock_at'] ?? '');
+  if (!empty($sessionLockout['is_locked'])) {
+    $loginLockout = [
+      'is_locked' => true,
+      'remaining_seconds' => (int)$sessionLockout['remaining_seconds'],
+      'unlock_at' => (string)$sessionLockout['unlock_at'],
+      'message' => gso_login_lockout_message($sessionLockout),
+    ];
+  } else {
+    unset($_SESSION['login_lockout']);
+  }
+}
+
 if(isset($_SESSION['alogin'])){
   $sessionRole = strtoupper(trim((string)($_SESSION['role'] ?? '')));
   $landingPage = $sessionRole === 'MV-ADMIN' ? 'admin/motor-vehicle-dashboard.php' : 'admin/dashboard.php';
@@ -16,11 +37,25 @@ if(isset($_SESSION['alogin'])){
   exit();
 }else{
 	  if(isset($_POST['signinbtn'])){
-	    $empid = trim($_POST['empid']);
-	    $password = $_POST['password'];
+	    $empid = trim((string)($_POST['empid'] ?? ''));
+	    $password = (string)($_POST['password'] ?? '');
 	    $row = gso_fetch_administrator_by_emp_number($conn, $empid);
 	    if($row){
-	      if(password_verify($password, $row['password'])){
+        $accountLockout = gso_administrator_login_lockout_state($row);
+        if (!empty($accountLockout['is_locked'])) {
+          $loginLockout = [
+            'is_locked' => true,
+            'remaining_seconds' => (int)$accountLockout['remaining_seconds'],
+            'unlock_at' => (string)$accountLockout['unlock_at'],
+            'message' => gso_login_lockout_message($accountLockout),
+          ];
+          $_SESSION['login_lockout'] = [
+            'unlock_at' => $loginLockout['unlock_at'],
+          ];
+          $_SESSION['error'] = $loginLockout['message'];
+	      } elseif(password_verify($password, $row['password'])){
+          gso_reset_administrator_login_failures($conn, $row['admin_id']);
+          unset($_SESSION['login_lockout']);
 	        session_regenerate_id(true); // Prevent session fixation
 
         if (!empty($row['password_must_change'])) {
@@ -97,7 +132,21 @@ if(isset($_SESSION['alogin'])){
 	        }
         }
 	      }else{
-	        $_SESSION['error']="Incorrect Password!";
+          $failedLogin = gso_register_administrator_login_failure($conn, $row['admin_id']);
+          if (!empty($failedLogin['is_locked'])) {
+            $loginLockout = [
+              'is_locked' => true,
+              'remaining_seconds' => (int)$failedLogin['remaining_seconds'],
+              'unlock_at' => (string)$failedLogin['unlock_at'],
+              'message' => gso_login_lockout_message($failedLogin),
+            ];
+            $_SESSION['login_lockout'] = [
+              'unlock_at' => $loginLockout['unlock_at'],
+            ];
+            $_SESSION['error'] = $loginLockout['message'];
+          } else {
+	          $_SESSION['error']="Incorrect Password!";
+          }
 	      }
     }else{
       $_SESSION['error']="Invalid Employee Number!";
@@ -130,6 +179,7 @@ if(isset($_SESSION['alogin'])){
           <div class="row">
           <div class="col-md-12 mb-4">
             <h2 class="mb-4"><strong class="text-success">Property Inventory Management System</strong></h2>
+            <div id="loginLockoutNotice" class="alert alert-warning" style="display:none;"></div>
             <form method="post">
               <div class="form-group first">
                 <input type="text" class="form-control" placeholder="Your employee number here..." name="empid" id="empid" autofocus required>
@@ -155,6 +205,7 @@ if(isset($_SESSION['alogin'])){
   <script>
     window.currentUserRole = "";
     window.GSO_LIGHT_PAGE = true;
+    window.gsoLoginLockout = <?php echo json_encode($loginLockout, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
   </script>
   <?php
     $__gsoLoginScriptPath = __DIR__ . '/assets/dist/js/script.js';

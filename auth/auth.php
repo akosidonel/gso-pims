@@ -216,6 +216,8 @@ if(!function_exists('gso_ensure_administrator_reset_columns')){
             'reset_token_hash' => "ALTER TABLE administrator ADD COLUMN reset_token_hash VARCHAR(255) DEFAULT NULL",
             'reset_token_expires_at' => "ALTER TABLE administrator ADD COLUMN reset_token_expires_at DATETIME DEFAULT NULL",
             'password_must_change' => "ALTER TABLE administrator ADD COLUMN password_must_change TINYINT(1) NOT NULL DEFAULT 0",
+            'failed_login_attempts' => "ALTER TABLE administrator ADD COLUMN failed_login_attempts INT NOT NULL DEFAULT 0",
+            'login_lockout_until' => "ALTER TABLE administrator ADD COLUMN login_lockout_until DATETIME DEFAULT NULL",
         ];
 
         foreach ($requiredColumns as $column => $ddl) {
@@ -227,6 +229,115 @@ if(!function_exists('gso_ensure_administrator_reset_columns')){
         }
 
         return true;
+    }
+}
+if(!function_exists('gso_login_lockout_minutes_for_attempts')){
+    function gso_login_lockout_minutes_for_attempts($failedAttempts){
+        $failedAttempts = (int)$failedAttempts;
+        if ($failedAttempts <= 2) { return 0; }
+        if ($failedAttempts === 3) { return 1; }
+        if ($failedAttempts === 4) { return 5; }
+        if ($failedAttempts === 5) { return 10; }
+        return 10 + (($failedAttempts - 5) * 5);
+    }
+}
+if(!function_exists('gso_login_lockout_state')){
+    function gso_login_lockout_state($lockoutUntil){
+        $lockoutUntil = trim((string)$lockoutUntil);
+        $unlockTimestamp = $lockoutUntil !== '' ? strtotime($lockoutUntil) : false;
+        if ($unlockTimestamp === false || $unlockTimestamp <= time()) {
+            return [
+                'is_locked' => false,
+                'remaining_seconds' => 0,
+                'unlock_at' => '',
+            ];
+        }
+
+        return [
+            'is_locked' => true,
+            'remaining_seconds' => max(0, $unlockTimestamp - time()),
+            'unlock_at' => date('Y-m-d H:i:s', $unlockTimestamp),
+        ];
+    }
+}
+if(!function_exists('gso_administrator_login_lockout_state')){
+    function gso_administrator_login_lockout_state(array $administrator){
+        return gso_login_lockout_state($administrator['login_lockout_until'] ?? '');
+    }
+}
+if(!function_exists('gso_login_lockout_message')){
+    function gso_login_lockout_message(array $lockoutState){
+        $remainingSeconds = max(0, (int)($lockoutState['remaining_seconds'] ?? 0));
+        if ($remainingSeconds <= 0) {
+            return 'Too many failed login attempts. Please try again later.';
+        }
+
+        $minutes = (int)floor($remainingSeconds / 60);
+        $seconds = $remainingSeconds % 60;
+        if ($minutes > 0 && $seconds > 0) {
+            return 'Too many failed login attempts. Try again in ' . $minutes . ' minute(s) and ' . $seconds . ' second(s).';
+        }
+        if ($minutes > 0) {
+            return 'Too many failed login attempts. Try again in ' . $minutes . ' minute(s).';
+        }
+        return 'Too many failed login attempts. Try again in ' . $seconds . ' second(s).';
+    }
+}
+if(!function_exists('gso_reset_administrator_login_failures')){
+    function gso_reset_administrator_login_failures(mysqli $conn, $adminId){
+        gso_ensure_administrator_reset_columns($conn);
+        $adminId = trim((string)$adminId);
+        if ($adminId === '') { return false; }
+
+        $stmt = $conn->prepare('UPDATE administrator SET failed_login_attempts = 0, login_lockout_until = NULL WHERE admin_id = ? LIMIT 1');
+        if (!$stmt) { return false; }
+        $stmt->bind_param('s', $adminId);
+        $ok = $stmt->execute();
+        $stmt->close();
+        return (bool)$ok;
+    }
+}
+if(!function_exists('gso_register_administrator_login_failure')){
+    function gso_register_administrator_login_failure(mysqli $conn, $adminId){
+        gso_ensure_administrator_reset_columns($conn);
+        $adminId = trim((string)$adminId);
+        if ($adminId === '') {
+            return [
+                'failed_attempts' => 0,
+                'lockout_minutes' => 0,
+                'is_locked' => false,
+                'remaining_seconds' => 0,
+                'unlock_at' => '',
+            ];
+        }
+
+        $administrator = gso_fetch_administrator_by_id($conn, $adminId);
+        $failedAttempts = (int)($administrator['failed_login_attempts'] ?? 0) + 1;
+        $lockoutMinutes = gso_login_lockout_minutes_for_attempts($failedAttempts);
+        $lockoutUntil = $lockoutMinutes > 0 ? date('Y-m-d H:i:s', time() + ($lockoutMinutes * 60)) : null;
+
+        $stmt = $conn->prepare('UPDATE administrator SET failed_login_attempts = ?, login_lockout_until = ? WHERE admin_id = ? LIMIT 1');
+        if (!$stmt) {
+            return [
+                'failed_attempts' => $failedAttempts,
+                'lockout_minutes' => $lockoutMinutes,
+                'is_locked' => $lockoutMinutes > 0,
+                'remaining_seconds' => $lockoutMinutes * 60,
+                'unlock_at' => (string)$lockoutUntil,
+            ];
+        }
+        $stmt->bind_param('iss', $failedAttempts, $lockoutUntil, $adminId);
+        $stmt->execute();
+        $stmt->close();
+
+        $lockoutState = gso_login_lockout_state($lockoutUntil);
+        return [
+            'failed_attempts' => $failedAttempts,
+            'lockout_minutes' => $lockoutMinutes,
+            'is_locked' => (bool)$lockoutState['is_locked'],
+            'remaining_seconds' => (int)$lockoutState['remaining_seconds'],
+            'unlock_at' => (string)$lockoutState['unlock_at'],
+        ];
     }
 }
 if(!function_exists('gso_release_version_payload')){
@@ -800,8 +911,9 @@ if(!function_exists('gso_fetch_clearance_types')){
 }
 if(!function_exists('gso_fetch_administrator_by_id')){
     function gso_fetch_administrator_by_id(mysqli $conn, $adminId){
+        gso_ensure_administrator_reset_columns($conn);
         $adminId = (string)$adminId;
-        $stmt = $conn->prepare('SELECT admin_id, first_name, last_name, contact_number, email, role, emp_number FROM administrator WHERE admin_id = ? LIMIT 1');
+        $stmt = $conn->prepare('SELECT admin_id, first_name, last_name, contact_number, email, role, emp_number, failed_login_attempts, login_lockout_until FROM administrator WHERE admin_id = ? LIMIT 1');
         if (!$stmt) { return null; }
         $stmt->bind_param('s', $adminId);
         $stmt->execute();
