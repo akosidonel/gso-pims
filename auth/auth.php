@@ -67,6 +67,32 @@ if(!function_exists('gso_require_disposal_access_json')){
         return gso_require_form_token_json('disposal_actions', $tokenField, 1800, $consumeToken);
     }
 }
+if(!function_exists('gso_prune_form_tokens')){
+    function gso_prune_form_tokens($group, $maxAgeSeconds = 1800, $maxTokens = 40){
+        $group = trim((string)$group);
+        if ($group === '') { return; }
+        if (!isset($_SESSION['form_tokens'][$group]) || !is_array($_SESSION['form_tokens'][$group])) {
+            return;
+        }
+
+        $cutoff = time() - max(1, (int)$maxAgeSeconds);
+        foreach ($_SESSION['form_tokens'][$group] as $storedToken => $createdAt) {
+            if (!is_scalar($createdAt) || (int)$createdAt < $cutoff) {
+                unset($_SESSION['form_tokens'][$group][$storedToken]);
+            }
+        }
+
+        $maxTokens = max(1, (int)$maxTokens);
+        if (count($_SESSION['form_tokens'][$group]) <= $maxTokens) {
+            return;
+        }
+
+        asort($_SESSION['form_tokens'][$group], SORT_NUMERIC);
+        while (count($_SESSION['form_tokens'][$group]) > $maxTokens) {
+            array_shift($_SESSION['form_tokens'][$group]);
+        }
+    }
+}
 if(!function_exists('gso_issue_form_token')){
     function gso_issue_form_token($group){
         $group = trim((string)$group);
@@ -77,8 +103,10 @@ if(!function_exists('gso_issue_form_token')){
         if (!isset($_SESSION['form_tokens'][$group]) || !is_array($_SESSION['form_tokens'][$group])) {
             $_SESSION['form_tokens'][$group] = [];
         }
+        gso_prune_form_tokens($group);
         $token = bin2hex(random_bytes(16));
         $_SESSION['form_tokens'][$group][$token] = time();
+        gso_prune_form_tokens($group);
         return $token;
     }
 }
@@ -90,11 +118,7 @@ if(!function_exists('gso_validate_form_token')){
         if (!isset($_SESSION['form_tokens'][$group]) || !is_array($_SESSION['form_tokens'][$group])) {
             return false;
         }
-        foreach ($_SESSION['form_tokens'][$group] as $storedToken => $createdAt) {
-            if ((int)$createdAt < time() - (int)$maxAgeSeconds) {
-                unset($_SESSION['form_tokens'][$group][$storedToken]);
-            }
-        }
+        gso_prune_form_tokens($group, $maxAgeSeconds);
         if (!isset($_SESSION['form_tokens'][$group][$token])) {
             return false;
         }
@@ -15399,15 +15423,25 @@ if (!function_exists('gso_new_purchase_summary_rows')) {
                 MAX(np.obr_number) AS obr_number,
                 MAX(np.supplier) AS supplier,
                 MAX(np.par_ics_number) AS par_ics_number,
-                MAX(COALESCE(d_by_id.department_code, d_by_code.department_code, h.dept_id)) AS department_code,
+                MAX(COALESCE(d_by_id.department_code, d_by_code.department_code, hp.dept_id, hn.dept_id)) AS department_code,
                 MAX(COALESCE(d_by_id.department_name, d_by_code.department_name)) AS department_name,
                 SUM(COALESCE(np.unit_value, 0)) AS total_amount,
                 MAX(np.created_at) AS created_at
             FROM new_purchase AS np
-            LEFT JOIN new_purchase_history AS h
-                ON (h.par_number = np.property_number OR h.par_number = CONCAT('NPID:', np.id)) AND h.status = 1
-            LEFT JOIN department AS d_by_code ON d_by_code.department_code = h.dept_id
-            LEFT JOIN department AS d_by_id ON d_by_id.dept_id = h.dept_id
+            LEFT JOIN (
+                SELECT par_number, MAX(dept_id) AS dept_id
+                FROM new_purchase_history
+                WHERE status = 1
+                GROUP BY par_number
+            ) AS hp ON hp.par_number = np.property_number
+            LEFT JOIN (
+                SELECT par_number, MAX(dept_id) AS dept_id
+                FROM new_purchase_history
+                WHERE status = 1
+                GROUP BY par_number
+            ) AS hn ON hn.par_number = CONCAT('NPID:', np.id)
+            LEFT JOIN department AS d_by_code ON d_by_code.department_code = COALESCE(hp.dept_id, hn.dept_id)
+            LEFT JOIN department AS d_by_id ON d_by_id.dept_id = COALESCE(hp.dept_id, hn.dept_id)
             GROUP BY
                 CASE
                     WHEN TRIM(COALESCE(np.purchase_order, '')) = '' THEN CONCAT('ID:', np.id)

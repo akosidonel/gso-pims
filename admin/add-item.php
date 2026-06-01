@@ -29,16 +29,8 @@ if(!isset($_SESSION['alogin'])){
     }
   }
   // Generate a one-time submission token to prevent duplicate inserts on double-click / slow network
-  if(!isset($_SESSION['form_tokens'])){ $_SESSION['form_tokens'] = []; }
-  if(!isset($_SESSION['form_tokens']['add_item'])){ $_SESSION['form_tokens']['add_item'] = []; }
-  $add_item_token = bin2hex(random_bytes(16));
-  // store timestamp for potential cleanup later
-  $_SESSION['form_tokens']['add_item'][$add_item_token] = time();
-
-  // One-time transfer token for: New Purchase -> Records
-  if(!isset($_SESSION['form_tokens']['np_transfer'])){ $_SESSION['form_tokens']['np_transfer'] = []; }
-  $np_transfer_token = bin2hex(random_bytes(16));
-  $_SESSION['form_tokens']['np_transfer'][$np_transfer_token] = time();
+  $add_item_token = gso_issue_form_token('add_item');
+  $np_transfer_token = gso_issue_form_token('np_transfer');
 	  // emp_id is allocated by the server at save time (concurrency-safe)
 	  $next_emp_id = null;
 	  $accountCodeOptions = gso_fetch_account_codes($conn);
@@ -427,6 +419,7 @@ if(!isset($_SESSION['alogin'])){
       <div class="tab-content pt-3" id="addItemRecentTabContent">
         <div class="tab-pane fade show active" id="addItemNewPurchasePane" role="tabpanel" aria-labelledby="addItemNewPurchaseTab">
           <!-- New Purchase: one row per P.O. No. -->
+          <input type="hidden" id="np_source_context" value="new_purchase">
           <input type="hidden" id="np_transfer_token" value="<?= htmlspecialchars($np_transfer_token, ENT_QUOTES, 'UTF-8') ?>">
           <div class="table-responsive px-3 pb-1">
             <table id="addItemNewPurchaseTable" class="table table-bordered table-hover w-100 mb-0" style="width:100%">
@@ -448,7 +441,7 @@ if(!isset($_SESSION['alogin'])){
                     $text = trim((string)($value ?? ''));
                     return $text !== '' ? htmlspecialchars($text, ENT_QUOTES, 'UTF-8') : '<span class="text-dark">NULL</span>';
                   };
-                  $resultsNp = gso_new_purchase_summary_rows($conn);
+                  $resultsNp = false;
 
                   if ($resultsNp && $resultsNp->num_rows > 0):
                     while ($row = $resultsNp->fetch_assoc()):

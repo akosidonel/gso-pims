@@ -3302,18 +3302,125 @@ $(function(){
   }
 
   if ($('#addItemNewPurchaseTable').length && $.fn.dataTable && !$.fn.dataTable.isDataTable('#addItemNewPurchaseTable')) {
+    function gsoNpEsc(text) {
+      return $('<div>').text(text === null || text === undefined ? '' : String(text)).html();
+    }
+
+    function gsoNpTextOrNull(text) {
+      var value = String(text || '').trim();
+      return value ? gsoNpEsc(value) : '<span class="text-dark">NULL</span>';
+    }
+
+    function gsoNpTextOrDash(text) {
+      var value = String(text || '').trim();
+      return value ? gsoNpEsc(value) : '<span class="text-muted">-</span>';
+    }
+
+    function gsoNpMoney(amount) {
+      var value = Number(amount || 0) || 0;
+      try {
+        return '&#8369; ' + value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      } catch (e) {
+        return '&#8369; ' + value.toFixed(2);
+      }
+    }
+
     var addItemNpTable = $('#addItemNewPurchaseTable').DataTable({
       responsive: true,
       lengthChange: false,
       ordering: false,
       autoWidth: false,
+      deferRender: true,
+      processing: true,
+      searchDelay: 350,
+      ajax: {
+        url: '../auth/fetch_new_purchase_summary.php',
+        type: 'POST',
+        cache: false,
+        dataSrc: function (resp) {
+          return resp && $.isArray(resp.data) ? resp.data : [];
+        }
+      },
       dom: "<'row mb-2'<'col-sm-12 col-md-6'B><'col-sm-12 col-md-6'f>>" +
            "<'row'<'col-sm-12'tr>>" +
            "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
       language: {
+        processing: 'Loading new purchase rows...',
         emptyTable: 'No data found.',
         zeroRecords: 'No matching records found.'
       },
+      columns: [
+        {
+          data: null,
+          className: 'text-center',
+          orderable: false,
+          searchable: false,
+          render: function (data, type, row) {
+            var poRaw = String((row && row.purchase_order) || '').trim();
+            var checkboxValue = gsoNpEsc(poRaw);
+            var label = poRaw ? checkboxValue : 'NULL';
+            return '<input type="checkbox" class="add-item-np-checkbox" value="' + checkboxValue + '" aria-label="Select P.O. ' + label + '">';
+          }
+        },
+        {
+          data: 'purchase_order',
+          render: function (data) {
+            return '<span class="font-weight-bold">' + gsoNpTextOrNull(data) + '</span>';
+          }
+        },
+        {
+          data: 'purchase_request',
+          render: function (data) {
+            return gsoNpTextOrNull(data);
+          }
+        },
+        {
+          data: 'obr_number',
+          render: function (data) {
+            return gsoNpTextOrNull(data);
+          }
+        },
+        {
+          data: 'supplier',
+          render: function (data) {
+            return gsoNpTextOrDash(data);
+          }
+        },
+        {
+          data: 'department_name',
+          render: function (data) {
+            return gsoNpTextOrDash(data);
+          }
+        },
+        {
+          data: 'total_amount',
+          render: function (data) {
+            return gsoNpMoney(data);
+          }
+        },
+        {
+          data: null,
+          className: 'text-center',
+          orderable: false,
+          searchable: false,
+          render: function (data, type, row) {
+            var rowId = parseInt((row && row.row_id) || 0, 10) || 0;
+            return '' +
+              '<button type="button" class="btn btn-xs btn-outline-primary np-edit-btn"' +
+                ' data-row-id="' + rowId + '"' +
+                ' data-po="' + gsoNpEsc((row && row.purchase_order) || '') + '"' +
+                ' data-fund="' + gsoNpEsc((row && row.fund) || '') + '"' +
+                ' data-dept="' + gsoNpEsc((row && row.department_code) || '') + '"' +
+                ' data-pr="' + gsoNpEsc((row && row.purchase_request) || '') + '"' +
+                ' data-obr="' + gsoNpEsc((row && row.obr_number) || '') + '"' +
+                ' data-supplier="' + gsoNpEsc((row && row.supplier) || '') + '"' +
+                ' data-paricsno="' + gsoNpEsc((row && row.par_ics_number) || '') + '"' +
+                ' title="Edit">' +
+                '<i class="fas fa-edit"></i>' +
+              '</button>';
+          }
+        }
+      ],
       buttons: [
         {
           text: 'Transfer to Records',
@@ -8289,9 +8396,6 @@ window.GSO.AddItemMeta = window.GSO.AddItemMeta || (function(){
       .off('change.addItemMetaCond', '#condition')
       .on('change.addItemMetaCond', '#condition', onConditionChange);
 
-    // Best-effort: populate year even if modal isn't opened yet
-    fillYearOptions();
-    syncYearLockWithCondition();
   }
 
   $(function(){ init(); });
@@ -9460,8 +9564,6 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       $('#quantity').after('<div class="text-warning" id="quantity-warning" style="display:none;font-size:13px; margin-top:4px;"></div>');
     }
 
-    renderItemSetRows();
-
     $(document)
       .off('click.gsoAddItemPageRemoveSet', '.btnRemoveItemSet')
       .on('click.gsoAddItemPageRemoveSet', '.btnRemoveItemSet', function(){
@@ -9756,8 +9858,13 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
           window.GSO.AddItemMeta.fillYearOptions();
         }
         renderItemSetRows();
+        enforcePerRowQtyLimit();
         syncYearAcquiredWithCondition();
+        syncNoEndUserState();
         applyNoAccountPropertyStateToAll();
+        updateParEmpStateAddItem();
+        toggleAddNewEmpSectionAddItem();
+        validateUnitValue();
         updateParIcsNumbers();
         updatePropertyNumber();
         var dept = String($('#dept').val() || '').trim();
@@ -9873,15 +9980,6 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       populateDatalist();
     })();
 
-    enforcePerRowQtyLimit();
-    validateUnitValue();
-    updateTotalAmount();
-    syncYearAcquiredWithCondition();
-    syncNoEndUserState();
-    applyNoAccountPropertyStateToAll();
-    updateParEmpStateAddItem();
-    toggleAddNewEmpSectionAddItem();
-    syncAddItemSubmitButton();
   }
 
   $(document)
