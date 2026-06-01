@@ -1494,6 +1494,7 @@ if (!function_exists('gso_new_purchase_group_modal_items')) {
 
 if (!function_exists('gso_new_purchase_group_modal_bundles')) {
     function gso_new_purchase_group_modal_bundles(mysqli $conn, array $rows): array {
+        gso_ensure_bundle_transfer_columns($conn, 'new_bundle_purchase');
         $parentPropertyNumbers = [];
         foreach ($rows as $row) {
             $propertyNumber = strtoupper(trim((string)($row['property_number'] ?? '')));
@@ -8811,6 +8812,7 @@ if (isset($_POST['update_new_purchase_group'])) {
         return false;
     }
 
+    gso_ensure_bundle_transfer_columns($conn, 'new_bundle_purchase');
     mysqli_begin_transaction($conn);
 
     try {
@@ -8873,7 +8875,7 @@ if (isset($_POST['update_new_purchase_group'])) {
             : 'INSERT INTO new_bundle_purchase (dept_id, emp_id, property_number, bundle_with, category, item, model, description, serial_number, serial_number_2, par_ics_number) VALUES (?,?,?,?,?,?,?,?,?,?,?)';
         $bundleInsertStmt = $conn->prepare($bundleInsertSql);
         if (!$bundleInsertStmt) {
-            throw new RuntimeException('Unable to prepare bundle insert statement.');
+            throw new RuntimeException('Unable to prepare bundle insert statement: ' . $conn->error);
         }
 
         $keptExistingIds = [];
@@ -9646,6 +9648,7 @@ if (isset($_POST['save_item'])) {
 
         $stmtNewBundlePurchase = null;
         if ($hasBundleRows) {
+            gso_ensure_bundle_transfer_columns($conn, 'new_bundle_purchase');
             $bundleHasUnitColumn = gso_column_exists($conn, 'new_bundle_purchase', 'unit');
             $bundleInsertSql = $bundleHasUnitColumn
                 ? 'INSERT INTO new_bundle_purchase (dept_id, emp_id, property_number, bundle_with, category, unit, item, model, description, serial_number, serial_number_2, par_ics_number) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
@@ -9654,7 +9657,7 @@ if (isset($_POST['save_item'])) {
             if (!$stmtNewBundlePurchase) {
                 mysqli_stmt_close($stmtNewPurchaseHist);
                 mysqli_stmt_close($stmtNewPurchase);
-                echo json_encode(['status' => 500, 'message' => 'Unable to prepare bundle purchase insert.']);
+                echo json_encode(['status' => 500, 'message' => 'Unable to prepare bundle purchase insert: ' . mysqli_error($conn)]);
                 return false;
             }
         }
