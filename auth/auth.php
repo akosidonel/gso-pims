@@ -30,6 +30,24 @@ if(!function_exists('gso_log_activity')){
 }
 if(!function_exists('escape_up')){ function escape_up($conn,$v){ return mysqli_real_escape_string($conn,strtoupper($v)); } }
 if(!function_exists('escape_raw')){ function escape_raw($conn,$v){ return mysqli_real_escape_string($conn,$v); } }
+if(!function_exists('gso_clean_text_for_db')){
+    function gso_clean_text_for_db($value, $upper = true){
+        $text = trim((string)$value);
+        $text = str_replace(
+            [
+                "\x91", "\x92", "\x93", "\x94", "\x96", "\x97", "\x85",
+                "\xE2\x80\x98", "\xE2\x80\x99", "\xE2\x80\x9C", "\xE2\x80\x9D",
+                "\xE2\x80\x93", "\xE2\x80\x94", "\xE2\x80\xA6",
+                "\xC2\xA0"
+            ],
+            ["'", "'", '"', '"', '-', '-', '...', "'", "'", '"', '"', '-', '-', '...', ' '],
+            $text
+        );
+        $cleaned = preg_replace('/[^\P{C}\t\r\n]+/u', '', $text);
+        $text = $cleaned !== null ? $cleaned : preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $text);
+        return $upper ? strtoupper($text) : $text;
+    }
+}
 if(!function_exists('gso_current_role')){
     function gso_current_role(){
         return strtoupper(trim((string)($_SESSION['role'] ?? '')));
@@ -8343,11 +8361,11 @@ if (isset($_POST['update_new_purchase_group'])) {
         }
 
         $year = trim((string)($_POST['year'] ?? ''));
-        $purchaseOrder = strtoupper(trim((string)($_POST['purchase_order'] ?? '')));
-        $purchaseRequest = strtoupper(trim((string)($_POST['purchase_request'] ?? '')));
-        $obrNumber = strtoupper(trim((string)($_POST['obr_number'] ?? '')));
-        $jevNumber = strtoupper(trim((string)($_POST['jev_number'] ?? '')));
-        $supplier = strtoupper(trim((string)($_POST['supplier'] ?? '')));
+        $purchaseOrder = gso_clean_text_for_db($_POST['purchase_order'] ?? '');
+        $purchaseRequest = gso_clean_text_for_db($_POST['purchase_request'] ?? '');
+        $obrNumber = gso_clean_text_for_db($_POST['obr_number'] ?? '');
+        $jevNumber = gso_clean_text_for_db($_POST['jev_number'] ?? '');
+        $supplier = gso_clean_text_for_db($_POST['supplier'] ?? '');
         $deptInput = trim((string)($_POST['dept_id'] ?? ''));
 
         if ($year === '' || $deptInput === '') {
@@ -8414,8 +8432,8 @@ if (isset($_POST['update_new_purchase_group'])) {
                 return $empValue;
             }
 
-            $newName = strtoupper(trim((string)$getPostedMapValue('emp_new_name', $itemKey, '')));
-            $newPosition = strtoupper(trim((string)$getPostedMapValue('emp_new_position', $itemKey, 'N/A')));
+            $newName = gso_clean_text_for_db($getPostedMapValue('emp_new_name', $itemKey, ''));
+            $newPosition = gso_clean_text_for_db($getPostedMapValue('emp_new_position', $itemKey, 'N/A'));
             if ($newName === '') {
                 throw new RuntimeException('New employee name is required.');
             }
@@ -8482,14 +8500,14 @@ if (isset($_POST['update_new_purchase_group'])) {
 
                 $resolvedEmployeeId = $resolveEmployeeId($setKey);
                 $resolvedEmployeeInt = (int)$resolvedEmployeeId;
-                $category = strtoupper(trim((string)$getPostedMapValue('category', $setKey, $currentItem['category'] ?? '')));
-                $unit = strtoupper(trim((string)$getPostedMapValue('unit', $setKey, $currentItem['unit'] ?? '')));
-                $itemName = strtoupper(trim((string)$getPostedMapValue('item', $setKey, $currentItem['item'] ?? '')));
-                $model = strtoupper(trim((string)$getPostedMapValue('model', $setKey, $currentItem['model'] ?? '')));
-                $description = strtoupper(trim((string)$getPostedMapValue('description', $setKey, $currentItem['description'] ?? '')));
-                $accountCode = strtoupper(trim((string)$getPostedMapValue('account_code', $setKey, $currentItem['account_code'] ?? '')));
-                $remarks = strtoupper(trim((string)$getPostedMapValue('remarks', $setKey, $currentItem['remarks'] ?? '')));
-                $parIcsNumber = strtoupper(trim((string)$getPostedMapValue('par_ics_number_preview_value', $setKey, $currentItem['par_ics_number'] ?? '')));
+                $category = gso_clean_text_for_db($getPostedMapValue('category', $setKey, $currentItem['category'] ?? ''));
+                $unit = gso_clean_text_for_db($getPostedMapValue('unit', $setKey, $currentItem['unit'] ?? ''));
+                $itemName = gso_clean_text_for_db($getPostedMapValue('item', $setKey, $currentItem['item'] ?? ''));
+                $model = gso_clean_text_for_db($getPostedMapValue('model', $setKey, $currentItem['model'] ?? ''));
+                $description = gso_clean_text_for_db($getPostedMapValue('description', $setKey, $currentItem['description'] ?? ''));
+                $accountCode = gso_clean_text_for_db($getPostedMapValue('account_code', $setKey, $currentItem['account_code'] ?? ''));
+                $remarks = gso_clean_text_for_db($getPostedMapValue('remarks', $setKey, $currentItem['remarks'] ?? ''));
+                $parIcsNumber = gso_clean_text_for_db($getPostedMapValue('par_ics_number_preview_value', $setKey, $currentItem['par_ics_number'] ?? ''));
                 $propertyNumberInput = trim((string)$getPostedMapValue('property_number', $setKey, $currentItem['property_number'] ?? ''));
                 $unitValueRaw = str_replace(',', '', trim((string)$getPostedMapValue('unit_value', $setKey, $currentItem['unit_value'] ?? '0')));
                 $unitValue = (float)($unitValueRaw !== '' ? $unitValueRaw : 0);
@@ -8502,8 +8520,8 @@ if (isset($_POST['update_new_purchase_group'])) {
                     }
 
                     $copyIndex = $copyOffset + 1;
-                    $serialOne = strtoupper(trim((string)$getPostedNestedMapValue('serial_number', $setKey, $copyIndex, $currentRow['serial_number'] ?? '')));
-                    $serialTwo = strtoupper(trim((string)$getPostedNestedMapValue('serial_number_2', $setKey, $copyIndex, $currentRow['serial_number_2'] ?? '')));
+                    $serialOne = gso_clean_text_for_db($getPostedNestedMapValue('serial_number', $setKey, $copyIndex, $currentRow['serial_number'] ?? ''));
+                    $serialTwo = gso_clean_text_for_db($getPostedNestedMapValue('serial_number_2', $setKey, $copyIndex, $currentRow['serial_number_2'] ?? ''));
                     $rowPropertyNumber = trim((string)($currentRow['property_number'] ?? ''));
                     if (count($existingIds) === 1) {
                         $rowPropertyNumber = strtoupper(trim($propertyNumberInput));
@@ -8607,11 +8625,11 @@ if (isset($_POST['update_new_purchase_group'])) {
 
     $fund = strtoupper(trim((string)($_POST['fund'] ?? '')));
     $year = trim((string)($_POST['year'] ?? ''));
-    $purchaseOrder = strtoupper(trim((string)($_POST['purchase_order'] ?? '')));
-    $purchaseRequest = strtoupper(trim((string)($_POST['purchase_request'] ?? '')));
-    $obrNumber = strtoupper(trim((string)($_POST['obr_number'] ?? '')));
-    $jevNumber = strtoupper(trim((string)($_POST['jev_number'] ?? '')));
-    $supplier = strtoupper(trim((string)($_POST['supplier'] ?? '')));
+    $purchaseOrder = gso_clean_text_for_db($_POST['purchase_order'] ?? '');
+    $purchaseRequest = gso_clean_text_for_db($_POST['purchase_request'] ?? '');
+    $obrNumber = gso_clean_text_for_db($_POST['obr_number'] ?? '');
+    $jevNumber = gso_clean_text_for_db($_POST['jev_number'] ?? '');
+    $supplier = gso_clean_text_for_db($_POST['supplier'] ?? '');
     $deptInput = trim((string)($_POST['dept_id'] ?? ''));
 
     if ($fund === '' || $year === '' || $deptInput === '') {
@@ -8904,19 +8922,19 @@ if (isset($_POST['update_new_purchase_group'])) {
             $oldPropNum = strtoupper(trim((string)($currentRow['property_number'] ?? '')));
             $npidLink = $existingId > 0 ? ('NPID:' . $existingId) : '';
 
-            $unit = strtoupper(trim($getPostedMapValue('unit', $setKey)));
-            $item = strtoupper(trim($getPostedMapValue('item', $setKey)));
+            $unit = gso_clean_text_for_db($getPostedMapValue('unit', $setKey));
+            $item = gso_clean_text_for_db($getPostedMapValue('item', $setKey));
             $category = $normalizeCategory($getPostedMapValue('category', $setKey, $currentRow['category'] ?? ''));
-            $model = strtoupper(trim($getPostedMapValue('model', $setKey)));
-            $description = strtoupper(trim($getPostedMapValue('description', $setKey)));
-            $accountCode = strtoupper(trim($getPostedMapValue('account_code', $setKey)));
-            $remarks = strtoupper(trim($getPostedMapValue('remarks', $setKey)));
-            $propertyNumber = strtoupper(trim($getPostedMapValue('property_number', $setKey)));
+            $model = gso_clean_text_for_db($getPostedMapValue('model', $setKey));
+            $description = gso_clean_text_for_db($getPostedMapValue('description', $setKey));
+            $accountCode = gso_clean_text_for_db($getPostedMapValue('account_code', $setKey));
+            $remarks = gso_clean_text_for_db($getPostedMapValue('remarks', $setKey));
+            $propertyNumber = gso_clean_text_for_db($getPostedMapValue('property_number', $setKey));
             $unitValue = (float)preg_replace('/[^0-9.]/', '', $getPostedMapValue('unit_value', $setKey, '0'));
             $skipAccountAndProperty = in_array(strtoupper(trim($getPostedMapValue('item_no_account_property', $setKey, '0'))), ['1', 'ON', 'YES', 'TRUE'], true);
             $employeeRaw = trim($getPostedMapValue('emp_id', $setKey));
-            $newEmployeeName = strtoupper(trim($getPostedMapValue('emp_new_name', $setKey)));
-            $newEmployeePosition = strtoupper(trim($getPostedMapValue('emp_new_position', $setKey)));
+            $newEmployeeName = gso_clean_text_for_db($getPostedMapValue('emp_new_name', $setKey));
+            $newEmployeePosition = gso_clean_text_for_db($getPostedMapValue('emp_new_position', $setKey));
             $itemQuantity = $normalizeItemQuantity($getPostedMapValue('item_quantity', $setKey, '1'));
 
             if ($item === '' || $unit === '' || $category === '') {
@@ -8956,8 +8974,8 @@ if (isset($_POST['update_new_purchase_group'])) {
             $serial1Values = [];
             $serial2Values = [];
             for ($copyIndex = 1; $copyIndex <= $itemQuantity; $copyIndex++) {
-                $serial1Values[$copyIndex] = strtoupper(trim($getPostedNestedMapValue('serial_number', $setKey, $copyIndex)));
-                $serial2Values[$copyIndex] = strtoupper(trim($getPostedNestedMapValue('serial_number_2', $setKey, $copyIndex)));
+                $serial1Values[$copyIndex] = gso_clean_text_for_db($getPostedNestedMapValue('serial_number', $setKey, $copyIndex));
+                $serial2Values[$copyIndex] = gso_clean_text_for_db($getPostedNestedMapValue('serial_number_2', $setKey, $copyIndex));
             }
 
             $currentPropertyNumber = ($propertyNumberOptionalFund || $skipAccountAndProperty) ? '' : $propertyNumber;
@@ -9171,14 +9189,14 @@ if (isset($_POST['update_new_purchase_group'])) {
         );
         for ($bundleIndex = 0; $bundleIndex < $bundleRowsCount; $bundleIndex++) {
             $parentIndex = (int)trim((string)($bundleParentIndexes[$bundleIndex] ?? '0'));
-            $bundleCategory = strtoupper(trim((string)($bundleCategories[$bundleIndex] ?? '')));
-            $bundleUnit = strtoupper(trim((string)($bundleUnits[$bundleIndex] ?? '')));
-            $bundleAsset = strtoupper(trim((string)($bundleAssets[$bundleIndex] ?? '')));
-            $bundleModel = strtoupper(trim((string)($bundleModels[$bundleIndex] ?? '')));
-            $bundleDescription = strtoupper(trim((string)($bundleDescs[$bundleIndex] ?? '')));
-            $bundlePrimarySerial = strtoupper(trim((string)($bundleSerial1[$bundleIndex] ?? '')));
-            $bundleSecondarySerial = strtoupper(trim((string)($bundleSerial2[$bundleIndex] ?? '')));
-            $bundlePropertyNumber = strtoupper(trim((string)($bundlePropertyNumbers[$bundleIndex] ?? '')));
+            $bundleCategory = gso_clean_text_for_db($bundleCategories[$bundleIndex] ?? '');
+            $bundleUnit = gso_clean_text_for_db($bundleUnits[$bundleIndex] ?? '');
+            $bundleAsset = gso_clean_text_for_db($bundleAssets[$bundleIndex] ?? '');
+            $bundleModel = gso_clean_text_for_db($bundleModels[$bundleIndex] ?? '');
+            $bundleDescription = gso_clean_text_for_db($bundleDescs[$bundleIndex] ?? '');
+            $bundlePrimarySerial = gso_clean_text_for_db($bundleSerial1[$bundleIndex] ?? '');
+            $bundleSecondarySerial = gso_clean_text_for_db($bundleSerial2[$bundleIndex] ?? '');
+            $bundlePropertyNumber = gso_clean_text_for_db($bundlePropertyNumbers[$bundleIndex] ?? '');
 
             if ($parentIndex < 1 && $bundleCategory === '' && $bundleUnit === '' && $bundleAsset === '' && $bundleModel === '' && $bundleDescription === '' && $bundlePrimarySerial === '' && $bundleSecondarySerial === '') {
                 continue;

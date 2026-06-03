@@ -4378,6 +4378,47 @@ $(function(){
       });
     }
 
+    function npDetailLoadDepartmentsForFund(fund, selectedDept, done) {
+      fund = String(fund || '').trim();
+      selectedDept = String(selectedDept || '').trim();
+      var $deptSelect = $('#edit_np_dept');
+      var $deptInput = $('#editNpDeptSearch');
+
+      $deptSelect.html('<option value="">-SELECT-</option>').val('');
+      $deptInput.val('');
+      npDetailPopulateDeptDatalist();
+
+      if (!fund) {
+        if (typeof done === 'function') { done(false); }
+        return;
+      }
+
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: { fund_for_departments: fund },
+        success: function (html) {
+          $deptSelect.html(html || '<option value="">-SELECT-</option>');
+          if (selectedDept) {
+            $deptSelect.find('option').each(function () {
+              if (String(this.value || '').trim() === selectedDept) {
+                $deptSelect.val(selectedDept);
+                return false;
+              }
+            });
+          }
+          npDetailPopulateDeptDatalist();
+          npDetailSyncDeptInput();
+          if (typeof done === 'function') { done(true); }
+        },
+        error: function () {
+          $deptSelect.html('<option value="">-SELECT-</option>');
+          npDetailPopulateDeptDatalist();
+          if (typeof done === 'function') { done(false); }
+        }
+      });
+    }
+
     function npDetailSyncDeptInput() {
       var $deptSelect = $('#edit_np_dept');
       var selectedText = $deptSelect.val() ? $deptSelect.find('option:selected').text().trim() : '';
@@ -4405,6 +4446,16 @@ $(function(){
       $('#edit_np_new_emp').val('').prop('disabled', true);
       $('#edit_np_position').val('').prop('disabled', true);
       $('#edit_np_add_new_employee').hide();
+    }
+
+    function npDetailResetDepartmentAndEmployeeSelection() {
+      $('#edit_np_dept').val('');
+      $('#editNpDeptSearch').val('');
+      $('#editNpMultipleEndUserCheckBox').prop('checked', false);
+      npDetailState.useMultipleEndUsers = false;
+      npDetailState.employeeOptionsHtml = '<option value="">SELECT A DEPARTMENT FIRST</option>';
+      npDetailResetEmployeeSelection();
+      npDetailRenderEndUserRows();
     }
 
     function npDetailRenderEndUserRows() {
@@ -4960,16 +5011,16 @@ $(function(){
       $('#editNpDetailPrintBtn').toggle(npDetailSourceContext() !== 'fund_inventory');
       $('#edit_np_fund').prop('disabled', npDetailSourceContext() === 'fund_inventory');
       $('#edit_np_set_count').prop('readonly', npDetailSourceContext() === 'fund_inventory');
-      npDetailPopulateDeptDatalist();
-      npDetailSyncDeptInput();
       npDetailRenderItemRows();
       npDetailRenderBundleRows();
       if (npDetailSourceContext() === 'fund_inventory') {
         $('#editNpItemRows .edit-np-remove-set').hide();
         $('#editNpItemRows .edit-np-item-quantity').prop('readonly', true);
       }
-      npDetailLoadEmployees(String(group.department_code || '').trim(), function () {
-        npDetailRefreshAllProperties();
+      npDetailLoadDepartmentsForFund(group.fund || '', group.department_code || '', function () {
+        npDetailLoadEmployees(String($('#edit_np_dept').val() || '').trim(), function () {
+          npDetailRefreshAllProperties();
+        });
       });
     }
 
@@ -5488,6 +5539,12 @@ $(function(){
     $(document)
       .off('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_year')
       .on('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_year', function () {
+        if ($(this).is('#edit_np_fund')) {
+          npDetailResetDepartmentAndEmployeeSelection();
+          npDetailLoadDepartmentsForFund($(this).val(), '', function () {
+            npDetailRefreshAllProperties();
+          });
+        }
         $('#editNpItemRows .item-set-card').each(function () {
           npDetailApplyNoAccountPropertyState($(this));
         });
@@ -8995,6 +9052,9 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $('#dept').val('');
     $('#dept option:not(:first)').remove();
     $('#deptDatalist').empty();
+    $('#multipleEndUserCheckBox, #endUserNoneCheckBox').prop('checked', false);
+    endUserByRow = {};
+    $('#endUserRows').hide().empty();
     $('#parEmp').html('<option value="">-SELECT-</option>').prop('disabled', true);
     empOptionsAll = '';
     $('#add_new_employee').hide();
