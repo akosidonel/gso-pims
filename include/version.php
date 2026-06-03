@@ -31,7 +31,8 @@ function pims_version_payload_from_value(string $fullVersion, string $source, ar
 }
 
 function pims_version_public_endpoint(): string {
-  return '/' . basename(PIMS_RELEASE_ROOT) . '/auth/auth.php';
+  $root = realpath(PIMS_RELEASE_ROOT) ?: PIMS_RELEASE_ROOT;
+  return '/' . basename(str_replace('\\', '/', $root)) . '/auth/auth.php';
 }
 
 function pims_version_dirty_state(string $currentStatus): array {

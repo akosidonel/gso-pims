@@ -3345,7 +3345,7 @@ $(function(){
            "<'row'<'col-sm-12'tr>>" +
            "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
       language: {
-        processing: 'Loading new purchase rows...',
+        processing: 'Processing..',
         emptyTable: 'No data found.',
         zeroRecords: 'No matching records found.'
       },

@@ -42,6 +42,11 @@ if(!isset($_SESSION['alogin'])){
 
   <?php include('../include/sidebar.php')?><!--Sidebar-->
 
+  <!-- Preloader -->
+  <div class="preloader flex-column justify-content-center align-items-center">
+    <img src="../assets/dist/img/spin.gif" alt="AdminLogo" height="90" width="90">
+  </div>
+
   <style>
     #addItemTable td,
     #addItemTable th,

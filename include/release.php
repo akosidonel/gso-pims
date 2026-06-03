@@ -57,14 +57,21 @@ function pims_release_command_output(string $command): string {
   return '';
 }
 
+function pims_release_null_redirect(): string {
+  return PHP_OS_FAMILY === 'Windows' ? ' 2>NUL' : ' 2>/dev/null';
+}
+
+function pims_release_git_base_command(): string {
+  return escapeshellarg(pims_release_git_binary()) . ' -C ' . escapeshellarg(PIMS_RELEASE_ROOT);
+}
+
 function pims_release_git_available(): bool {
-  $command = escapeshellarg(pims_release_git_binary()) . ' -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' rev-parse --is-inside-work-tree 2>/dev/null';
+  $command = pims_release_git_base_command() . ' rev-parse --is-inside-work-tree' . pims_release_null_redirect();
   return pims_release_command_output($command) === 'true';
 }
 
 function pims_release_git(string $command): string {
-  $binary = escapeshellarg(pims_release_git_binary());
-  return pims_release_command_output($binary . ' -C ' . escapeshellarg(PIMS_RELEASE_ROOT) . ' ' . $command . ' 2>/dev/null');
+  return pims_release_command_output(pims_release_git_base_command() . ' ' . $command . pims_release_null_redirect());
 }
 
 function pims_release_commit_log_format(): string {
@@ -154,8 +161,8 @@ function pims_release_initial_version(): array {
 }
 
 function pims_release_latest_tag(): ?string {
-  $tag = pims_release_git('tag --list "v[0-9]*" --sort=-version:refname | head -n 1');
-  return $tag !== '' ? $tag : null;
+  $tags = pims_release_all_tags();
+  return $tags[0] ?? null;
 }
 
 function pims_release_all_tags(): array {
