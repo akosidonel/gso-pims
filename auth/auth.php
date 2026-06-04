@@ -1246,35 +1246,20 @@ if (!function_exists('gso_new_purchase_group_rows')) {
             }
         }
 
-        $where = $po !== '' ? 'np.purchase_order = ?' : 'np.id = ?';
+        $where = $po !== '' ? 'purchase_order = ?' : 'id = ?';
         $sql = "
             SELECT
-                np.id,
-                np.unit, np.item, np.model, np.description,
-                np.serial_number, np.serial_number_2,
-                COALESCE(
-                    NULLIF(np.property_number, ''),
-                    CASE
-                        WHEN h.par_number LIKE 'NPID:%' THEN ''
-                        ELSE COALESCE(h.par_number, '')
-                    END
-                ) AS property_number,
-                np.fund, np.category, np.unit_value, np.date_aquired,
-                np.account_code, np.supplier, np.par_ics_number,
-                np.purchase_order, np.purchase_request, np.obr_number,
-                np.jev_number, np.remarks,
-                COALESCE(d_by_id.department_name, d_by_code.department_name) AS department_name,
-                COALESCE(d_by_id.department_code, d_by_code.department_code) AS department_code,
-                h.dept_id, h.emp_id, e.emp_name,
-                h.category AS doc_type, h.reference_number
-            FROM new_purchase AS np
-            LEFT JOIN new_purchase_history AS h
-                ON (h.par_number = np.property_number OR h.par_number = CONCAT('NPID:', np.id)) AND h.status = 1
-            LEFT JOIN department AS d_by_id ON d_by_id.dept_id = h.dept_id
-            LEFT JOIN department AS d_by_code ON d_by_code.department_code = h.dept_id
-            LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+                id,
+                unit, item, model, description,
+                serial_number, serial_number_2,
+                property_number,
+                fund, category, unit_value, date_aquired,
+                account_code, supplier, par_ics_number,
+                purchase_order, purchase_request, obr_number,
+                jev_number, remarks
+            FROM new_purchase
             WHERE {$where}
-            ORDER BY np.id ASC
+            ORDER BY id ASC
         ";
 
         $stmt = $conn->prepare($sql);
@@ -1293,6 +1278,91 @@ if (!function_exists('gso_new_purchase_group_rows')) {
             }
         }
         $stmt->close();
+
+        if (empty($rows)) {
+            return [];
+        }
+
+        $historyKeys = [];
+        foreach ($rows as $row) {
+            $propertyNumber = strtoupper(trim((string)($row['property_number'] ?? '')));
+            $historyLink = 'NPID:' . (int)($row['id'] ?? 0);
+            if ($propertyNumber !== '') {
+                $historyKeys[$propertyNumber] = true;
+            }
+            if ($historyLink !== 'NPID:0') {
+                $historyKeys[$historyLink] = true;
+            }
+        }
+
+        $historyByKey = [];
+        if (!empty($historyKeys)) {
+            $placeholders = implode(',', array_fill(0, count($historyKeys), '?'));
+            $bindTypes = str_repeat('s', count($historyKeys));
+            $historyParams = array_keys($historyKeys);
+            $historySql = "
+                SELECT
+                    h1.par_number,
+                    h1.dept_id,
+                    h1.emp_id,
+                    h1.category,
+                    h1.reference_number,
+                    COALESCE(d_by_id.department_name, d_by_code.department_name) AS department_name,
+                    COALESCE(d_by_id.department_code, d_by_code.department_code) AS department_code,
+                    e.emp_name
+                FROM new_purchase_history AS h1
+                INNER JOIN (
+                    SELECT par_number, MAX(id) AS max_id
+                    FROM new_purchase_history
+                    WHERE status = 1
+                      AND par_number IN ({$placeholders})
+                    GROUP BY par_number
+                ) AS latest
+                    ON latest.max_id = h1.id
+                LEFT JOIN department AS d_by_id ON d_by_id.dept_id = h1.dept_id
+                LEFT JOIN department AS d_by_code ON d_by_code.department_code = h1.dept_id
+                LEFT JOIN employee AS e ON e.emp_id = h1.emp_id
+            ";
+            $historyStmt = $conn->prepare($historySql);
+            if ($historyStmt) {
+                gso_stmt_bind_params($historyStmt, $bindTypes, $historyParams);
+                $historyStmt->execute();
+                $historyResult = $historyStmt->get_result();
+                if ($historyResult) {
+                    while ($historyRow = mysqli_fetch_assoc($historyResult)) {
+                        $historyKey = strtoupper(trim((string)($historyRow['par_number'] ?? '')));
+                        if ($historyKey !== '') {
+                            $historyByKey[$historyKey] = $historyRow;
+                        }
+                    }
+                }
+                $historyStmt->close();
+            }
+        }
+
+        foreach ($rows as &$row) {
+            $propertyNumber = strtoupper(trim((string)($row['property_number'] ?? '')));
+            $historyLink = 'NPID:' . (int)($row['id'] ?? 0);
+            $historyRow = null;
+            if ($propertyNumber !== '' && isset($historyByKey[$propertyNumber])) {
+                $historyRow = $historyByKey[$propertyNumber];
+            } elseif (isset($historyByKey[$historyLink])) {
+                $historyRow = $historyByKey[$historyLink];
+            }
+
+            $row['property_number'] = $propertyNumber !== ''
+                ? $propertyNumber
+                : (($historyRow && strpos((string)($historyRow['par_number'] ?? ''), 'NPID:') !== 0) ? (string)$historyRow['par_number'] : '');
+            $row['department_name'] = $historyRow['department_name'] ?? '';
+            $row['department_code'] = $historyRow['department_code'] ?? '';
+            $row['dept_id'] = $historyRow['dept_id'] ?? '';
+            $row['emp_id'] = $historyRow['emp_id'] ?? '';
+            $row['emp_name'] = $historyRow['emp_name'] ?? '';
+            $row['doc_type'] = $historyRow['category'] ?? '';
+            $row['reference_number'] = $historyRow['reference_number'] ?? '';
+        }
+        unset($row);
+
         return $rows;
     }
 }
@@ -1512,7 +1582,10 @@ if (!function_exists('gso_new_purchase_group_modal_items')) {
 
 if (!function_exists('gso_new_purchase_group_modal_bundles')) {
     function gso_new_purchase_group_modal_bundles(mysqli $conn, array $rows): array {
-        gso_ensure_bundle_transfer_columns($conn, 'new_bundle_purchase');
+        $bundleColumns = gso_get_table_columns($conn, 'new_bundle_purchase');
+        if (empty($bundleColumns)) {
+            return [];
+        }
         $parentPropertyNumbers = [];
         foreach ($rows as $row) {
             $propertyNumber = strtoupper(trim((string)($row['property_number'] ?? '')));
@@ -1526,7 +1599,7 @@ if (!function_exists('gso_new_purchase_group_modal_bundles')) {
 
         $placeholders = implode(',', array_fill(0, count($parentPropertyNumbers), '?'));
         $bindTypes = str_repeat('s', count($parentPropertyNumbers));
-        $bundleUnitExpr = gso_column_exists($conn, 'new_bundle_purchase', 'unit') ? 'unit' : "'' AS unit";
+        $bundleUnitExpr = isset($bundleColumns['unit']) ? 'unit' : "'' AS unit";
         $sql = "SELECT id, property_number, bundle_with, category, {$bundleUnitExpr}, item, model, description, serial_number, serial_number_2, par_ics_number
                 FROM new_bundle_purchase
                 WHERE bundle_with IN ({$placeholders})
@@ -5719,6 +5792,52 @@ if (!function_exists('gso_propnum_exists')) {
     }
 }
 
+if (!function_exists('gso_next_property_number_value')) {
+    function gso_next_property_number_value($current) {
+        $current = strtoupper(trim((string)$current));
+        $parts = explode('-', $current);
+        if (count($parts) < 4) {
+            return $current;
+        }
+        $seqIdx = count($parts) - 2;
+        $seq = (string)($parts[$seqIdx] ?? '');
+        $len = strlen($seq);
+        $num = (int)$seq + 1;
+        $parts[$seqIdx] = str_pad((string)$num, $len, '0', STR_PAD_LEFT);
+        return implode('-', $parts);
+    }
+}
+
+if (!function_exists('gso_allocate_property_number')) {
+    function gso_allocate_property_number($conn, $fundRaw, $candidate, array $exclude = [], $maxAttempts = 20000) {
+        $candidate = strtoupper(trim((string)$candidate));
+        if ($candidate === '') {
+            return ['ok' => false, 'error' => 'Property number is required.'];
+        }
+
+        [$table, $col] = gso_propnum_table_col_for_fund($fundRaw);
+        $reserved = [];
+        foreach ($exclude as $value) {
+            $key = strtoupper(trim((string)$value));
+            if ($key !== '') {
+                $reserved[$key] = true;
+            }
+        }
+
+        $guard = 0;
+        while ($guard < $maxAttempts) {
+            $key = strtoupper($candidate);
+            if (!isset($reserved[$key]) && !gso_propnum_exists($conn, $table, $col, $candidate)) {
+                return ['ok' => true, 'property_number' => $candidate];
+            }
+            $candidate = gso_next_property_number_value($candidate);
+            $guard++;
+        }
+
+        return ['ok' => false, 'error' => 'Unable to allocate a unique property number.'];
+    }
+}
+
 if (!function_exists('gso_generate_one_property_number')) {
     function gso_generate_one_property_number($conn, $category, $year, $accountCode, $dept, $fund, $exclude = []) {
         $category = strtoupper(trim((string)$category));
@@ -9561,27 +9680,6 @@ if (isset($_POST['save_item'])) {
         $isDonation = ($fundNorm === 'DONATION');
         $propertyNumberOptionalFund = ($isTrustFund || $isDonation);
 
-        $existsParNumber = function($num) use ($conn){
-            if (trim((string)$num) === '') { return false; }
-            $n = mysqli_real_escape_string($conn, (string)$num);
-            $gf = mysqli_query($conn, "SELECT 1 FROM par_gen_fund WHERE par_number='$n' LIMIT 1");
-            if ($gf && mysqli_num_rows($gf) > 0) return true;
-            $sf = mysqli_query($conn, "SELECT 1 FROM property_sef WHERE property_number='$n' LIMIT 1");
-            if ($sf && mysqli_num_rows($sf) > 0) return true;
-            $np = mysqli_query($conn, "SELECT 1 FROM new_purchase WHERE property_number='$n' LIMIT 1");
-            return ($np && mysqli_num_rows($np) > 0);
-        };
-        $nextParNumber = function($current){
-            $parts = explode('-', (string)$current);
-            if (count($parts) < 4) return (string)$current;
-            $seqIdx = count($parts) - 2;
-            $seq = $parts[$seqIdx];
-            $len = strlen($seq);
-            $num = (int)$seq + 1;
-            $parts[$seqIdx] = str_pad((string)$num, $len, '0', STR_PAD_LEFT);
-            return implode('-', $parts);
-        };
-
         // PAR/ICS number generation (single MAX lookup per request)
         $manualProvided = ($par_ics_input_raw !== '' && strtoupper($par_ics_input_raw) !== 'NULL');
         $parIcsCodeByCategory = [];
@@ -9680,14 +9778,11 @@ if (isset($_POST['save_item'])) {
             }
         }
 
-        // If first par_number is already taken, bump to next available
-        $guardNew = 0;
-        while ($par_number !== '' && $existsParNumber($par_number) && $guardNew < 20000) { $par_number = $nextParNumber($par_number); $guardNew++; }
-
         $parentPropertyNumbers = [];
         $parentEmpIds = [];
         $insertedCount = 0;
         $printRefs = ['PAR' => [], 'ICS' => []];
+        $reservedPropertyNumbers = [];
 
         mysqli_begin_transaction($conn);
         try {
@@ -9771,9 +9866,11 @@ if (isset($_POST['save_item'])) {
                 } elseif ($propertyNumberOptionalFund) {
                     $par_number = null;
                 } else {
-                    $par_number = mysqli_real_escape_string($conn, $parNumberForSet);
-                    $guardSet = 0;
-                    while ($existsParNumber($par_number) && $guardSet < 20000) { $par_number = $nextParNumber($par_number); $guardSet++; }
+                    $allocation = gso_allocate_property_number($conn, $fundNorm, $parNumberForSet, $reservedPropertyNumbers);
+                    if (!isset($allocation['ok']) || !$allocation['ok']) {
+                        throw new Exception($allocation['error'] ?? ('Unable to allocate property number for row ' . $i . '.'));
+                    }
+                    $par_number = (string)$allocation['property_number'];
                 }
 
                 $itemForRow = $resolveRowUpper($itemAssetRows, $i, $assetInput);
@@ -9792,13 +9889,20 @@ if (isset($_POST['save_item'])) {
                 $firstParNumberForSet = null;
 
                 for ($copyIndex = 1; $copyIndex <= $itemQuantityForRow; $copyIndex++) {
-                    if (!$skipPropertyNumberForRow && !($i === 1 && $copyIndex === 1)) {
-                        $guard2 = 0;
-                        do { $par_number = $nextParNumber($par_number); $guard2++; } while ($existsParNumber($par_number) && $guard2 < 20000);
+                    if (!$skipPropertyNumberForRow && $copyIndex > 1) {
+                        $nextCandidate = gso_next_property_number_value($par_number);
+                        $allocation = gso_allocate_property_number($conn, $fundNorm, $nextCandidate, $reservedPropertyNumbers);
+                        if (!isset($allocation['ok']) || !$allocation['ok']) {
+                            throw new Exception($allocation['error'] ?? ('Unable to allocate property number for row ' . $i . ', copy ' . $copyIndex . '.'));
+                        }
+                        $par_number = (string)$allocation['property_number'];
                     }
 
                     if ($firstParNumberForSet === null) {
                         $firstParNumberForSet = $par_number;
+                    }
+                    if (!$skipPropertyNumberForRow && $par_number !== null && $par_number !== '') {
+                        $reservedPropertyNumbers[] = $par_number;
                     }
 
                     if ($manualProvided) {
@@ -10006,29 +10110,6 @@ if (isset($_POST['save_item'])) {
         }
     }
 
-    // Helpers: increment property number string (keep padding), and existence checks
-    $existsParNumber = function($num) use ($conn){
-        $n = mysqli_real_escape_string($conn, $num);
-        $gf = mysqli_query($conn, "SELECT 1 FROM par_gen_fund WHERE par_number='$n' LIMIT 1");
-        if ($gf && mysqli_num_rows($gf) > 0) return true;
-        $sf = mysqli_query($conn, "SELECT 1 FROM property_sef WHERE property_number='$n' LIMIT 1");
-        if ($sf && mysqli_num_rows($sf) > 0) return true;
-        $tf = mysqli_query($conn, "SELECT 1 FROM trust_fund WHERE property_number='$n' LIMIT 1");
-        if ($tf && mysqli_num_rows($tf) > 0) return true;
-        $dn = mysqli_query($conn, "SELECT 1 FROM donation WHERE property_number='$n' LIMIT 1");
-        return ($dn && mysqli_num_rows($dn) > 0);
-    };
-    $nextParNumber = function($current){
-        $parts = explode('-', $current);
-        if (count($parts) < 4) return $current; // guard
-        $seqIdx = count($parts) - 2;
-        $seq = $parts[$seqIdx];
-        $len = strlen($seq);
-        $num = (int)$seq + 1;
-        $parts[$seqIdx] = str_pad((string)$num, $len, '0', STR_PAD_LEFT);
-        return implode('-', $parts);
-    };
-
     $fundUpper = strtoupper($fund);
     $isGF = in_array($fundUpper, ['GF','GENERAL FUND'], true);
     $isSEF = in_array($fundUpper, ['SEF','SF','SPECIAL EDUCATION FUND'], true);
@@ -10053,10 +10134,6 @@ if (isset($_POST['save_item'])) {
     // For quantity > 1, manual disables sequencing (others will be NULL).
     $manualProvided = ($par_ics_input_raw !== '' && strtoupper($par_ics_input_raw) !== 'NULL');
     $useManualParIcsForFirst = ($quantity === 1 && $manualProvided);
-
-    // If first par_number is already taken, bump to next available
-    $guard = 0;
-    while ($existsParNumber($par_number) && $guard < 20000) { $par_number = $nextParNumber($par_number); $guard++; }
 
     // Improve stability for large quantity by extending time limit (best-effort)
     if ($quantity >= 250) { @set_time_limit(300); }
@@ -10132,6 +10209,7 @@ if (isset($_POST['save_item'])) {
     $nextDonationId = $isDonation ? $nextManualFundId('donation', 'donation_history') : null;
     $referenceNumberByCategory = [];
     $printRefs = ['PAR' => [], 'ICS' => []];
+    $reservedPropertyNumbers = [];
     $getReferenceNumberForCategory = function($rowCategory) use ($conn, &$referenceNumberByCategory) {
         $rowCategory = strtoupper(trim((string)$rowCategory));
         if (!in_array($rowCategory, ['PAR', 'ICS'], true)) {
@@ -10240,9 +10318,13 @@ if (isset($_POST['save_item'])) {
         if ($propertyNumberOptionalFund) {
             $par_number = null;
         } else {
-            $par_number = mysqli_real_escape_string($conn, $parNumberForSet);
-            $guardSet = 0;
-            while ($existsParNumber($par_number) && $guardSet < 20000) { $par_number = $nextParNumber($par_number); $guardSet++; }
+            $allocation = gso_allocate_property_number($conn, $fundUpper, $parNumberForSet, $reservedPropertyNumbers);
+            if (!isset($allocation['ok']) || !$allocation['ok']) {
+                mysqli_rollback($conn);
+                echo json_encode(['status'=>422,'message'=>$allocation['error'] ?? ('Unable to allocate property number for row '.$i.'.')]);
+                return false;
+            }
+            $par_number = (string)$allocation['property_number'];
         }
 
         $itemForRow = $resolveRowUpper($itemAssetRows, $i, $assetInput);
@@ -10267,9 +10349,18 @@ if (isset($_POST['save_item'])) {
         $remarksSql = ($remarksForRow === null) ? 'NULL' : "'" . mysqli_real_escape_string($conn, $remarksForRow) . "'";
 
         for ($copyIndex = 1; $copyIndex <= $itemQuantityForRow; $copyIndex++) {
-            if (!$propertyNumberOptionalFund && !($i === 1 && $copyIndex === 1)) {
-                $guard2 = 0;
-                do { $par_number = $nextParNumber($par_number); $guard2++; } while ($existsParNumber($par_number) && $guard2 < 20000);
+            if (!$propertyNumberOptionalFund && $copyIndex > 1) {
+                $nextCandidate = gso_next_property_number_value($par_number);
+                $allocation = gso_allocate_property_number($conn, $fundUpper, $nextCandidate, $reservedPropertyNumbers);
+                if (!isset($allocation['ok']) || !$allocation['ok']) {
+                    mysqli_rollback($conn);
+                    echo json_encode(['status'=>422,'message'=>$allocation['error'] ?? ('Unable to allocate property number for row '.$i.', copy '.$copyIndex.'.')]);
+                    return false;
+                }
+                $par_number = (string)$allocation['property_number'];
+            }
+            if (!$propertyNumberOptionalFund && $par_number !== null && $par_number !== '') {
+                $reservedPropertyNumbers[] = $par_number;
             }
 
             if ($manualProvided) {
