@@ -8,9 +8,9 @@
   'commits_since_tag' => 0,
   'total_commits' => 64,
   'dirty' => true,
-  'changed_files' => 2,
-  'dirty_fingerprint' => 'a4473cad',
-  'dirty_sequence' => 7883,
+  'changed_files' => 5,
+  'dirty_fingerprint' => 'dddee2c1',
+  'dirty_sequence' => 9782,
   'date' => '2026-06-03',
   'meta_label' => '',
 );

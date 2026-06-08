@@ -3618,6 +3618,10 @@ $(function(){
     var npDetailPropertyRequestId = 0;
     var npDetailTempIndex = 0;
     var npDetailBundleParIcsCache = {};
+    var npDetailGroupCache = {};
+    var npDetailDepartmentOptionsCache = {};
+    var npDetailEmployeeOptionsCache = {};
+    var npDetailOpenRequest = null;
 
     function npDetailEsc(value) {
       return $('<div>').text(value === null || value === undefined ? '' : String(value)).html();
@@ -3640,6 +3644,15 @@ $(function(){
 
     function npDetailFundInventoryKey() {
       return gsoNpFundKey();
+    }
+
+    function npDetailGroupCacheKey(po, rowId, sourceContext, fundInventoryKey) {
+      return [
+        String(sourceContext || '').trim().toLowerCase(),
+        String(fundInventoryKey || '').trim().toLowerCase(),
+        String(po || '').trim().toUpperCase(),
+        parseInt(rowId, 10) || 0
+      ].join('|');
     }
 
     function npDetailGetYear(value) {
@@ -4383,6 +4396,7 @@ $(function(){
       selectedDept = String(selectedDept || '').trim();
       var $deptSelect = $('#edit_np_dept');
       var $deptInput = $('#editNpDeptSearch');
+      var cacheKey = fund.toUpperCase();
 
       $deptSelect.html('<option value="">-SELECT-</option>').val('');
       $deptInput.val('');
@@ -4393,12 +4407,25 @@ $(function(){
         return;
       }
 
+      if (npDetailDepartmentOptionsCache[cacheKey]) {
+        $deptSelect.html(npDetailDepartmentOptionsCache[cacheKey]);
+        if (selectedDept) {
+          $deptSelect.val(selectedDept);
+        }
+        npDetailPopulateDeptDatalist();
+        npDetailSyncDeptInput();
+        if (typeof done === 'function') { done(true); }
+        return;
+      }
+
       $.ajax({
         url: '../auth/auth.php',
         type: 'POST',
         data: { fund_for_departments: fund },
         success: function (html) {
-          $deptSelect.html(html || '<option value="">-SELECT-</option>');
+          var optionsHtml = html || '<option value="">-SELECT-</option>';
+          npDetailDepartmentOptionsCache[cacheKey] = optionsHtml;
+          $deptSelect.html(optionsHtml);
           if (selectedDept) {
             $deptSelect.find('option').each(function () {
               if (String(this.value || '').trim() === selectedDept) {
@@ -4547,7 +4574,8 @@ $(function(){
       });
     }
 
-    function npDetailRenderItemRows() {
+    function npDetailRenderItemRows(options) {
+      var opts = options || {};
       var $wrap = $('#editNpItemRows');
       if (!npDetailState.items.length) {
         $wrap.html('<div class="text-center text-muted py-4">No items found.</div>');
@@ -4677,7 +4705,9 @@ $(function(){
         npDetailApplyNoAccountPropertyState($(this));
       });
       $('#edit_np_set_count').val(npDetailState.items.length);
-      npDetailRefreshParIcsNumbers();
+      if (!opts.skipParIcsRefresh) {
+        npDetailRefreshParIcsNumbers();
+      }
     }
 
     function npDetailSetProperty(itemId, value, message, type) {
@@ -4918,8 +4948,16 @@ $(function(){
     }
 
     function npDetailLoadEmployees(deptCode, done) {
+      deptCode = String(deptCode || '').trim();
       if (!deptCode) {
         npDetailState.employeeOptionsHtml = '<option value="">SELECT A DEPARTMENT FIRST</option>';
+        npDetailRenderEndUserRows();
+        if (typeof done === 'function') { done(); }
+        return;
+      }
+
+      if (npDetailEmployeeOptionsCache[deptCode]) {
+        npDetailState.employeeOptionsHtml = npDetailEmployeeOptionsCache[deptCode];
         npDetailRenderEndUserRows();
         if (typeof done === 'function') { done(); }
         return;
@@ -4931,6 +4969,7 @@ $(function(){
         data: { departmentid: deptCode },
         success: function (html) {
           npDetailState.employeeOptionsHtml = String(html || '<option value="">-SELECT-</option>');
+          npDetailEmployeeOptionsCache[deptCode] = npDetailState.employeeOptionsHtml;
           npDetailRenderEndUserRows();
         },
         error: function () {
@@ -4943,7 +4982,27 @@ $(function(){
       });
     }
 
-    function npDetailFillModal(data) {
+    function npDetailShouldRefreshDerivedValues() {
+      var needsRefresh = false;
+      $.each(npDetailState.items, function (_, item) {
+        if (needsRefresh) { return false; }
+        if (!String(item.par_ics_number || '').trim()) {
+          needsRefresh = true;
+          return false;
+        }
+        if (npDetailPropertyOptionalFund() || item.no_account_property) {
+          return;
+        }
+        if (!String(item.property_number || '').trim()) {
+          needsRefresh = true;
+          return false;
+        }
+      });
+      return needsRefresh;
+    }
+
+    function npDetailFillModal(data, options) {
+      var opts = options || {};
       var group = data && data.group ? data.group : {};
       var items = data && data.items ? data.items : [];
       var bundles = data && data.bundles ? data.bundles : [];
@@ -5011,7 +5070,7 @@ $(function(){
       $('#editNpDetailPrintBtn').toggle(npDetailSourceContext() !== 'fund_inventory');
       $('#edit_np_fund').prop('disabled', npDetailSourceContext() === 'fund_inventory');
       $('#edit_np_set_count').prop('readonly', npDetailSourceContext() === 'fund_inventory');
-      npDetailRenderItemRows();
+      npDetailRenderItemRows({ skipParIcsRefresh: true });
       npDetailRenderBundleRows();
       if (npDetailSourceContext() === 'fund_inventory') {
         $('#editNpItemRows .edit-np-remove-set').hide();
@@ -5019,7 +5078,10 @@ $(function(){
       }
       npDetailLoadDepartmentsForFund(group.fund || '', group.department_code || '', function () {
         npDetailLoadEmployees(String($('#edit_np_dept').val() || '').trim(), function () {
-          npDetailRefreshAllProperties();
+          if (!opts.skipDerivedRefresh || npDetailShouldRefreshDerivedValues()) {
+            npDetailRefreshParIcsNumbers();
+            npDetailRefreshAllProperties();
+          }
         });
       });
     }
@@ -5205,21 +5267,37 @@ $(function(){
       .off('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn')
       .on('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn', function () {
         var $btn = $(this);
-        $('#editNpItemRows').html('<div class="text-center text-muted py-4">Loading details...</div>');
-        $('#editNpEndUserRows').html('<tr><td colspan="4" class="text-center text-muted">Loading details...</td></tr>');
-        $('#editNpDetailModal').modal('show');
+        var po = String($btn.data('po') || '').trim();
+        var rowId = parseInt($btn.data('rowId'), 10) || 0;
+        var sourceContext = npDetailSourceContext();
+        var fundInventoryKey = npDetailFundInventoryKey();
+        var cacheKey = npDetailGroupCacheKey(po, rowId, sourceContext, fundInventoryKey);
+        var cachedGroup = npDetailGroupCache[cacheKey] || null;
 
-        $.ajax({
+        if (cachedGroup) {
+          npDetailFillModal(cachedGroup, { skipDerivedRefresh: true });
+          $('#editNpDetailModal').modal('show');
+        } else {
+          $('#editNpItemRows').html('<div class="text-center text-muted py-4">Loading details...</div>');
+          $('#editNpEndUserRows').html('<tr><td colspan="4" class="text-center text-muted">Loading details...</td></tr>');
+          $('#editNpDetailModal').modal('show');
+        }
+
+        if (npDetailOpenRequest && npDetailOpenRequest.readyState && npDetailOpenRequest.readyState !== 4) {
+          npDetailOpenRequest.abort();
+        }
+
+        npDetailOpenRequest = $.ajax({
           url: '../auth/auth.php',
           type: 'POST',
           cache: false,
           dataType: 'json',
           data: {
             fetch_new_purchase_group: 1,
-            po: String($btn.data('po') || '').trim(),
-            row_id: parseInt($btn.data('rowId'), 10) || 0,
-            source_context: npDetailSourceContext(),
-            fund_inventory_key: npDetailFundInventoryKey()
+            po: po,
+            row_id: rowId,
+            source_context: sourceContext,
+            fund_inventory_key: fundInventoryKey
           },
           success: function (resp) {
             if (!resp || Number(resp.status) !== 200 || !resp.data) {
@@ -5228,11 +5306,17 @@ $(function(){
               Swal ? Swal.fire({ icon: 'error', title: message }) : alert(message);
               return;
             }
-            npDetailFillModal(resp.data);
+            npDetailGroupCache[cacheKey] = resp.data;
+            npDetailFillModal(resp.data, { skipDerivedRefresh: true });
+            $('#editNpDetailModal').modal('show');
           },
-          error: function () {
+          error: function (xhr, status) {
+            if (status === 'abort') { return; }
             $('#editNpDetailModal').modal('hide');
             Swal ? Swal.fire({ icon: 'error', title: 'Request failed. Please try again.' }) : alert('Request failed.');
+          },
+          complete: function () {
+            npDetailOpenRequest = null;
           }
         });
       });
@@ -6117,6 +6201,12 @@ $(function(){
     $(document)
       .off('click.npEditBtn', '.np-edit-btn')
       .on('click.npEditBtn', '.np-edit-btn', function () {
+        if ($(this).closest('#addItemNewPurchaseTable').length) {
+          return;
+        }
+        if (!$(this).attr('data-item')) {
+          return;
+        }
         var d = {};
         try { d = JSON.parse($(this).attr('data-item') || '{}'); } catch (e) {}
 
