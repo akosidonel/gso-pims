@@ -107,12 +107,16 @@ $filteredRow = dt_execute_one(
 $recordsFiltered = (int)($filteredRow['cnt'] ?? 0);
 
 $columns = array(
-    0 => 'f.item',
-    1 => 'f.model',
-    2 => 'f.serial_number',
-    3 => 'f.serial_number_2',
-    4 => 'f.property_number',
-    5 => 'e.emp_name',
+    2 => 'f.item',
+    4 => 'f.serial_number',
+    5 => 'f.serial_number_2',
+    6 => 'f.property_number',
+    7 => 'd.department_name',
+    8 => 'e.emp_name',
+    9 => 'f.model',
+    10 => 'f.description',
+    11 => 'f.date_aquired',
+    12 => 'f.unit',
 );
 $orderColumn = isset($_POST['order'][0]['column']) ? (int)$_POST['order'][0]['column'] : 0;
 $orderDir = strtolower((string)($_POST['order'][0]['dir'] ?? 'asc')) === 'desc' ? 'DESC' : 'ASC';
@@ -120,6 +124,7 @@ $orderBy = isset($columns[$orderColumn]) ? $columns[$orderColumn] : 'f.item';
 
 $dataSql = "SELECT
                 f.id AS fund_id,
+                f.id AS row_id,
                 f.item,
                 f.model,
                 f.description,
@@ -128,6 +133,7 @@ $dataSql = "SELECT
                 COALESCE(NULLIF(TRIM(f.property_number), ''), NULLIF(TRIM(h.par_number), ''), CONCAT('NPID:', f.id)) AS property_number,
                 f.unit,
                 f.date_aquired,
+                COALESCE(f.purchase_order, '') AS purchase_order,
                 COALESCE(f.category, h.history_category, '') AS category,
                 COALESCE(e.emp_name, '') AS emp_name,
                 COALESCE(h.dept_id, '') AS current_dept_id,
@@ -154,6 +160,7 @@ $data = array();
 foreach ($rows as $row) {
     $data[] = array(
         'fund_id' => (int)($row['fund_id'] ?? 0),
+        'row_id' => (int)($row['row_id'] ?? 0),
         'item' => (string)($row['item'] ?? ''),
         'model' => (string)($row['model'] ?? ''),
         'description' => (string)($row['description'] ?? ''),
@@ -162,6 +169,7 @@ foreach ($rows as $row) {
         'par_number' => (string)($row['property_number'] ?? ''),
         'unit' => (string)($row['unit'] ?? ''),
         'date_aquired' => (string)($row['date_aquired'] ?? ''),
+        'purchase_order' => (string)($row['purchase_order'] ?? ''),
         'category' => (string)($row['category'] ?? ''),
         'emp_name' => (string)($row['emp_name'] ?? ''),
         'current_dept_id' => (string)($row['current_dept_id'] ?? ''),

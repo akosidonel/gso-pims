@@ -12,7 +12,7 @@ $fundKey = isset($fundKey) ? (string)$fundKey : '';
 $fundTitle = isset($fundTitle) ? (string)$fundTitle : 'Fund Inventory';
 $fundSubtitle = isset($fundSubtitle) ? (string)$fundSubtitle : 'Property Inventory';
 
-if (!in_array($fundKey, ['trust', 'donation'], true)) {
+if (!in_array($fundKey, array('trust', 'donation'), true)) {
   header('Location:dashboard.php');
   exit();
 }
@@ -54,8 +54,8 @@ $assetClasses = array(
 <?php include('../include/sidebar.php') ?>
 
 <style>
-  #addItemNewPurchaseTable td,
-  #addItemNewPurchaseTable th {
+  #FundInventoryTable td,
+  #FundInventoryTable th {
     padding: 0.75rem !important;
   }
 
@@ -102,17 +102,17 @@ $assetClasses = array(
 
 <div id="destroy"></div>
 
-<div class="content-wrapper" id="fundInventoryPage" data-fund-key="<?php echo htmlspecialchars($fundKey, ENT_QUOTES); ?>">
+<div class="content-wrapper" id="fundInventoryPage" data-fund-key="<?php echo htmlspecialchars($fundKey, ENT_QUOTES, 'UTF-8'); ?>">
   <section class="content-header">
     <div class="container-fluid">
       <div class="row mb-2">
         <div class="col-sm-6">
-          <h1><?php echo htmlspecialchars($fundTitle); ?></h1>
+          <h1><?php echo htmlspecialchars($fundTitle, ENT_QUOTES, 'UTF-8'); ?></h1>
         </div>
         <div class="col-sm-6">
           <ol class="breadcrumb float-sm-right">
             <li class="breadcrumb-item"><a href="dashboard.php">Home</a></li>
-            <li class="breadcrumb-item active"><?php echo htmlspecialchars($fundTitle); ?></li>
+            <li class="breadcrumb-item active"><?php echo htmlspecialchars($fundTitle, ENT_QUOTES, 'UTF-8'); ?></li>
           </ol>
         </div>
       </div>
@@ -122,73 +122,38 @@ $assetClasses = array(
   <section class="content">
     <div class="card">
       <div class="card-header">
-        <h3 class="card-title" id="reportTitle"><i class="fas fa-clipboard"></i>&nbsp; <b><?php echo htmlspecialchars($fundSubtitle); ?></b></h3>
+        <h3 class="card-title" id="reportTitle"><i class="fas fa-clipboard"></i>&nbsp; <b><?php echo htmlspecialchars($fundSubtitle, ENT_QUOTES, 'UTF-8'); ?></b></h3>
       </div>
       <div class="card-body">
         <input type="hidden" id="np_source_context" value="fund_inventory">
-        <input type="hidden" id="np_fund_key" value="<?php echo htmlspecialchars($fundKey, ENT_QUOTES); ?>">
-        <div class="table-responsive px-3 pb-1">
-        <table id="addItemNewPurchaseTable" class="table table-bordered table-hover w-100 mb-0" style="width:100%">
-          <thead>
-            <tr class="bg-dark text-light bg-gradient bg-opacity-150">
-              <th class="text-center" style="width:4%;">
-                <input type="checkbox" id="add_item_np_select_all" aria-label="Select all rows">
-              </th>
-              <th>P.O NO.</th>
-              <th>P.R. NO.</th>
-              <th>O.B.R. NO.</th>
-              <th>SUPPLIER</th>
-              <th>DEPARTMENT</th>
-              <th>TOTAL AMOUNT</th>
-              <th style="width:4%">ACTION</th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php
-              $showText = function ($value) {
-                $text = trim((string)($value ?? ''));
-                return $text !== '' ? htmlspecialchars($text, ENT_QUOTES, 'UTF-8') : '<span class="text-dark">NULL</span>';
-              };
-              $summaryRows = gso_fund_inventory_summary_rows($conn, $fundKey);
-              if ($summaryRows && $summaryRows->num_rows > 0):
-                while ($row = $summaryRows->fetch_assoc()):
-                  $poRaw = trim((string)($row['purchase_order'] ?? ''));
-                  $po = htmlspecialchars($poRaw, ENT_QUOTES, 'UTF-8');
-                  $rowId = (int)($row['row_id'] ?? 0);
-                  $itemIdsCsv = trim((string)($row['item_ids_csv'] ?? ''));
-            ?>
-              <tr class="add-item-np-row">
-                <td class="text-center">
-                  <input
-                    type="checkbox"
-                    class="add-item-np-checkbox"
-                    value="<?php echo $rowId; ?>"
-                    data-item-ids="<?php echo htmlspecialchars($itemIdsCsv, ENT_QUOTES, 'UTF-8'); ?>"
-                    aria-label="Select row <?php echo $rowId; ?>">
-                </td>
-                <td class="font-weight-bold"><?php echo $showText($row['purchase_order'] ?? ''); ?></td>
-                <td><?php echo $showText($row['purchase_request'] ?? ''); ?></td>
-                <td><?php echo $showText($row['obr_number'] ?? ''); ?></td>
-                <td><?php echo !empty($row['supplier']) ? htmlspecialchars((string)$row['supplier']) : "<span class='text-muted'>-</span>"; ?></td>
-                <td><?php echo !empty($row['department_name']) ? htmlspecialchars((string)$row['department_name']) : "<span class='text-muted'>-</span>"; ?></td>
-                <td><?php echo '₱ ' . number_format((float)($row['total_amount'] ?? 0), 2, '.', ','); ?></td>
-                <td class="text-center">
-                  <button
-                    type="button"
-                    class="btn btn-xs btn-outline-primary np-edit-btn"
-                    data-row-id="<?php echo $rowId; ?>"
-                    data-po="<?php echo $po; ?>"
-                    title="Edit">
-                    <i class="fas fa-edit"></i>
-                  </button>
-                </td>
+        <input type="hidden" id="np_fund_key" value="<?php echo htmlspecialchars($fundKey, ENT_QUOTES, 'UTF-8'); ?>">
+        <div class="table-responsive">
+          <table id="FundInventoryTable" class="table table-bordered table-hover">
+            <thead>
+              <tr class="bg-dark text-light bg-gradient bg-opacity-150">
+                <th class="text-center align-middle no-print" style="width:30px;">
+                  <input type="checkbox" id="selectAllFundInventory" aria-label="Select all rows">
+                </th>
+                <th class="w-10 no-print">ACTION</th>
+                <th class="w-15">ASSET CLASS</th>
+                <th class="w-25">PARTICULARS</th>
+                <th class="w-10">SNID NO.1</th>
+                <th class="w-10">SNID NO.2</th>
+                <th class="w-10">PROPERTY NUMBER</th>
+                <th class="w-10">DEPARTMENT</th>
+                <th class="w-10">END USER</th>
+                <th class="d-none">MODEL</th>
+                <th class="d-none">DESCRIPTION</th>
+                <th class="d-none">YEAR ACQUIRED</th>
+                <th class="d-none">UNIT</th>
               </tr>
-            <?php
-                endwhile;
-              endif;
-            ?>
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              <tr class="text-center">
+                <td colspan="13">Loading data...</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -215,7 +180,7 @@ $assetClasses = array(
         <input type="hidden" id="edit_np_group_po" name="po">
         <input type="hidden" id="edit_np_group_row_id" name="row_id">
         <input type="hidden" name="source_context" value="fund_inventory">
-        <input type="hidden" name="fund_inventory_key" value="<?php echo htmlspecialchars($fundKey, ENT_QUOTES); ?>">
+        <input type="hidden" name="fund_inventory_key" value="<?php echo htmlspecialchars($fundKey, ENT_QUOTES, 'UTF-8'); ?>">
         <div class="modal-body">
           <div class="row add-item-section">
             <div class="col-lg-6 d-flex">

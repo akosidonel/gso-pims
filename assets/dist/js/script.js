@@ -3606,7 +3606,7 @@ $(function(){
   // Add Item page: edit new purchase detail modal
   // ============================================================
   (function () {
-    if (!$('#editNpDetailModal').length || !$('#addItemNewPurchaseTable').length) { return; }
+    if (!$('#editNpDetailModal').length || (!$('#addItemNewPurchaseTable').length && !$('#FundInventoryTable').length)) { return; }
 
     var npDetailState = {
       group: null,
@@ -5281,8 +5281,8 @@ $(function(){
     }
 
     $(document)
-      .off('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn')
-      .on('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn', function () {
+      .off('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn, #FundInventoryTable .np-edit-btn')
+      .on('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn, #FundInventoryTable .np-edit-btn', function () {
         var $btn = $(this);
         var po = String($btn.data('po') || '').trim();
         var rowId = parseInt($btn.data('rowId'), 10) || 0;
@@ -13629,11 +13629,29 @@ $(function(){
             ' aria-label="Select property ' + propertyNumber + '">';
         }
       },
+      {
+        data: null,
+        orderable: false,
+        searchable: false,
+        className: 'text-center no-print',
+        render: function(data, type, row) {
+          var rowId = escHtml(row.row_id || row.fund_id || '');
+          var po = escHtml(row.purchase_order || '');
+          return ''
+            + '<button type="button" class="btn btn-secondary btn-sm np-edit-btn"'
+            + ' data-row-id="' + rowId + '"'
+            + ' data-po="' + po + '"'
+            + ' title="Edit">'
+            + '<i class="fas fa-edit"></i>'
+            + '</button>';
+        }
+      },
       { data: 'item', render: function(data) { return escHtml(data); } },
       { data: null, render: function(data, type, row) { return escHtml((row.model || '') + ' - ' + (row.description || '')); } },
       { data: 'serial_number', render: function(data) { return data ? escHtml(data) : "<span class='text-dark'>NULL</span>"; } },
       { data: 'serial_number_2', render: function(data) { return data ? escHtml(data) : "<span class='text-dark'>NULL</span>"; } },
       { data: 'par_number', render: function(data) { return data ? escHtml(data) : "<span class='text-dark'>NULL</span>"; } },
+      { data: 'current_dept_name', render: function(data) { return data ? escHtml(data) : "<span class='text-dark'>NULL</span>"; } },
       { data: 'emp_name', render: function(data) { return escHtml(data); } },
       { data: 'model', visible: false, render: function(data) { return escHtml(data); } },
       { data: 'description', visible: false, render: function(data) { return escHtml(data); } },
@@ -13642,9 +13660,10 @@ $(function(){
     ],
     columnDefs: [
       { targets: 0, orderable: false, searchable: false, className: 'select-checkbox-column' },
-      { targets: [7, 8, 9, 10], visible: false, searchable: false }
+      { targets: 1, orderable: false, searchable: false, className: 'no-print' },
+      { targets: [9, 10, 11, 12], visible: false, searchable: false }
     ],
-    order: [[1, 'asc']],
+    order: [[2, 'asc']],
     buttons: [
       {
         extend: 'excel',
@@ -13652,19 +13671,20 @@ $(function(){
         pageSize: 'LEGAL',
         title: function() { return $('#reportTitle').text() || 'Inventory Report'; },
         exportOptions: {
-          columns: [1, 7, 8, 10, 3, 4, 5, 9, 6],
+          columns: [2, 9, 10, 12, 4, 5, 6, 11, 7, 8],
           format: {
             header: function(data, columnIdx) {
               var headers = {
-                1: 'ITEM',
-                7: 'MODEL',
-                8: 'DESCRIPTION',
-                10: 'UNIT',
-                3: 'SERIAL NUMBER PRIMARY',
-                4: 'SERIAL NUMBER SECONDARY',
-                5: 'PROPERTY NUMBER',
-                9: 'YEAR ACQUIRED',
-                6: 'END USER'
+                2: 'ITEM',
+                9: 'MODEL',
+                10: 'DESCRIPTION',
+                12: 'UNIT',
+                4: 'SERIAL NUMBER PRIMARY',
+                5: 'SERIAL NUMBER SECONDARY',
+                6: 'PROPERTY NUMBER',
+                11: 'YEAR ACQUIRED',
+                7: 'DEPARTMENT',
+                8: 'END USER'
               };
               return headers[columnIdx] || data;
             },
@@ -13688,7 +13708,7 @@ $(function(){
         orientation: 'landscape',
         pageSize: 'LEGAL',
         title: function() { return $('#reportTitle').text() || 'Inventory Report'; },
-        exportOptions: { columns: ':visible:not(.select-checkbox-column)' },
+        exportOptions: { columns: ':visible:not(.select-checkbox-column):not(.no-print)' },
         action: function(e, dt, button, config) {
           var self = this;
           withAllRows(dt, function() {
@@ -13796,7 +13816,7 @@ $(function(){
         orientation: 'landscape',
         pageSize: 'LEGAL',
         title: 'INVENTORY REPORT',
-        exportOptions: { columns: ':visible:not(.select-checkbox-column)' },
+        exportOptions: { columns: ':visible:not(.select-checkbox-column):not(.no-print)' },
         action: function(e, dt, button, config) {
           var self = this;
           withAllRows(dt, function() {
