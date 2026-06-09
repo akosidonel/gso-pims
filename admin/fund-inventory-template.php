@@ -352,7 +352,7 @@ $assetClasses = array(
                     <h3 class="card-title mb-0"><i class="fas fa-file-alt"></i>&nbsp; Item Information</h3>
                     <div class="form-group mb-0">
                       <label class="mb-1" for="edit_np_set_count">Sets</label>
-                      <input type="number" class="form-control" id="edit_np_set_count" name="set_count" value="0" min="1" max="10" step="1">
+                      <input type="number" class="form-control" id="edit_np_set_count" name="set_count" value="0" min="1" max="100" step="1">
                     </div>
                   </div>
                 </div>

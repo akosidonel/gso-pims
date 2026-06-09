@@ -3681,7 +3681,7 @@ $(function(){
     function npDetailNormalizeSetCount(value) {
       var count = parseInt(value, 10) || 1;
       if (count < 1) { count = 1; }
-      if (count > 10) { count = 10; }
+      if (count > 100) { count = 100; }
       return count;
     }
 
@@ -4587,6 +4587,9 @@ $(function(){
       $.each(npDetailState.items, function (_, item) {
         var itemId = parseInt(item.id, 10) || 0;
         var itemKey = String(item.key || '');
+        var hasPersistedIds = $.grep($.isArray(item.existing_item_ids) ? item.existing_item_ids : [itemId], function (value) {
+          return (parseInt(value, 10) || 0) > 0;
+        }).length > 0;
         html += ''
           + '<div class="border rounded p-3 item-set-card" data-item-id="' + npDetailEsc(itemKey) + '">'
           + '  <input type="hidden" name="set_keys[]" value="' + npDetailEsc(itemKey) + '">'
@@ -4603,8 +4606,8 @@ $(function(){
           + '    </div>'
           + '    <div class="form-group col-md-2">'
           + '      <label>Category</label>'
-          + '      <input type="hidden" name="category[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(String(item.category || '').trim().toUpperCase()) + '">'
-          + '      <select class="form-control edit-np-item-category" data-item-id="' + npDetailEsc(itemKey) + '" required disabled>'
+          + '      <input type="hidden" class="edit-np-item-category-value" name="category[' + npDetailEsc(itemKey) + ']" value="' + npDetailEsc(String(item.category || '').trim().toUpperCase()) + '">'
+          + '      <select class="form-control edit-np-item-category" data-item-id="' + npDetailEsc(itemKey) + '" required' + (hasPersistedIds ? ' disabled' : '') + '>'
           + '        <option value="">-SELECT-</option>'
           + '        <option value="PAR"' + (String(item.category || '').trim().toUpperCase() === 'PAR' ? ' selected' : '') + '>PAR</option>'
           + '        <option value="ICS"' + (String(item.category || '').trim().toUpperCase() === 'ICS' ? ' selected' : '') + '>ICS</option>'
@@ -5602,9 +5605,11 @@ $(function(){
       .off('change.editNpCategory', '#editNpItemRows .edit-np-item-category')
       .on('change.editNpCategory', '#editNpItemRows .edit-np-item-category', function () {
         var $card = $(this).closest('.item-set-card');
+        var categoryValue = String($(this).val() || '').trim().toUpperCase();
+        $card.find('.edit-np-item-category-value').val(categoryValue);
         var item = npDetailFindItem(String($card.data('itemId') || ''));
         if (item) {
-          item.category = String($(this).val() || '').trim().toUpperCase();
+          item.category = categoryValue;
         }
         npDetailRefreshParIcsNumbers();
         npDetailRefreshProperty($card.data('itemId'));
