@@ -9240,8 +9240,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     return /^\d{5,8}$/.test(String($('#po').val() || '').trim());
   }
 
+  function isDonationFund(){
+    return String($('#fund').val() || '').trim().toUpperCase() === 'DONATION';
+  }
+
   function isPurchaseOrderRequired(){
-    return String($('#condition').val() || '').trim().toUpperCase() === 'NEW';
+    return String($('#condition').val() || '').trim().toUpperCase() === 'NEW' && !isDonationFund();
   }
 
   function syncPurchaseOrderRequirement(){
@@ -9800,6 +9804,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
         scheduleUpdateParIcsNumber();
         resetDepartmentAndEmployeeFields();
+        syncPurchaseOrderRequirement();
+        syncAddItemSubmitButton();
         if(!fund){ return; }
 
         if (reqFundDepts && reqFundDepts.readyState !== 4) {
@@ -10224,7 +10230,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     }
   });
 
-  var canPrintExisting = formCondition === 'EXISTING' && hasPrintableCategory && selectedFund !== 'TRUST FUND' && selectedFund !== 'DONATION';
+  var canPrintExisting = formCondition === 'EXISTING' && hasPrintableCategory && selectedFund !== 'TRUST FUND';
   var canPromptPrintChoice = (formCondition === 'NEW' && hasPrintableCategory) || canPrintExisting;
 
   if (canPromptPrintChoice && printPreference !== 'now' && printPreference !== 'later') {

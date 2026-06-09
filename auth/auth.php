@@ -9650,11 +9650,13 @@ if (isset($_POST['save_item'])) {
     }
     $account_code = mysqli_real_escape_string($conn, $accountCodeNormalized);
     $purchaseOrderRaw = strtoupper(trim((string)($_POST['po'] ?? '')));
-    if ($conditionRaw === 'NEW' && $purchaseOrderRaw === '') {
+    $selectedFundRaw = strtoupper(trim((string)($_POST['fund'] ?? '')));
+    $requiresPurchaseOrder = ($conditionRaw === 'NEW' && $selectedFundRaw !== 'DONATION');
+    if ($requiresPurchaseOrder && $purchaseOrderRaw === '') {
         echo json_encode(['status' => 422, 'message' => 'P.O is required.']);
         return false;
     }
-    if ($conditionRaw === 'NEW' && !preg_match('/^\d{5,8}$/', $purchaseOrderRaw)) {
+    if ($requiresPurchaseOrder && !preg_match('/^\d{5,8}$/', $purchaseOrderRaw)) {
         echo json_encode(['status' => 422, 'message' => 'P.O must contain 5 to 8 digits for NEW items.']);
         return false;
     }
