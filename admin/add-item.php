@@ -620,7 +620,7 @@ if(!isset($_SESSION['alogin'])){
             </div>
           </div>
         </div>
-        <form id="editNpDetailForm">
+        <form id="editNpDetailForm" accept-charset="UTF-8">
           <input type="hidden" name="update_new_purchase_group" value="1">
           <input type="hidden" id="edit_np_group_po" name="po">
           <input type="hidden" id="edit_np_group_row_id" name="row_id">

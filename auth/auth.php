@@ -34,6 +34,18 @@ if(!function_exists('gso_clean_text_for_db')){
     function gso_clean_text_for_db($value, $upper = true){
         $text = trim((string)$value);
         if ($text !== '' && !preg_match('//u', $text)) {
+            $encodingCandidates = ['Windows-1252', 'ISO-8859-1'];
+            foreach ($encodingCandidates as $sourceEncoding) {
+                $converted = function_exists('mb_convert_encoding')
+                    ? @mb_convert_encoding($text, 'UTF-8', $sourceEncoding)
+                    : @iconv($sourceEncoding, 'UTF-8//IGNORE', $text);
+                if (is_string($converted) && $converted !== '' && preg_match('//u', $converted)) {
+                    $text = $converted;
+                    break;
+                }
+            }
+        }
+        if ($text !== '' && !preg_match('//u', $text)) {
             $converted = function_exists('mb_convert_encoding')
                 ? @mb_convert_encoding($text, 'UTF-8', 'Windows-1252,ISO-8859-1,UTF-8')
                 : @iconv('Windows-1252', 'UTF-8//IGNORE', $text);
@@ -51,6 +63,24 @@ if(!function_exists('gso_clean_text_for_db')){
             ["'", "'", '"', '"', '-', '-', '...', "'", "'", '"', '"', '-', '-', '...', ' ', 'TM', '(R)', '(C)', 'TM', '(R)', '(C)'],
             $text
         );
+        $text = str_replace(
+            ["\xE2\x84\xA2", "\xC2\xAE", "\xC2\xA9"],
+            ['TM', '(R)', '(C)'],
+            $text
+        );
+        if ($text !== '' && !preg_match('//u', $text)) {
+            if (function_exists('iconv')) {
+                $converted = @iconv('UTF-8', 'UTF-8//IGNORE', $text);
+                if (is_string($converted)) {
+                    $text = $converted;
+                }
+            } elseif (function_exists('mb_convert_encoding')) {
+                $converted = @mb_convert_encoding($text, 'UTF-8', 'UTF-8');
+                if (is_string($converted)) {
+                    $text = $converted;
+                }
+            }
+        }
         $cleaned = preg_replace('/[^\P{C}\t\r\n]+/u', '', $text);
         $text = $cleaned !== null ? $cleaned : preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $text);
         if ($upper) {
