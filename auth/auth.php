@@ -33,19 +33,30 @@ if(!function_exists('escape_raw')){ function escape_raw($conn,$v){ return mysqli
 if(!function_exists('gso_clean_text_for_db')){
     function gso_clean_text_for_db($value, $upper = true){
         $text = trim((string)$value);
+        if ($text !== '' && !preg_match('//u', $text)) {
+            $converted = function_exists('mb_convert_encoding')
+                ? @mb_convert_encoding($text, 'UTF-8', 'Windows-1252,ISO-8859-1,UTF-8')
+                : @iconv('Windows-1252', 'UTF-8//IGNORE', $text);
+            if (is_string($converted) && $converted !== '') {
+                $text = $converted;
+            }
+        }
         $text = str_replace(
             [
                 "\x91", "\x92", "\x93", "\x94", "\x96", "\x97", "\x85",
                 "\xE2\x80\x98", "\xE2\x80\x99", "\xE2\x80\x9C", "\xE2\x80\x9D",
                 "\xE2\x80\x93", "\xE2\x80\x94", "\xE2\x80\xA6",
-                "\xC2\xA0"
+                "\xC2\xA0", "\x99", "\xAE", "\xA9", "™", "®", "©"
             ],
-            ["'", "'", '"', '"', '-', '-', '...', "'", "'", '"', '"', '-', '-', '...', ' '],
+            ["'", "'", '"', '"', '-', '-', '...', "'", "'", '"', '"', '-', '-', '...', ' ', 'TM', '(R)', '(C)', 'TM', '(R)', '(C)'],
             $text
         );
         $cleaned = preg_replace('/[^\P{C}\t\r\n]+/u', '', $text);
         $text = $cleaned !== null ? $cleaned : preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $text);
-        return $upper ? strtoupper($text) : $text;
+        if ($upper) {
+            return function_exists('mb_strtoupper') ? mb_strtoupper($text, 'UTF-8') : strtoupper($text);
+        }
+        return $text;
     }
 }
 if(!function_exists('gso_current_role')){
