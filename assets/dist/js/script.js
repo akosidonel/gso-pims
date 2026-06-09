@@ -5149,25 +5149,39 @@ $(function(){
     function npDetailPrintCurrentGroup() {
       var group = npDetailState.group || {};
       var referenceNumber = String(group.reference_number || '').trim();
+      var referenceNumbers = group.reference_numbers || {};
       var categories = npDetailCurrentPrintCategories();
+      var parRefs = $.isArray(referenceNumbers.PAR) ? referenceNumbers.PAR : [];
+      var icsRefs = $.isArray(referenceNumbers.ICS) ? referenceNumbers.ICS : [];
 
-      if (!referenceNumber) {
+      if (!referenceNumber && !parRefs.length && !icsRefs.length) {
         Swal ? Swal.fire({ icon: 'warning', title: 'No reference number found for printing.' }) : alert('No reference number found for printing.');
         return;
       }
 
       var opened = 0;
       if (categories.PAR) {
-        window.open('printpar.php?refnumber=' + encodeURIComponent(referenceNumber), '_blank');
-        opened++;
+        if (parRefs.length) {
+          $.each(parRefs, function (_, ref) {
+            window.open('printpar.php?refnumber=' + encodeURIComponent(String(ref || '').trim()), '_blank');
+            opened++;
+          });
+        } else if (referenceNumber) {
+          window.open('printpar.php?refnumber=' + encodeURIComponent(referenceNumber), '_blank');
+          opened++;
+        }
       }
       if (categories.ICS) {
-        window.open('inventory_custodian_slip.php?refs=' + encodeURIComponent(referenceNumber), '_blank');
-        opened++;
+        if (icsRefs.length) {
+          window.open('inventory_custodian_slip.php?refs=' + $.map(icsRefs, function (ref) {
+            return encodeURIComponent(String(ref || '').trim());
+          }).join(','), '_blank');
+          opened++;
+        }
       }
 
       if (!opened) {
-        Swal ? Swal.fire({ icon: 'warning', title: 'Select PAR or ICS before printing.' }) : alert('Select PAR or ICS before printing.');
+        Swal ? Swal.fire({ icon: 'warning', title: 'No saved PAR or ICS reference found for the selected document type.' }) : alert('No saved PAR or ICS reference found for the selected document type.');
       }
     }
 

@@ -8314,6 +8314,24 @@ if (isset($_POST['fetch_new_purchase_group'])) {
     $first = $rows[0];
     $items = gso_new_purchase_group_modal_items($rows);
     $bundles = gso_new_purchase_group_modal_bundles($conn, $rows);
+    $referenceNumbersByCategory = [
+        'PAR' => [],
+        'ICS' => [],
+    ];
+    foreach ($rows as $row) {
+        $referenceNumber = trim((string)($row['reference_number'] ?? ''));
+        if ($referenceNumber === '') {
+            continue;
+        }
+        $docTypeRaw = strtoupper(trim((string)($row['doc_type'] ?? $row['category'] ?? '')));
+        $docType = str_replace('.', '', $docTypeRaw);
+        if ($docType !== 'PAR' && $docType !== 'ICS') {
+            continue;
+        }
+        if (!in_array($referenceNumber, $referenceNumbersByCategory[$docType], true)) {
+            $referenceNumbersByCategory[$docType][] = $referenceNumber;
+        }
+    }
 
     echo json_encode([
         'status' => 200,
@@ -8334,6 +8352,7 @@ if (isset($_POST['fetch_new_purchase_group'])) {
                 'department_code' => (string)($first['department_code'] ?? ''),
                 'department_name' => (string)($first['department_name'] ?? ''),
                 'reference_number' => (string)($first['reference_number'] ?? ''),
+                'reference_numbers' => $referenceNumbersByCategory,
                 'source_context' => $isFundInventoryContext ? 'fund_inventory' : 'new_purchase',
                 'fund_inventory_key' => $isFundInventoryContext ? $fundInventoryKey : '',
             ],
