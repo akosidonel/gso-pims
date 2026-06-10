@@ -21,6 +21,69 @@ function generateParIcsNumberNewPurchase(mysqli $conn, string $category): string
     return $prefix . sprintf('%04d', ($max + 1));
 }
 
+function gso_fetch_new_condition_ics_rows(mysqli $conn, string $table, string $historyTable, array $refs, array $pars): array {
+    $rows = [];
+    if (count($refs) === 0) { return $rows; }
+
+    $tableSafe = preg_replace('/[^A-Za-z0-9_]/', '', $table);
+    $historySafe = preg_replace('/[^A-Za-z0-9_]/', '', $historyTable);
+    if ($tableSafe === '' || $historySafe === '') { return $rows; }
+
+    $placeholders = implode(',', array_fill(0, count($refs), '?'));
+    $parsIn = count($pars) ? implode(',', array_fill(0, count($pars), '?')) : '';
+    $sql = "SELECT
+            np.id AS new_purchase_id,
+            np.id AS source_id,
+            '{$tableSafe}' AS source_table,
+            COALESCE(NULLIF(np.property_number, ''), h.par_number, CONCAT('NPID:', np.id)) AS par_number,
+            h.reference_number,
+            '' AS previous_user,
+            '' AS previous_dept,
+            h.emp_id AS new_user,
+            COALESCE(d_code.department_code, d_id.department_code, '') AS new_dept,
+            COALESCE(d_code.department_code, d_id.department_code, '') AS department_code,
+            COALESCE(d_code.department_name, d_id.department_name, '') AS department_name,
+            np.par_ics_number AS par_ics_number,
+            np.model AS model,
+            np.description AS description,
+            np.unit AS unit,
+            np.serial_number AS serial_number,
+            np.serial_number_2 AS serial_number_2,
+            np.account_code AS account_code,
+            np.date_aquired AS date_aquired,
+            np.unit_value AS unit_value,
+            np.supplier AS supplier,
+            np.purchase_order AS purchase_order,
+            np.purchase_request AS purchase_request,
+            np.obr_number AS obr_number,
+            e.emp_name AS user,
+            e.emp_id,
+            UPPER(h.category) AS category,
+            'NEW' AS source
+        FROM {$historySafe} AS h
+        JOIN {$tableSafe} AS np ON np.id = h.id
+        LEFT JOIN department AS d_code ON d_code.department_code = h.dept_id
+        LEFT JOIN department AS d_id ON d_id.dept_id = h.dept_id
+        LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+        WHERE h.reference_number IN ($placeholders)
+          AND REPLACE(UPPER(h.category), '.', '') = 'ICS'
+          AND h.status = 1";
+    if (count($pars) > 0) {
+        $sql .= ' AND UPPER(COALESCE(NULLIF(np.property_number, \'\'), h.par_number, CONCAT(\'NPID:\', np.id))) IN (' . $parsIn . ')';
+    }
+
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) { return $rows; }
+    $types = str_repeat('s', count($refs)) . str_repeat('s', count($pars));
+    $params = array_merge($refs, array_map('strtoupper', $pars));
+    $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    while ($r = $res->fetch_assoc()) { $rows[] = $r; }
+    $stmt->close();
+    return $rows;
+}
+
 // Validate and sanitize input
 $ref_num = isset($_GET['reference_number']) ? trim($_GET['reference_number']) : '';
 $refs_csv = isset($_GET['refs']) ? trim($_GET['refs']) : '';
@@ -93,6 +156,12 @@ if ($refs_csv !== '') {
             $resNew = $stmtNew->get_result();
             while ($r = $resNew->fetch_assoc()) { $rows[] = $r; }
             $stmtNew->close();
+        }
+        foreach ([
+            ['table' => 'trust_fund', 'history' => 'trust_fund_history'],
+            ['table' => 'donation', 'history' => 'donation_history'],
+        ] as $fundSource) {
+            $rows = array_merge($rows, gso_fetch_new_condition_ics_rows($conn, $fundSource['table'], $fundSource['history'], $refs, $pars));
         }
 
         // Legacy (existing inventory)
@@ -189,6 +258,12 @@ if ($refs_csv !== '') {
         while ($r = $resNew->fetch_assoc()) { $rows[] = $r; }
         $stmtNew->close();
     }
+    foreach ([
+        ['table' => 'trust_fund', 'history' => 'trust_fund_history'],
+        ['table' => 'donation', 'history' => 'donation_history'],
+    ] as $fundSource) {
+        $rows = array_merge($rows, gso_fetch_new_condition_ics_rows($conn, $fundSource['table'], $fundSource['history'], [$ref_num], $pars));
+    }
 
     // Legacy (existing inventory)
     $sqlOld = "SELECT 
@@ -235,7 +310,8 @@ if (count($rows) > 0) {
             $newParIcs = ($source === 'NEW') ? generateParIcsNumberNewPurchase($conn, 'ICS') : generateParIcsNumber($conn, 'ICS');
             if ($source === 'NEW') {
                 $newPurchaseId = (int)($r['new_purchase_id'] ?? 0);
-                if ($newPurchaseId > 0 && ($stmtU = $conn->prepare("UPDATE new_purchase SET par_ics_number=? WHERE id=?"))) {
+                $sourceTable = preg_replace('/[^A-Za-z0-9_]/', '', (string)($r['source_table'] ?? 'new_purchase'));
+                if ($newPurchaseId > 0 && $sourceTable !== '' && ($stmtU = $conn->prepare("UPDATE {$sourceTable} SET par_ics_number=? WHERE id=?"))) {
                     $stmtU->bind_param('si', $newParIcs, $newPurchaseId);
                     $stmtU->execute();
                     $stmtU->close();

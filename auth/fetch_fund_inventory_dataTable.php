@@ -36,7 +36,8 @@ if (dt_information_schema_table_exists($conn, $historyTable)) {
 $baseFromSql = "FROM {$table} AS f
                 {$historyJoin}
                 LEFT JOIN employee AS e ON e.emp_id = h.emp_id
-                LEFT JOIN department AS d ON d.department_code = h.dept_id";
+                LEFT JOIN department AS d_code ON d_code.department_code = h.dept_id
+                LEFT JOIN department AS d_id ON d_id.dept_id = h.dept_id";
 
 $whereParts = array('1 = 1');
 $whereTypes = '';
@@ -111,7 +112,7 @@ $columns = array(
     4 => 'f.serial_number',
     5 => 'f.serial_number_2',
     6 => 'f.property_number',
-    7 => 'd.department_name',
+    7 => 'COALESCE(d_code.department_name, d_id.department_name)',
     8 => 'e.emp_name',
     9 => 'f.model',
     10 => 'f.description',
@@ -137,7 +138,7 @@ $dataSql = "SELECT
                 COALESCE(f.category, h.history_category, '') AS category,
                 COALESCE(e.emp_name, '') AS emp_name,
                 COALESCE(h.dept_id, '') AS current_dept_id,
-                COALESCE(d.department_name, '') AS current_dept_name
+                COALESCE(d_code.department_name, d_id.department_name, '') AS current_dept_name
             {$baseFromSql}
             {$whereSql}
             ORDER BY {$orderBy} {$orderDir}";

@@ -89,6 +89,27 @@ if(!function_exists('gso_clean_text_for_db')){
         return $text;
     }
 }
+if(!function_exists('gso_clean_inventory_text_for_db')){
+    function gso_clean_inventory_text_for_db($value, $upper = true){
+        $text = gso_clean_text_for_db($value, false);
+        if ($text !== '' && preg_match('/[^\x09\x0A\x0D\x20-\x7E]/', $text)) {
+            if (function_exists('iconv')) {
+                $converted = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
+                if (is_string($converted) && $converted !== '') {
+                    $text = $converted;
+                }
+            }
+            $cleaned = preg_replace('/[^\x09\x0A\x0D\x20-\x7E]/', '', $text);
+            if ($cleaned !== null) {
+                $text = $cleaned;
+            }
+        }
+        if ($upper) {
+            return function_exists('mb_strtoupper') ? mb_strtoupper($text, 'UTF-8') : strtoupper($text);
+        }
+        return $text;
+    }
+}
 if(!function_exists('gso_current_role')){
     function gso_current_role(){
         return strtoupper(trim((string)($_SESSION['role'] ?? '')));
@@ -1227,7 +1248,7 @@ if (!function_exists('gso_new_purchase_group_ids')) {
         $po = trim((string)$po);
         $rowId = (int)$rowId;
 
-        if ($po === '' && $rowId <= 0) {
+        if ($po === '' && $rowId === 0) {
             return [];
         }
 
@@ -1270,7 +1291,7 @@ if (!function_exists('gso_new_purchase_group_rows')) {
     function gso_new_purchase_group_rows(mysqli $conn, $po = '', $rowId = 0) {
         $po = trim((string)$po);
         $rowId = (int)$rowId;
-        if ($po === '' && $rowId <= 0) {
+        if ($po === '' && $rowId === 0) {
             return [];
         }
 
@@ -1477,14 +1498,14 @@ if (!function_exists('gso_fund_inventory_group_rows')) {
 
         $po = trim((string)$po);
         $rowId = (int)$rowId;
-        if ($po === '' && $rowId <= 0) {
+        if ($po === '' && $rowId === 0) {
             return [];
         }
 
         $table = $source['table'];
         $historyTable = $source['history'];
 
-        if ($po === '' && $rowId > 0) {
+        if ($po === '' && $rowId !== 0) {
             $lookupStmt = $conn->prepare("SELECT purchase_order FROM {$table} WHERE id = ? LIMIT 1");
             if ($lookupStmt) {
                 $lookupStmt->bind_param('i', $rowId);
@@ -1591,7 +1612,7 @@ if (!function_exists('gso_new_purchase_group_modal_items')) {
             }
 
             $rowId = (int)($row['id'] ?? 0);
-            if ($rowId > 0) {
+            if ($rowId !== 0) {
                 $grouped[$signature]['existing_item_ids'][] = $rowId;
             }
             $grouped[$signature]['item_quantity']++;
@@ -8500,7 +8521,7 @@ if (isset($_POST['update_new_purchase_group'])) {
         $currentById = [];
         foreach ($currentRows as $row) {
             $id = (int)($row['id'] ?? 0);
-            if ($id > 0) {
+            if ($id !== 0) {
                 $currentById[$id] = $row;
             }
         }
@@ -8540,11 +8561,11 @@ if (isset($_POST['update_new_purchase_group'])) {
         }
 
         $year = trim((string)($_POST['year'] ?? ''));
-        $purchaseOrder = gso_clean_text_for_db($_POST['purchase_order'] ?? '');
-        $purchaseRequest = gso_clean_text_for_db($_POST['purchase_request'] ?? '');
-        $obrNumber = gso_clean_text_for_db($_POST['obr_number'] ?? '');
-        $jevNumber = gso_clean_text_for_db($_POST['jev_number'] ?? '');
-        $supplier = gso_clean_text_for_db($_POST['supplier'] ?? '');
+        $purchaseOrder = gso_clean_inventory_text_for_db($_POST['purchase_order'] ?? '');
+        $purchaseRequest = gso_clean_inventory_text_for_db($_POST['purchase_request'] ?? '');
+        $obrNumber = gso_clean_inventory_text_for_db($_POST['obr_number'] ?? '');
+        $jevNumber = gso_clean_inventory_text_for_db($_POST['jev_number'] ?? '');
+        $supplier = gso_clean_inventory_text_for_db($_POST['supplier'] ?? '');
         $deptInput = trim((string)($_POST['dept_id'] ?? ''));
 
         if ($year === '' || $deptInput === '') {
@@ -8611,8 +8632,8 @@ if (isset($_POST['update_new_purchase_group'])) {
                 return $empValue;
             }
 
-            $newName = gso_clean_text_for_db($getPostedMapValue('emp_new_name', $itemKey, ''));
-            $newPosition = gso_clean_text_for_db($getPostedMapValue('emp_new_position', $itemKey, 'N/A'));
+            $newName = gso_clean_inventory_text_for_db($getPostedMapValue('emp_new_name', $itemKey, ''));
+            $newPosition = gso_clean_inventory_text_for_db($getPostedMapValue('emp_new_position', $itemKey, 'N/A'));
             if ($newName === '') {
                 throw new RuntimeException('New employee name is required.');
             }
@@ -8681,11 +8702,11 @@ if (isset($_POST['update_new_purchase_group'])) {
                 $resolvedEmployeeInt = (int)$resolvedEmployeeId;
                 $category = gso_clean_text_for_db($getPostedMapValue('category', $setKey, $currentItem['category'] ?? ''));
                 $unit = gso_clean_text_for_db($getPostedMapValue('unit', $setKey, $currentItem['unit'] ?? ''));
-                $itemName = gso_clean_text_for_db($getPostedMapValue('item', $setKey, $currentItem['item'] ?? ''));
-                $model = gso_clean_text_for_db($getPostedMapValue('model', $setKey, $currentItem['model'] ?? ''));
-                $description = gso_clean_text_for_db($getPostedMapValue('description', $setKey, $currentItem['description'] ?? ''));
+                $itemName = gso_clean_inventory_text_for_db($getPostedMapValue('item', $setKey, $currentItem['item'] ?? ''));
+                $model = gso_clean_inventory_text_for_db($getPostedMapValue('model', $setKey, $currentItem['model'] ?? ''));
+                $description = gso_clean_inventory_text_for_db($getPostedMapValue('description', $setKey, $currentItem['description'] ?? ''));
                 $accountCode = gso_clean_text_for_db($getPostedMapValue('account_code', $setKey, $currentItem['account_code'] ?? ''));
-                $remarks = gso_clean_text_for_db($getPostedMapValue('remarks', $setKey, $currentItem['remarks'] ?? ''));
+                $remarks = gso_clean_inventory_text_for_db($getPostedMapValue('remarks', $setKey, $currentItem['remarks'] ?? ''));
                 $parIcsNumber = gso_clean_text_for_db($getPostedMapValue('par_ics_number_preview_value', $setKey, $currentItem['par_ics_number'] ?? ''));
                 $propertyNumberInput = trim((string)$getPostedMapValue('property_number', $setKey, $currentItem['property_number'] ?? ''));
                 $unitValueRaw = str_replace(',', '', trim((string)$getPostedMapValue('unit_value', $setKey, $currentItem['unit_value'] ?? '0')));
@@ -8804,11 +8825,11 @@ if (isset($_POST['update_new_purchase_group'])) {
 
     $fund = strtoupper(trim((string)($_POST['fund'] ?? '')));
     $year = trim((string)($_POST['year'] ?? ''));
-    $purchaseOrder = gso_clean_text_for_db($_POST['purchase_order'] ?? '');
-    $purchaseRequest = gso_clean_text_for_db($_POST['purchase_request'] ?? '');
-    $obrNumber = gso_clean_text_for_db($_POST['obr_number'] ?? '');
-    $jevNumber = gso_clean_text_for_db($_POST['jev_number'] ?? '');
-    $supplier = gso_clean_text_for_db($_POST['supplier'] ?? '');
+    $purchaseOrder = gso_clean_inventory_text_for_db($_POST['purchase_order'] ?? '');
+    $purchaseRequest = gso_clean_inventory_text_for_db($_POST['purchase_request'] ?? '');
+    $obrNumber = gso_clean_inventory_text_for_db($_POST['obr_number'] ?? '');
+    $jevNumber = gso_clean_inventory_text_for_db($_POST['jev_number'] ?? '');
+    $supplier = gso_clean_inventory_text_for_db($_POST['supplier'] ?? '');
     $deptInput = trim((string)($_POST['dept_id'] ?? ''));
 
     if ($fund === '' || $year === '' || $deptInput === '') {
@@ -9101,19 +9122,19 @@ if (isset($_POST['update_new_purchase_group'])) {
             $oldPropNum = strtoupper(trim((string)($currentRow['property_number'] ?? '')));
             $npidLink = $existingId > 0 ? ('NPID:' . $existingId) : '';
 
-            $unit = gso_clean_text_for_db($getPostedMapValue('unit', $setKey));
-            $item = gso_clean_text_for_db($getPostedMapValue('item', $setKey));
+            $unit = gso_clean_inventory_text_for_db($getPostedMapValue('unit', $setKey));
+            $item = gso_clean_inventory_text_for_db($getPostedMapValue('item', $setKey));
             $category = $normalizeCategory($getPostedMapValue('category', $setKey, $currentRow['category'] ?? ''));
-            $model = gso_clean_text_for_db($getPostedMapValue('model', $setKey));
-            $description = gso_clean_text_for_db($getPostedMapValue('description', $setKey));
+            $model = gso_clean_inventory_text_for_db($getPostedMapValue('model', $setKey));
+            $description = gso_clean_inventory_text_for_db($getPostedMapValue('description', $setKey));
             $accountCode = gso_clean_text_for_db($getPostedMapValue('account_code', $setKey));
-            $remarks = gso_clean_text_for_db($getPostedMapValue('remarks', $setKey));
-            $propertyNumber = gso_clean_text_for_db($getPostedMapValue('property_number', $setKey));
+            $remarks = gso_clean_inventory_text_for_db($getPostedMapValue('remarks', $setKey));
+            $propertyNumber = gso_clean_inventory_text_for_db($getPostedMapValue('property_number', $setKey));
             $unitValue = (float)preg_replace('/[^0-9.]/', '', $getPostedMapValue('unit_value', $setKey, '0'));
             $skipAccountAndProperty = in_array(strtoupper(trim($getPostedMapValue('item_no_account_property', $setKey, '0'))), ['1', 'ON', 'YES', 'TRUE'], true);
             $employeeRaw = trim($getPostedMapValue('emp_id', $setKey));
-            $newEmployeeName = gso_clean_text_for_db($getPostedMapValue('emp_new_name', $setKey));
-            $newEmployeePosition = gso_clean_text_for_db($getPostedMapValue('emp_new_position', $setKey));
+            $newEmployeeName = gso_clean_inventory_text_for_db($getPostedMapValue('emp_new_name', $setKey));
+            $newEmployeePosition = gso_clean_inventory_text_for_db($getPostedMapValue('emp_new_position', $setKey));
             $itemQuantity = $normalizeItemQuantity($getPostedMapValue('item_quantity', $setKey, '1'));
 
             if ($item === '' || $unit === '' || $category === '') {
@@ -9368,14 +9389,14 @@ if (isset($_POST['update_new_purchase_group'])) {
         );
         for ($bundleIndex = 0; $bundleIndex < $bundleRowsCount; $bundleIndex++) {
             $parentIndex = (int)trim((string)($bundleParentIndexes[$bundleIndex] ?? '0'));
-            $bundleCategory = gso_clean_text_for_db($bundleCategories[$bundleIndex] ?? '');
-            $bundleUnit = gso_clean_text_for_db($bundleUnits[$bundleIndex] ?? '');
-            $bundleAsset = gso_clean_text_for_db($bundleAssets[$bundleIndex] ?? '');
-            $bundleModel = gso_clean_text_for_db($bundleModels[$bundleIndex] ?? '');
-            $bundleDescription = gso_clean_text_for_db($bundleDescs[$bundleIndex] ?? '');
-            $bundlePrimarySerial = gso_clean_text_for_db($bundleSerial1[$bundleIndex] ?? '');
-            $bundleSecondarySerial = gso_clean_text_for_db($bundleSerial2[$bundleIndex] ?? '');
-            $bundlePropertyNumber = gso_clean_text_for_db($bundlePropertyNumbers[$bundleIndex] ?? '');
+            $bundleCategory = gso_clean_inventory_text_for_db($bundleCategories[$bundleIndex] ?? '');
+            $bundleUnit = gso_clean_inventory_text_for_db($bundleUnits[$bundleIndex] ?? '');
+            $bundleAsset = gso_clean_inventory_text_for_db($bundleAssets[$bundleIndex] ?? '');
+            $bundleModel = gso_clean_inventory_text_for_db($bundleModels[$bundleIndex] ?? '');
+            $bundleDescription = gso_clean_inventory_text_for_db($bundleDescs[$bundleIndex] ?? '');
+            $bundlePrimarySerial = gso_clean_inventory_text_for_db($bundleSerial1[$bundleIndex] ?? '');
+            $bundleSecondarySerial = gso_clean_inventory_text_for_db($bundleSerial2[$bundleIndex] ?? '');
+            $bundlePropertyNumber = gso_clean_inventory_text_for_db($bundlePropertyNumbers[$bundleIndex] ?? '');
 
             if ($parentIndex < 1 && $bundleCategory === '' && $bundleUnit === '' && $bundleAsset === '' && $bundleModel === '' && $bundleDescription === '' && $bundlePrimarySerial === '' && $bundleSecondarySerial === '') {
                 continue;
@@ -9726,12 +9747,10 @@ if (isset($_POST['save_item'])) {
     }
 
     // NEW purchase flow:
-    // - Save only to NEW purchase tables:
-    //   new_purchase, new_purchase_history, new_bundle_purchase
+    // - GENERAL FUND / SEF / TRUST FUND save to new_purchase tables first
+    // - DONATION saves directly to donation tables
     // - Generate a single reference_number for printing
     if ($conditionRaw === 'NEW') {
-        $referenceNumber = generateReferenceNumber($conn, 'new_purchase_history', 'reference_number');
-
         $fundNorm = strtoupper(trim((string)$fund));
         $isValidFund = in_array($fundNorm, ['GF', 'GENERAL FUND', 'SEF', 'SF', 'SPECIAL EDUCATION FUND', 'TRUST FUND', 'DONATION'], true);
         if (!$isValidFund) {
@@ -9741,6 +9760,9 @@ if (isset($_POST['save_item'])) {
         $isTrustFund = ($fundNorm === 'TRUST FUND');
         $isDonation = ($fundNorm === 'DONATION');
         $propertyNumberOptionalFund = ($isTrustFund || $isDonation);
+        $newFlowMainTable = $isDonation ? 'donation' : 'new_purchase';
+        $newFlowHistoryTable = $isDonation ? 'donation_history' : 'new_purchase_history';
+        $referenceNumber = generateReferenceNumber($conn, $newFlowHistoryTable, 'reference_number');
 
         // PAR/ICS number generation (single MAX lookup per request)
         $manualProvided = ($par_ics_input_raw !== '' && strtoupper($par_ics_input_raw) !== 'NULL');
@@ -9783,6 +9805,7 @@ if (isset($_POST['save_item'])) {
             echo json_encode(['status' => 422, 'message' => 'Invalid department selected.']);
             return false;
         }
+        $fundHistoryDeptValue = ($isTrustFund || $isDonation) ? $deptCode : $deptIdInt;
 
         $statusActive = 1;
         $createdAt = $today;
@@ -9805,22 +9828,22 @@ if (isset($_POST['save_item'])) {
             }
         }
 
-        // Prepared inserts for NEW purchase tables
-        $stmtNewPurchase = mysqli_prepare(
-            $conn,
-            'INSERT INTO new_purchase (fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-        );
+        // Prepared inserts for NEW-condition destination tables
+        $newFlowInsertSql = $isDonation
+            ? 'INSERT INTO donation (id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            : 'INSERT INTO new_purchase (fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)';
+        $stmtNewPurchase = mysqli_prepare($conn, $newFlowInsertSql);
         if (!$stmtNewPurchase) {
-            echo json_encode(['status' => 500, 'message' => 'Unable to prepare new purchase insert.']);
+            echo json_encode(['status' => 500, 'message' => 'Unable to prepare item insert.']);
             return false;
         }
-        $stmtNewPurchaseHist = mysqli_prepare(
-            $conn,
-            'INSERT INTO new_purchase_history (emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES (?,?,?,?,?,?,?)'
-        );
+        $newFlowHistoryInsertSql = $isDonation
+            ? 'INSERT INTO donation_history (id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES (?,?,?,?,?,?,?,?)'
+            : 'INSERT INTO new_purchase_history (emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES (?,?,?,?,?,?,?)';
+        $stmtNewPurchaseHist = mysqli_prepare($conn, $newFlowHistoryInsertSql);
         if (!$stmtNewPurchaseHist) {
             mysqli_stmt_close($stmtNewPurchase);
-            echo json_encode(['status' => 500, 'message' => 'Unable to prepare new purchase history insert.']);
+            echo json_encode(['status' => 500, 'message' => 'Unable to prepare item history insert.']);
             return false;
         }
 
@@ -9845,6 +9868,18 @@ if (isset($_POST['save_item'])) {
         $insertedCount = 0;
         $printRefs = ['PAR' => [], 'ICS' => []];
         $reservedPropertyNumbers = [];
+        $nextManualFundId = function($mainTable, $historyTable) use ($conn) {
+            $mainTable = preg_replace('/[^A-Za-z0-9_]/', '', (string)$mainTable);
+            $historyTable = preg_replace('/[^A-Za-z0-9_]/', '', (string)$historyTable);
+            $sql = "SELECT LEAST(COALESCE((SELECT MIN(id) FROM {$mainTable}), 0), COALESCE((SELECT MIN(id) FROM {$historyTable}), 0), 0) - 1 AS next_id";
+            $res = mysqli_query($conn, $sql);
+            if ($res && mysqli_num_rows($res) === 1) {
+                $row = mysqli_fetch_assoc($res);
+                return (int)($row['next_id'] ?? -1);
+            }
+            return -1;
+        };
+        $nextDonationId = $isDonation ? $nextManualFundId('donation', 'donation_history') : null;
 
         mysqli_begin_transaction($conn);
         try {
@@ -9987,52 +10022,102 @@ if (isset($_POST['save_item'])) {
                     $obrForPurchase = empty($_POST['obr']) ? null : strtoupper(trim((string)$_POST['obr']));
                     $jevForPurchase = empty($_POST['jev']) ? null : strtoupper(trim((string)$_POST['jev']));
 
-                    mysqli_stmt_bind_param(
-                        $stmtNewPurchase,
-                        'sssssssssdssssssssss',
-                        $fundForPurchase,
-                        $categoryForRow,
-                        $unitForPurchase,
-                        $itemForRow,
-                        $brandForRow,
-                        $descriptionForRow,
-                        $serial1ForPurchase,
-                        $serial2ForPurchase,
-                        $par_number,
-                        $unitValueForRow,
-                        $year,
-                        $accountCodeForPurchase,
-                        $supplierForPurchase,
-                        $parIcsForRow,
-                        $poForPurchase,
-                        $prForPurchase,
-                        $obrForPurchase,
-                        $jevForPurchase,
-                        $remarksForPurchase,
-                        $createdAt
-                    );
-                    if (!mysqli_stmt_execute($stmtNewPurchase)) {
-                        throw new Exception('New purchase insert failed.');
+                    $newPurchaseId = 0;
+                    if ($isDonation) {
+                        $newPurchaseId = (int)$nextDonationId;
+                        $nextDonationId--;
+                        $propertyNumberForPurchase = null;
+
+                        mysqli_stmt_bind_param(
+                            $stmtNewPurchase,
+                            'isssssssssdssssssssss',
+                            $newPurchaseId,
+                            $fundForPurchase,
+                            $categoryForRow,
+                            $unitForPurchase,
+                            $itemForRow,
+                            $brandForRow,
+                            $descriptionForRow,
+                            $serial1ForPurchase,
+                            $serial2ForPurchase,
+                            $propertyNumberForPurchase,
+                            $unitValueForRow,
+                            $year,
+                            $accountCodeForPurchase,
+                            $supplierForPurchase,
+                            $parIcsForRow,
+                            $poForPurchase,
+                            $prForPurchase,
+                            $obrForPurchase,
+                            $jevForPurchase,
+                            $remarksForPurchase,
+                            $createdAt
+                        );
+                    } else {
+                        mysqli_stmt_bind_param(
+                            $stmtNewPurchase,
+                            'sssssssssdssssssssss',
+                            $fundForPurchase,
+                            $categoryForRow,
+                            $unitForPurchase,
+                            $itemForRow,
+                            $brandForRow,
+                            $descriptionForRow,
+                            $serial1ForPurchase,
+                            $serial2ForPurchase,
+                            $par_number,
+                            $unitValueForRow,
+                            $year,
+                            $accountCodeForPurchase,
+                            $supplierForPurchase,
+                            $parIcsForRow,
+                            $poForPurchase,
+                            $prForPurchase,
+                            $obrForPurchase,
+                            $jevForPurchase,
+                            $remarksForPurchase,
+                            $createdAt
+                        );
                     }
-                    $newPurchaseId = (int)mysqli_insert_id($conn);
+                    if (!mysqli_stmt_execute($stmtNewPurchase)) {
+                        throw new Exception('Item insert failed.');
+                    }
+                    if (!$isDonation) {
+                        $newPurchaseId = (int)mysqli_insert_id($conn);
+                    }
                     $historyParNumber = $par_number;
-                    if ($skipPropertyNumberForRow && $newPurchaseId > 0) {
+                    if (($skipPropertyNumberForRow || $isDonation) && $newPurchaseId !== 0) {
                         $historyParNumber = 'NPID:' . $newPurchaseId;
                     }
 
-                    mysqli_stmt_bind_param(
-                        $stmtNewPurchaseHist,
-                        'iississ',
-                        $empForRowInt,
-                        $deptIdInt,
-                        $historyParNumber,
-                        $referenceNumber,
-                        $statusActive,
-                        $categoryForRow,
-                        $createdAt
-                    );
+                    if ($isDonation) {
+                        mysqli_stmt_bind_param(
+                            $stmtNewPurchaseHist,
+                            'isississ',
+                            $newPurchaseId,
+                            $empForRowInt,
+                            $fundHistoryDeptValue,
+                            $historyParNumber,
+                            $referenceNumber,
+                            $statusActive,
+                            $categoryForRow,
+                            $createdAt
+                        );
+                    } else {
+                        mysqli_stmt_bind_param(
+                            $stmtNewPurchaseHist,
+                            'iississ',
+                            $empForRowInt,
+                            $deptIdInt,
+                            $historyParNumber,
+                            $referenceNumber,
+                            $statusActive,
+                            $categoryForRow,
+                            $createdAt
+                        );
+                    }
                     if (!mysqli_stmt_execute($stmtNewPurchaseHist)) {
-                        throw new Exception('New purchase history insert failed.');
+                        throw new Exception('Item history insert failed.');
                     }
 
                     $insertedCount++;
@@ -10450,13 +10535,13 @@ if (isset($_POST['save_item'])) {
                 $nextTrustFundId--;
                 $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
                 $multi .= "INSERT INTO trust_fund(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','TRUST FUND','".$categoryForRow."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
-                $multi .= "INSERT INTO trust_fund_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$deptIdInt."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                $multi .= "INSERT INTO trust_fund_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
             } else {
                 $fundRecordId = $nextDonationId;
                 $nextDonationId--;
                 $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
                 $multi .= "INSERT INTO donation(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','DONATION','".$categoryForRow."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
-                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$deptIdInt."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
             }
 
             if (!in_array($referenceNumberForRow, $printRefs[$categoryForRow], true)) {
@@ -15392,20 +15477,20 @@ if (isset($_POST['update_new_purchase_item'])) {
     $propNum = strtoupper(trim((string)($_POST['property_number'] ?? '')));
     $newPropNum = strtoupper(trim((string)($_POST['new_property_number'] ?? $propNum)));
 
-    $item        = strtoupper(trim((string)($_POST['item']             ?? '')));
-    $model       = strtoupper(trim((string)($_POST['model']            ?? '')));
-    $description = strtoupper(trim((string)($_POST['description']      ?? '')));
-    $sn1         = strtoupper(trim((string)($_POST['serial_number']    ?? '')));
-    $sn2         = strtoupper(trim((string)($_POST['serial_number_2']  ?? '')));
+    $item        = gso_clean_inventory_text_for_db($_POST['item'] ?? '');
+    $model       = gso_clean_inventory_text_for_db($_POST['model'] ?? '');
+    $description = gso_clean_inventory_text_for_db($_POST['description'] ?? '');
+    $sn1         = gso_clean_inventory_text_for_db($_POST['serial_number'] ?? '');
+    $sn2         = gso_clean_inventory_text_for_db($_POST['serial_number_2'] ?? '');
     $unitValue   = (float) preg_replace('/[^0-9.]/', '', $_POST['unit_value']    ?? '0');
     $dateAquired = trim((string)($_POST['date_aquired']     ?? ''));
     $accountCode = trim((string)($_POST['account_code']     ?? ''));
-    $supplier    = strtoupper(trim((string)($_POST['supplier']         ?? '')));
-    $parIcs      = strtoupper(trim((string)($_POST['par_ics_number']   ?? '')));
-    $pr          = strtoupper(trim((string)($_POST['purchase_request'] ?? '')));
-    $obr         = strtoupper(trim((string)($_POST['obr_number']       ?? '')));
-    $jev         = strtoupper(trim((string)($_POST['jev_number']       ?? '')));
-    $remarks     = strtoupper(trim((string)($_POST['remarks']          ?? '')));
+    $supplier    = gso_clean_inventory_text_for_db($_POST['supplier'] ?? '');
+    $parIcs      = gso_clean_inventory_text_for_db($_POST['par_ics_number'] ?? '');
+    $pr          = gso_clean_inventory_text_for_db($_POST['purchase_request'] ?? '');
+    $obr         = gso_clean_inventory_text_for_db($_POST['obr_number'] ?? '');
+    $jev         = gso_clean_inventory_text_for_db($_POST['jev_number'] ?? '');
+    $remarks     = gso_clean_inventory_text_for_db($_POST['remarks'] ?? '');
     $fund        = strtoupper(trim((string)($_POST['fund']             ?? '')));
     $category    = strtoupper(trim((string)($_POST['category']         ?? '')));
     $propertyNumberOptionalFundForUpdate = in_array($fund, ['TRUST FUND', 'DONATION'], true);

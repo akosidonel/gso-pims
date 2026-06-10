@@ -79,6 +79,10 @@ $assetClasses = array(
     flex-shrink: 0;
   }
 
+  #editNpDetailModal .add-item-section + .add-item-section {
+    margin-top: 1rem;
+  }
+
   #editNpDetailModal .item-set-card + .item-set-card {
     margin-top: 1rem;
   }
@@ -168,9 +172,12 @@ $assetClasses = array(
           <div class="card-body py-3">
             <div class="d-flex align-items-start justify-content-between flex-wrap">
               <div class="mb-2 mb-md-0">
+                <div class="gso-kicker">Inventory</div>
                 <div class="gso-title gso-title-sm" id="editNpDetailModalLabel">Edit Item or Equipment</div>
               </div>
-              <button type="button" class="close text-white" style="opacity:.8;" data-dismiss="modal"><span>&times;</span></button>
+              <button type="button" class="close text-white" style="opacity:.8;" data-dismiss="modal" aria-label="Close">
+                <span>&times;</span>
+              </button>
             </div>
           </div>
         </div>

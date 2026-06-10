@@ -49,6 +49,12 @@ function gso_printpar_table_has_column(mysqli $conn, string $tableName, string $
 $newPurchaseUnitSelect = gso_printpar_table_has_column($conn, 'new_purchase', 'unit')
   ? 'np.unit'
   : "'' AS unit";
+$trustFundUnitSelect = gso_printpar_table_has_column($conn, 'trust_fund', 'unit')
+  ? 'f.unit'
+  : "'' AS unit";
+$donationUnitSelect = gso_printpar_table_has_column($conn, 'donation', 'unit')
+  ? 'f.unit'
+  : "'' AS unit";
 
 function gso_repair_blank_new_purchase_history_links(mysqli $conn, string $referenceNumber, string $category): void {
   $historyRows = [];
@@ -299,6 +305,71 @@ if (count($items) === 0 && ($stmt = $conn->prepare($sqlSef))) {
     }
   }
   $stmt->close();
+}
+
+function gso_printpar_append_fund_rows(mysqli $conn, array &$items, array &$meta, string $table, string $historyTable, string $unitSelect, string $refnumber, array $pars): void {
+  $parsFilter = count($pars) ? ' AND COALESCE(NULLIF(f.property_number, \'\'), h.par_number, \'\') IN (' . implode(',', array_fill(0, count($pars), '?')) . ')' : '';
+  $sql = "
+    SELECT
+      'NEW' AS item_condition,
+      {$unitSelect},
+      f.unit_value,
+      f.item,
+      f.model,
+      f.serial_number,
+      f.serial_number_2,
+      f.description,
+      f.par_ics_number,
+      COALESCE(NULLIF(f.property_number, ''), h.par_number, '') AS property_number,
+      f.date_aquired,
+      f.supplier,
+      f.purchase_order,
+      f.purchase_request,
+      f.obr_number,
+      f.account_code,
+      e.emp_name AS emp_name,
+      d.department_name AS department_name
+    FROM {$historyTable} AS h
+    JOIN {$table} AS f ON f.id = h.id
+    LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+    LEFT JOIN department AS d ON (d.dept_id = h.dept_id OR d.department_code = h.dept_id)
+    WHERE h.reference_number = ?
+      AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
+      AND h.status = 1
+      {$parsFilter}
+    ORDER BY f.id ASC
+  ";
+
+  $stmt = $conn->prepare($sql);
+  if (!$stmt) { return; }
+  $stmt->bind_param('s' . str_repeat('s', count($pars)), $refnumber, ...$pars);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  while ($row = $res->fetch_assoc()) {
+    $items[] = $row;
+    if ($meta['user'] === '') {
+      $meta['supplier'] = (string)($row['supplier'] ?? '');
+      $meta['po'] = (string)($row['purchase_order'] ?? '');
+      $meta['pr'] = (string)($row['purchase_request'] ?? '');
+      $meta['obr'] = (string)($row['obr_number'] ?? '');
+      $meta['code'] = (string)($row['account_code'] ?? '');
+      $meta['user'] = (string)($row['emp_name'] ?? '');
+      $meta['dept'] = (string)($row['department_name'] ?? '');
+      $meta['par_ics_number'] = (string)($row['par_ics_number'] ?? '');
+    }
+    if ($meta['par_ics_number'] === '' && (string)($row['par_ics_number'] ?? '') !== '') {
+      $meta['par_ics_number'] = (string)$row['par_ics_number'];
+    }
+  }
+  $stmt->close();
+}
+
+if (count($items) === 0) {
+  gso_printpar_append_fund_rows($conn, $items, $meta, 'trust_fund', 'trust_fund_history', $trustFundUnitSelect, $refnumber, $pars);
+}
+
+if (count($items) === 0) {
+  gso_printpar_append_fund_rows($conn, $items, $meta, 'donation', 'donation_history', $donationUnitSelect, $refnumber, $pars);
 }
 
 if (count($items) === 0) {

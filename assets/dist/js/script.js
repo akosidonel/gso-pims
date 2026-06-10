@@ -3633,6 +3633,22 @@ $(function(){
       return fund;
     }
 
+    function npDetailNormalizeTextInput(value) {
+      return String(value === null || value === undefined ? '' : value)
+        .replace(/\u00A0/g, ' ')
+        .replace(/[\u2018\u2019]/g, '\'')
+        .replace(/[\u201C\u201D]/g, '"')
+        .replace(/[\u2013\u2014]/g, '-')
+        .replace(/\u2026/g, '...')
+        .replace(/\u2122/g, 'TM')
+        .replace(/\u00AE/g, '(R)')
+        .replace(/\u00A9/g, '(C)')
+        .replace(/â„¢/g, 'TM')
+        .replace(/Â®/g, '(R)')
+        .replace(/Â©/g, '(C)')
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+    }
+
     function npDetailPropertyOptionalFund() {
       var fund = npDetailNormalizeFund($('#edit_np_fund').val());
       return fund === 'TRUST FUND' || fund === 'DONATION';
@@ -5726,6 +5742,11 @@ $(function(){
           confirmButtonText: 'Yes, update'
         }, function () {
           var $btn = $('#editNpDetailSaveBtn').prop('disabled', true);
+          $('#editNpDetailForm')
+            .find('input[type="text"], textarea')
+            .each(function () {
+              $(this).val(npDetailNormalizeTextInput($(this).val()));
+            });
           var formData = new FormData(e.currentTarget);
           formData.set('dept_id', deptCode);
           formData.set('fund', $('#edit_np_fund').val() || '');
@@ -13526,7 +13547,6 @@ $(function(){
   var fundKey = String($page.data('fund-key') || '').trim().toLowerCase();
   var selectedAssetClass = '';
   var selectedEndUser = '';
-  var selectedParIcs = '';
   var selectedFundRows = {};
 
   function getSelectedFundRows() {
@@ -13559,7 +13579,6 @@ $(function(){
   function hasFocusedExportFilter(dt) {
     return (selectedAssetClass || '').trim() !== '' ||
       (selectedEndUser || '').trim() !== '' ||
-      (selectedParIcs || '').trim() !== '' ||
       (dt.search() || '').trim() !== '';
   }
 
@@ -13605,7 +13624,6 @@ $(function(){
         d.fund = fundKey;
         d.asset_class = selectedAssetClass;
         d.end_user = selectedEndUser;
-        d.par_ics = selectedParIcs;
       }
     },
     columns: [
@@ -13810,21 +13828,6 @@ $(function(){
             doTransfer();
           }
         }
-      },
-      {
-        extend: 'pdfHtml5',
-        orientation: 'landscape',
-        pageSize: 'LEGAL',
-        title: 'INVENTORY REPORT',
-        exportOptions: { columns: ':visible:not(.select-checkbox-column):not(.no-print)' },
-        action: function(e, dt, button, config) {
-          var self = this;
-          withAllRows(dt, function() {
-            if ($.fn && $.fn.dataTable && $.fn.dataTable.ext && $.fn.dataTable.ext.buttons && $.fn.dataTable.ext.buttons.pdfHtml5 && $.fn.dataTable.ext.buttons.pdfHtml5.action) {
-              $.fn.dataTable.ext.buttons.pdfHtml5.action.call(self, e, dt, button, config);
-            }
-          });
-        }
       }
     ]
   });
@@ -13835,7 +13838,6 @@ $(function(){
 
   var assetClassSelect = $('<select id="assetClassSelect" class="form-control form-control-sm ml-3" style="min-width:160px; max-width:290px; width:auto; display:inline-block;"><option value="">ALL ASSET CLASS</option></select>');
   var endUserSelect = $('<select id="endUserSelect" class="form-control form-control-sm ml-3" style="min-width:160px; max-width:290px; width:auto; display:inline-block;"><option value="">ALL END USER</option></select>');
-  var parIcsSelect = $('<select id="parIcsSelect" class="form-control form-control-sm ml-3" style="min-width:120px; max-width:160px; width:auto; display:inline-block;"><option value="">ALL PAR/ICS</option><option value="PAR">PAR</option><option value="ICS">ICS</option></select>');
 
   function populateFiltersAllRecords() {
     assetClassSelect.find('option:not(:first)').remove();
@@ -13874,11 +13876,6 @@ $(function(){
 
   endUserSelect.on('change', function() {
     selectedEndUser = $(this).val() || '';
-    table.ajax.reload(null, true);
-  });
-
-  parIcsSelect.on('change', function() {
-    selectedParIcs = ($(this).val() || '').toUpperCase();
     table.ajax.reload(null, true);
   });
 
@@ -13939,7 +13936,6 @@ $(function(){
 
     flexDiv.append(dtButtons);
     flexDiv.append(dtLength);
-    flexDiv.append(parIcsSelect);
     flexDiv.append(assetClassSelect);
     flexDiv.append(endUserSelect);
     left.children().not('.dt-toolbar-flex').remove();
