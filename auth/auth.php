@@ -110,6 +110,112 @@ if(!function_exists('gso_clean_inventory_text_for_db')){
         return $text;
     }
 }
+if(!function_exists('gso_par_ics_source_tables')){
+    function gso_par_ics_source_tables($includeOptional = true){
+        $tables = ['new_purchase', 'par_gen_fund', 'property_sef'];
+        if ($includeOptional) {
+            $tables[] = 'trust_fund';
+            $tables[] = 'donation';
+        }
+        return $tables;
+    }
+}
+if(!function_exists('gso_normalize_par_ics_year_key')){
+    function gso_normalize_par_ics_year_key($value){
+        $text = strtoupper(trim((string)$value));
+        if ($text === '') {
+            return date('Y');
+        }
+        if (preg_match('/^\d{4}$/', $text)) {
+            return $text;
+        }
+        if ($text === 'RFS') {
+            return $text;
+        }
+        if (preg_match('/^(\d{4})-\d{2}-\d{2}$/', $text, $matches)) {
+            return $matches[1];
+        }
+        if (preg_match('/(\d{4})/', $text, $matches)) {
+            return $matches[1];
+        }
+        return date('Y');
+    }
+}
+if(!function_exists('gso_build_par_ics_prefix')){
+    function gso_build_par_ics_prefix($category, $yearAcquired = ''){
+        $cat = strtoupper(trim((string)$category));
+        if (!in_array($cat, ['PAR', 'ICS'], true)) {
+            throw new RuntimeException('Invalid category for PAR/ICS number generation.');
+        }
+        $letter = ($cat === 'ICS') ? 'I' : 'P';
+        return gso_normalize_par_ics_year_key($yearAcquired) . '-' . $letter;
+    }
+}
+if(!function_exists('gso_par_ics_exists_in_tables')){
+    function gso_par_ics_exists_in_tables(mysqli $conn, $candidate, array $tables = []){
+        $candidate = strtoupper(trim((string)$candidate));
+        if ($candidate === '') {
+            return false;
+        }
+        if (empty($tables)) {
+            $tables = gso_par_ics_source_tables(true);
+        }
+        $safeCandidate = mysqli_real_escape_string($conn, $candidate);
+        foreach ($tables as $tableName) {
+            $tableName = preg_replace('/[^A-Za-z0-9_]/', '', (string)$tableName);
+            if ($tableName === '') {
+                continue;
+            }
+            $sql = "SELECT 1 FROM {$tableName} WHERE par_ics_number='{$safeCandidate}' LIMIT 1";
+            $result = mysqli_query($conn, $sql);
+            if ($result && mysqli_num_rows($result) > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+if(!function_exists('gso_generate_next_par_ics_number')){
+    function gso_generate_next_par_ics_number(mysqli $conn, $category, $yearAcquired = '', array $tables = []){
+        if (empty($tables)) {
+            $tables = gso_par_ics_source_tables(true);
+        }
+        $prefix = gso_build_par_ics_prefix($category, $yearAcquired);
+        $prefixEsc = mysqli_real_escape_string($conn, $prefix);
+        $max = 0;
+
+        foreach ($tables as $tableName) {
+            $tableName = preg_replace('/[^A-Za-z0-9_]/', '', (string)$tableName);
+            if ($tableName === '') {
+                continue;
+            }
+            $sql = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefixEsc') + 1) AS UNSIGNED)) AS max_sfx
+                    FROM {$tableName}
+                    WHERE par_ics_number LIKE CONCAT('$prefixEsc','%')";
+            $result = mysqli_query($conn, $sql);
+            if ($result && mysqli_num_rows($result) === 1) {
+                $row = mysqli_fetch_assoc($result);
+                if ($row && $row['max_sfx'] !== null) {
+                    $max = max($max, (int)$row['max_sfx']);
+                }
+            }
+        }
+
+        $attempts = 0;
+        do {
+            $max++;
+            $candidate = $prefix . sprintf('%04d', $max);
+            $isDuplicate = gso_par_ics_exists_in_tables($conn, $candidate, $tables);
+            $attempts++;
+        } while ($isDuplicate && $attempts < 20000);
+
+        if ($isDuplicate) {
+            throw new RuntimeException('Unable to allocate a unique PAR/ICS number.');
+        }
+
+        return $candidate;
+    }
+}
 if(!function_exists('gso_current_role')){
     function gso_current_role(){
         return strtoupper(trim((string)($_SESSION['role'] ?? '')));
@@ -8921,14 +9027,16 @@ if (isset($_POST['update_new_purchase_group'])) {
     };
     $generatedParIcsByCategory = [];
     $currentParIcsByCategory = [];
+    $selectedParIcsYearKey = gso_normalize_par_ics_year_key($year);
     foreach ($currentRows as $row) {
         $rowCategory = $normalizeCategory($row['category'] ?? '');
         $rowParIcs = strtoupper(trim((string)($row['par_ics_number'] ?? '')));
-        if ($rowCategory !== '' && $rowParIcs !== '' && !isset($currentParIcsByCategory[$rowCategory])) {
+        $rowYearKey = gso_normalize_par_ics_year_key($row['date_aquired'] ?? $year);
+        if ($rowCategory !== '' && $rowParIcs !== '' && $rowYearKey === $selectedParIcsYearKey && !isset($currentParIcsByCategory[$rowCategory])) {
             $currentParIcsByCategory[$rowCategory] = $rowParIcs;
         }
     }
-    $getParIcsForCategory = function ($rowCategory) use ($conn, &$generatedParIcsByCategory, $currentParIcsByCategory, $normalizeCategory) {
+    $getParIcsForCategory = function ($rowCategory) use ($conn, &$generatedParIcsByCategory, $currentParIcsByCategory, $normalizeCategory, $year) {
         $rowCategory = $normalizeCategory($rowCategory);
         if ($rowCategory === '') {
             throw new RuntimeException('Each set must include a valid category.');
@@ -8940,25 +9048,12 @@ if (isset($_POST['update_new_purchase_group'])) {
             $generatedParIcsByCategory[$rowCategory] = $currentParIcsByCategory[$rowCategory];
             return $generatedParIcsByCategory[$rowCategory];
         }
-        $ym = date('Ym');
-        $letter = ($rowCategory === 'ICS') ? 'I' : 'P';
-        $prefix = $ym . '-' . $letter;
-        $prefixEsc = mysqli_real_escape_string($conn, $prefix);
-        $max = 0;
-        foreach (['new_purchase', 'par_gen_fund', 'property_sef', 'trust_fund', 'donation'] as $tableName) {
-            $tableName = preg_replace('/[^A-Za-z0-9_]/', '', $tableName);
-            $sql = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefixEsc') + 1) AS UNSIGNED)) AS max_sfx
-                    FROM {$tableName}
-                    WHERE par_ics_number LIKE CONCAT('$prefixEsc','%')";
-            $result = mysqli_query($conn, $sql);
-            if ($result && mysqli_num_rows($result) === 1) {
-                $row = mysqli_fetch_assoc($result);
-                if ($row && $row['max_sfx'] !== null) {
-                    $max = max($max, (int)$row['max_sfx']);
-                }
-            }
-        }
-        $generatedParIcsByCategory[$rowCategory] = $prefix . sprintf('%04d', ($max + 1));
+        $generatedParIcsByCategory[$rowCategory] = gso_generate_next_par_ics_number(
+            $conn,
+            $rowCategory,
+            $year,
+            gso_par_ics_source_tables(true)
+        );
         return $generatedParIcsByCategory[$rowCategory];
     };
     $generateAvailablePropertyNumber = function ($category, $accountCode, $existingId = 0, $oldPropertyNumber = '', array $exclude = [], $quantity = 1) use ($conn, $year, $departmentCode, $fund, $nextPropertyNumber) {
@@ -9767,24 +9862,18 @@ if (isset($_POST['save_item'])) {
         // PAR/ICS number generation (single MAX lookup per request)
         $manualProvided = ($par_ics_input_raw !== '' && strtoupper($par_ics_input_raw) !== 'NULL');
         $parIcsCodeByCategory = [];
-        $getParIcsForCategory = function($rowCategory) use (&$parIcsCodeByCategory, $conn) {
+        $getParIcsForCategory = function($rowCategory) use (&$parIcsCodeByCategory, $conn, $year) {
             $rowCategory = strtoupper(trim((string)$rowCategory));
             if (!in_array($rowCategory, ['PAR', 'ICS'], true)) {
                 throw new RuntimeException('Invalid category for PAR/ICS number generation.');
             }
             if (!isset($parIcsCodeByCategory[$rowCategory])) {
-                $ym = date('Ym');
-                $letter = ($rowCategory === 'ICS') ? 'I' : 'P';
-                $prefix = $ym . '-' . $letter;
-                $prefEsc = mysqli_real_escape_string($conn, $prefix);
-                $max = 0;
-                $sqlMax = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM new_purchase WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
-                $resMax = mysqli_query($conn, $sqlMax);
-                if ($resMax && mysqli_num_rows($resMax) === 1) {
-                    $row = mysqli_fetch_assoc($resMax);
-                    if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
-                }
-                $parIcsCodeByCategory[$rowCategory] = $prefix . sprintf('%04d', ($max + 1));
+                $parIcsCodeByCategory[$rowCategory] = gso_generate_next_par_ics_number(
+                    $conn,
+                    $rowCategory,
+                    $year,
+                    gso_par_ics_source_tables(true)
+                );
             }
             return $parIcsCodeByCategory[$rowCategory];
         };
@@ -10288,38 +10377,18 @@ if (isset($_POST['save_item'])) {
     // PAR/ICS generator optimization:
     // The old generateParIcsNumber() scans MAX() each call; for bulk adds this becomes very slow.
     $parIcsCodeByCategory = [];
-    $getParIcsForCategory = function($rowCategory) use (&$parIcsCodeByCategory, $conn) {
+    $getParIcsForCategory = function($rowCategory) use (&$parIcsCodeByCategory, $conn, $year) {
         $rowCategory = strtoupper(trim((string)$rowCategory));
         if (!in_array($rowCategory, ['PAR', 'ICS'], true)) {
             throw new RuntimeException('Invalid category for PAR/ICS number generation.');
         }
         if (!isset($parIcsCodeByCategory[$rowCategory])) {
-            $ym = date('Ym');
-            $letter = ($rowCategory === 'ICS') ? 'I' : 'P';
-            $prefix = $ym . '-' . $letter;
-            $prefEsc = mysqli_real_escape_string($conn, $prefix);
-            $max = 0;
-            $sqlGf = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM par_gen_fund WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
-            $resGf = mysqli_query($conn, $sqlGf);
-            if ($resGf && mysqli_num_rows($resGf) === 1) {
-                $row = mysqli_fetch_assoc($resGf);
-                if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
-            }
-            $sqlSef = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM property_sef WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
-            $resSef = mysqli_query($conn, $sqlSef);
-            if ($resSef && mysqli_num_rows($resSef) === 1) {
-                $row = mysqli_fetch_assoc($resSef);
-                if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
-            }
-            foreach (['trust_fund', 'donation'] as $fundTable) {
-                $sqlFund = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM {$fundTable} WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
-                $resFund = mysqli_query($conn, $sqlFund);
-                if ($resFund && mysqli_num_rows($resFund) === 1) {
-                    $row = mysqli_fetch_assoc($resFund);
-                    if ($row && $row['max_sfx'] !== null) { $max = max($max, (int)$row['max_sfx']); }
-                }
-            }
-            $parIcsCodeByCategory[$rowCategory] = $prefix . sprintf('%04d', ($max + 1));
+            $parIcsCodeByCategory[$rowCategory] = gso_generate_next_par_ics_number(
+                $conn,
+                $rowCategory,
+                $year,
+                gso_par_ics_source_tables(true)
+            );
         }
         return $parIcsCodeByCategory[$rowCategory];
     };
@@ -14654,29 +14723,13 @@ if (isset($_POST['validate_employee_name'])) {
 if (isset($_POST['generate_par_ics_code'])) {
     header('Content-Type: application/json');
     $category = isset($_POST['category']) ? trim($_POST['category']) : '';
-    $condition = strtoupper(trim((string)($_POST['condition'] ?? '')));
+    $yearAcquired = trim((string)($_POST['year'] ?? ''));
     if ($category !== 'PAR' && $category !== 'ICS') {
         echo json_encode(['status'=>400,'error'=>'Invalid or missing category.']);
         return false;
     }
     try {
-        // Per requirement: for condition=NEW, PAR/ICS numbering must be based on new_purchase only.
-        if ($condition === 'NEW') {
-            $ym = date('Ym');
-            $letter = ($category === 'ICS') ? 'I' : 'P';
-            $prefix = $ym . '-' . $letter;
-            $prefEsc = mysqli_real_escape_string($conn, $prefix);
-            $max = 0;
-            $sql = "SELECT MAX(CAST(SUBSTRING(par_ics_number, LENGTH('$prefEsc') + 1) AS UNSIGNED)) AS max_sfx FROM new_purchase WHERE par_ics_number LIKE CONCAT('$prefEsc','%')";
-            $res = mysqli_query($conn, $sql);
-            if ($res && mysqli_num_rows($res) === 1) {
-                $row = mysqli_fetch_assoc($res);
-                if ($row && $row['max_sfx'] !== null) { $max = (int)$row['max_sfx']; }
-            }
-            $code = $prefix . sprintf('%04d', ($max + 1));
-        } else {
-            $code = generateParIcsNumber($conn, $category);
-        }
+        $code = gso_generate_next_par_ics_number($conn, $category, $yearAcquired, gso_par_ics_source_tables(true));
         echo json_encode(['status'=>200,'code'=>$code]);
     } catch (Throwable $e) {
         echo json_encode(['status'=>500,'error'=>'Failed to generate PAR/ICS No.']);
@@ -14700,28 +14753,20 @@ if (isset($_POST['validate_par_ics_unique'])) {
     $exists = false;
     $poMatch = false;
 
-    if ($condition === 'NEW') {
-        $res = mysqli_query($conn, "SELECT purchase_order FROM new_purchase WHERE par_ics_number='{$safe}' LIMIT 1");
+    $tables = [
+        ['table' => 'new_purchase', 'po' => 'purchase_order'],
+        ['table' => 'par_gen_fund', 'po' => 'purchase_order'],
+        ['table' => 'property_sef', 'po' => 'purchase_order'],
+        ['table' => 'trust_fund', 'po' => 'purchase_order'],
+        ['table' => 'donation', 'po' => 'purchase_order'],
+    ];
+    foreach ($tables as $tbl) {
+        $res = mysqli_query($conn, "SELECT {$tbl['po']} AS purchase_order FROM {$tbl['table']} WHERE par_ics_number='{$safe}' LIMIT 1");
         if ($res && mysqli_num_rows($res) > 0) {
             $exists = true;
             $row = mysqli_fetch_assoc($res);
-            $poMatch = ($po !== '' && strtoupper(trim($row['purchase_order'])) === $po);
-        }
-    } else {
-        $tables = [
-            ['table' => 'par_gen_fund', 'po' => 'purchase_order'],
-            ['table' => 'property_sef', 'po' => 'purchase_order'],
-            ['table' => 'trust_fund', 'po' => 'purchase_order'],
-            ['table' => 'donation', 'po' => 'purchase_order'],
-        ];
-        foreach ($tables as $tbl) {
-            $res = mysqli_query($conn, "SELECT {$tbl['po']} AS purchase_order FROM {$tbl['table']} WHERE par_ics_number='{$safe}' LIMIT 1");
-            if ($res && mysqli_num_rows($res) > 0) {
-                $exists = true;
-                $row = mysqli_fetch_assoc($res);
-                $poMatch = ($po !== '' && strtoupper(trim($row['purchase_order'])) === $po);
-                break;
-            }
+            $poMatch = ($po !== '' && strtoupper(trim((string)($row['purchase_order'] ?? ''))) === $po);
+            break;
         }
     }
     echo json_encode(['status'=>200, 'exists'=>$exists, 'po_match'=>$poMatch]);

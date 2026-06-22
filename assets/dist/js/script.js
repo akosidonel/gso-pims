@@ -3985,18 +3985,13 @@ $(function(){
     }
 
     function npDetailRefreshBundleParIcsNumbers() {
+      var selectedYear = npDetailGetYear($('#edit_np_year').val());
       var codeByCategory = {};
       $.each(npDetailState.items, function (_, item) {
         var category = String(item.category || '').trim().toUpperCase();
         var code = String(item.par_ics_number || '').trim().toUpperCase();
-        if (category && code && !codeByCategory[category]) {
-          codeByCategory[category] = code;
-        }
-      });
-      $.each(npDetailState.bundles || [], function (_, bundle) {
-        var category = String(bundle.category || '').trim().toUpperCase();
-        var code = String(bundle.par_ics_number || '').trim().toUpperCase();
-        if (category && code && !codeByCategory[category]) {
+        var originalYear = npDetailGetYear(item.original_year || item.year || '');
+        if (category && code && originalYear === selectedYear && !codeByCategory[category]) {
           codeByCategory[category] = code;
         }
       });
@@ -4005,6 +4000,7 @@ $(function(){
       $('#editNpBundleRows .edit-np-bundle-card').each(function () {
         var $card = $(this);
         var category = String($card.find('.edit-np-bundle-category').val() || '').trim().toUpperCase();
+        var cacheKey = selectedYear + '|' + category;
         if (!category) {
           npDetailSetBundleParIcsPreview($card, '');
           return;
@@ -4013,8 +4009,8 @@ $(function(){
           npDetailSetBundleParIcsPreview($card, codeByCategory[category]);
           return;
         }
-        if (npDetailBundleParIcsCache[category]) {
-          codeByCategory[category] = npDetailBundleParIcsCache[category];
+        if (npDetailBundleParIcsCache[cacheKey]) {
+          codeByCategory[category] = npDetailBundleParIcsCache[cacheKey];
           npDetailSetBundleParIcsPreview($card, codeByCategory[category]);
           return;
         }
@@ -4032,12 +4028,13 @@ $(function(){
           data: {
             generate_par_ics_code: 1,
             category: category,
-            condition: 'NEW'
+            condition: 'NEW',
+            year: selectedYear
           },
           success: function (resp) {
             var code = (resp && Number(resp.status) === 200 && resp.code) ? String(resp.code).trim().toUpperCase() : '';
             if (!code) { return; }
-            npDetailBundleParIcsCache[category] = code;
+            npDetailBundleParIcsCache[selectedYear + '|' + category] = code;
             $('#editNpBundleRows .edit-np-bundle-card').each(function () {
               var $card = $(this);
               if (String($card.find('.edit-np-bundle-category').val() || '').trim().toUpperCase() === category) {
@@ -4269,11 +4266,13 @@ $(function(){
     function npDetailRefreshParIcsNumbers() {
       if (!npDetailState.items.length) { return; }
 
+      var selectedYear = npDetailGetYear($('#edit_np_year').val());
       var codeByCategory = {};
       $.each(npDetailState.items, function (_, item) {
         var category = String(item.category || '').trim().toUpperCase();
         var code = String(item.par_ics_number || '').trim().toUpperCase();
-        if (category && code && !codeByCategory[category]) {
+        var originalYear = npDetailGetYear(item.original_year || item.year || '');
+        if (category && code && originalYear === selectedYear && !codeByCategory[category]) {
           codeByCategory[category] = code;
         }
       });
@@ -4306,7 +4305,8 @@ $(function(){
           data: {
             generate_par_ics_code: 1,
             category: category,
-            condition: 'NEW'
+            condition: 'NEW',
+            year: selectedYear
           },
           success: function (resp) {
             var code = (resp && Number(resp.status) === 200 && resp.code) ? String(resp.code).trim().toUpperCase() : '';
@@ -5668,6 +5668,7 @@ $(function(){
           npDetailApplyNoAccountPropertyState($(this));
         });
         npDetailRefreshParIcsNumbers();
+        npDetailRefreshBundleParIcsNumbers();
         npDetailRefreshAllProperties();
       });
 
@@ -8095,14 +8096,19 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
   }
 
   function refreshBundleParIcsNumbers(){
+    var selectedYear = String($('#year').val() || '').trim().toUpperCase();
     bundleRowEls().each(function(){
       var $row = $(this);
       var category = String($row.find('.js-bundle-category').val() || '').trim().toUpperCase();
+      var cacheKey = selectedYear + '|' + category;
       if (!category) {
         setBundleParIcsPreview($row, '');
         return;
       }
-      var existingCode = getItemParIcsCodeByCategory(category) || bundleParIcsCache[category] || '';
+      var existingCode = getItemParIcsCodeByCategory(category) || bundleParIcsCache[cacheKey] || '';
+      if (existingCode && selectedYear && existingCode.indexOf(selectedYear + '-') !== 0) {
+        existingCode = '';
+      }
       if (existingCode) {
         setBundleParIcsPreview($row, existingCode);
         return;
@@ -8115,12 +8121,13 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
         data: {
           generate_par_ics_code: 1,
           category: category,
-          condition: String($('#condition').val() || '').trim().toUpperCase()
+          condition: String($('#condition').val() || '').trim().toUpperCase(),
+          year: selectedYear
         },
         success: function(resp){
           var code = (resp && Number(resp.status) === 200 && resp.code) ? String(resp.code).trim().toUpperCase() : '';
           if (!code) { return; }
-          bundleParIcsCache[category] = code;
+          bundleParIcsCache[cacheKey] = code;
           bundleRowEls().each(function(){
             var $bundleRow = $(this);
             if (String($bundleRow.find('.js-bundle-category').val() || '').trim().toUpperCase() === category) {
@@ -9581,6 +9588,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       return;
     }
 
+    var selectedYear = String($('#year').val() || '').trim().toUpperCase();
     var reqId = Date.now() + Math.random();
     updateParIcsNumbers.lastReqId = reqId;
     var list = [];
@@ -9611,7 +9619,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         url: '../auth/auth.php',
         method: 'POST',
         dataType: 'json',
-        data: { generate_par_ics_code: 1, category: category, condition: String($('#condition').val() || '').trim().toUpperCase() },
+        data: {
+          generate_par_ics_code: 1,
+          category: category,
+          condition: String($('#condition').val() || '').trim().toUpperCase(),
+          year: selectedYear
+        },
         success: function(res){
           if (reqId !== updateParIcsNumbers.lastReqId) { return; }
           var code = (res && res.status === 200 && res.code) ? String(res.code).trim().toUpperCase() : '';
@@ -10024,8 +10037,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .on('change.gsoAddItemPageProp input.gsoAddItemPageProp', '.js-item-category, .js-item-account-code, #dept, #year, #quantity', scheduleUpdatePropertyNumber);
 
     $(document)
-      .off('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #quantity')
-      .on('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #quantity', scheduleUpdateParIcsNumber);
+      .off('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #quantity, #year')
+      .on('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #quantity, #year', scheduleUpdateParIcsNumber);
 
     $(document)
       .off('input.gsoAddItemPageTrustAcct', 'input.js-item-account-code')
