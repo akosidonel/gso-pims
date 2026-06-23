@@ -110,6 +110,15 @@ if(!function_exists('gso_clean_inventory_text_for_db')){
         return $text;
     }
 }
+if(!function_exists('gso_reference_number_is_valid')){
+    function gso_reference_number_is_valid($value, $allowEmpty = true){
+        $text = trim((string)$value);
+        if ($text === '') {
+            return $allowEmpty;
+        }
+        return preg_match('/^[0-9-]+$/', $text) === 1;
+    }
+}
 if(!function_exists('gso_par_ics_source_tables')){
     function gso_par_ics_source_tables($includeOptional = true){
         $tables = ['new_purchase', 'par_gen_fund', 'property_sef'];
@@ -8674,6 +8683,11 @@ if (isset($_POST['update_new_purchase_group'])) {
         $supplier = gso_clean_inventory_text_for_db($_POST['supplier'] ?? '');
         $deptInput = trim((string)($_POST['dept_id'] ?? ''));
 
+        if (!gso_reference_number_is_valid($purchaseOrder, true) || !gso_reference_number_is_valid($purchaseRequest, true) || !gso_reference_number_is_valid($obrNumber, true)) {
+            echo json_encode(['status' => 422, 'message' => 'P.O, P.R, and O.B.R must contain numbers and hyphen only.']);
+            return false;
+        }
+
         if ($year === '' || $deptInput === '') {
             echo json_encode(['status' => 422, 'message' => 'Year and department are required.']);
             return false;
@@ -8937,6 +8951,11 @@ if (isset($_POST['update_new_purchase_group'])) {
     $jevNumber = gso_clean_inventory_text_for_db($_POST['jev_number'] ?? '');
     $supplier = gso_clean_inventory_text_for_db($_POST['supplier'] ?? '');
     $deptInput = trim((string)($_POST['dept_id'] ?? ''));
+
+    if (!gso_reference_number_is_valid($purchaseOrder, true) || !gso_reference_number_is_valid($purchaseRequest, true) || !gso_reference_number_is_valid($obrNumber, true)) {
+        echo json_encode(['status' => 422, 'message' => 'P.O, P.R, and O.B.R must contain numbers and hyphen only.']);
+        return false;
+    }
 
     if ($fund === '' || $year === '' || $deptInput === '') {
         echo json_encode(['status' => 422, 'message' => 'Fund, year, and department are required.']);
@@ -9665,6 +9684,8 @@ if (isset($_POST['save_item'])) {
     $itemRemarksRows = (isset($_POST['remarks']) && is_array($_POST['remarks'])) ? $_POST['remarks'] : null;
     $itemAccountCodeRows = (isset($_POST['account_code']) && is_array($_POST['account_code'])) ? $_POST['account_code'] : null;
     $itemPropertyNumberRows = (isset($_POST['property_numbers']) && is_array($_POST['property_numbers'])) ? $_POST['property_numbers'] : null;
+    $itemManualParIcsRows = (isset($_POST['item_manual_par_ics']) && is_array($_POST['item_manual_par_ics'])) ? $_POST['item_manual_par_ics'] : null;
+    $itemParIcsPreviewRows = (isset($_POST['par_ics_number_preview_value']) && is_array($_POST['par_ics_number_preview_value'])) ? $_POST['par_ics_number_preview_value'] : null;
     $itemNoAccountPropertyRows = (isset($_POST['item_no_account_property']) && is_array($_POST['item_no_account_property'])) ? $_POST['item_no_account_property'] : null;
 
     $resolveRowInput = function (?array $rows, int $rowIndex, string $fallback = ''): string {
@@ -9768,12 +9789,14 @@ if (isset($_POST['save_item'])) {
     $purchaseOrderRaw = strtoupper(trim((string)($_POST['po'] ?? '')));
     $selectedFundRaw = strtoupper(trim((string)($_POST['fund'] ?? '')));
     $requiresPurchaseOrder = ($conditionRaw === 'NEW' && $selectedFundRaw !== 'DONATION');
-    if ($requiresPurchaseOrder && $purchaseOrderRaw === '') {
-        echo json_encode(['status' => 422, 'message' => 'P.O is required.']);
+    $purchaseRequestRaw = strtoupper(trim((string)($_POST['pr'] ?? '')));
+    $obrRaw = strtoupper(trim((string)($_POST['obr'] ?? '')));
+    if (!gso_reference_number_is_valid($purchaseOrderRaw, true) || !gso_reference_number_is_valid($purchaseRequestRaw, true) || !gso_reference_number_is_valid($obrRaw, true)) {
+        echo json_encode(['status' => 422, 'message' => 'P.O, P.R, and O.B.R must contain numbers and hyphen only.']);
         return false;
     }
-    if ($requiresPurchaseOrder && !preg_match('/^\d{5,8}$/', $purchaseOrderRaw)) {
-        echo json_encode(['status' => 422, 'message' => 'P.O must contain 5 to 8 digits for NEW items.']);
+    if ($requiresPurchaseOrder && $purchaseOrderRaw === '') {
+        echo json_encode(['status' => 422, 'message' => 'P.O is required.']);
         return false;
     }
     $pr = empty($_POST['pr']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['pr'])) . "'";
@@ -10032,6 +10055,8 @@ if (isset($_POST['save_item'])) {
                 if ($categoryForRow === '') {
                     throw new Exception('Category is required for row ' . $i . '.');
                 }
+                $manualParIcsForRow = $resolveRowBool($itemManualParIcsRows, $i, false);
+                $manualParIcsValueForRow = strtoupper(trim($resolveRowInput($itemParIcsPreviewRows, $i, '')));
                 $omitAccountPropertyForRow = $resolveRowBool($itemNoAccountPropertyRows, $i, false);
                 $skipPropertyNumberForRow = $propertyNumberOptionalFund || $omitAccountPropertyForRow;
                 $accountCodeForRow = $resolveRowUpper($itemAccountCodeRows, $i, $accountCodeInput);
@@ -10091,7 +10116,12 @@ if (isset($_POST['save_item'])) {
                         $reservedPropertyNumbers[] = $par_number;
                     }
 
-                    if ($manualProvided) {
+                    if ($manualParIcsForRow) {
+                        if ($manualParIcsValueForRow === '') {
+                            throw new Exception('Manual PAR/ICS No. is required for row ' . $i . '.');
+                        }
+                        $parIcsForRow = $manualParIcsValueForRow;
+                    } elseif ($manualProvided) {
                         $parIcsForRow = strtoupper($par_ics_input_raw);
                     } else {
                         $parIcsForRow = $getParIcsForCategory($categoryForRow);
@@ -10514,6 +10544,8 @@ if (isset($_POST['save_item'])) {
             echo json_encode(['status'=>422,'message'=>'Category is required for row '.$i.'.']);
             return false;
         }
+        $manualParIcsForRow = $resolveRowBool($itemManualParIcsRows, $i, false);
+        $manualParIcsValueForRow = strtoupper(trim($resolveRowInput($itemParIcsPreviewRows, $i, '')));
         if ($accountCodeForRow === '') {
             mysqli_rollback($conn);
             echo json_encode(['status'=>422,'message'=>'Account code is required for row '.$i.'.']);
@@ -10579,7 +10611,14 @@ if (isset($_POST['save_item'])) {
                 $reservedPropertyNumbers[] = $par_number;
             }
 
-            if ($manualProvided) {
+            if ($manualParIcsForRow) {
+                if ($manualParIcsValueForRow === '') {
+                    mysqli_rollback($conn);
+                    echo json_encode(['status'=>422,'message'=>'Manual PAR/ICS No. is required for row '.$i.'.']);
+                    return false;
+                }
+                $parIcsForRow = $manualParIcsValueForRow;
+            } elseif ($manualProvided) {
                 $parIcsForRow = strtoupper($par_ics_input_raw);
             } else {
                 $parIcsForRow = $getParIcsForCategory($categoryForRow);

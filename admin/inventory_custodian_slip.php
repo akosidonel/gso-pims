@@ -84,6 +84,80 @@ function gso_fetch_new_condition_ics_rows(mysqli $conn, string $table, string $h
     return $rows;
 }
 
+function gso_fetch_existing_condition_ics_rows(
+    mysqli $conn,
+    string $table,
+    string $historyTable,
+    string $historyPropertyColumn,
+    string $tablePropertyColumn,
+    string $historyDeptColumn,
+    array $refs,
+    array $pars
+): array {
+    $rows = [];
+    if (count($refs) === 0) { return $rows; }
+
+    $tableSafe = preg_replace('/[^A-Za-z0-9_]/', '', $table);
+    $historySafe = preg_replace('/[^A-Za-z0-9_]/', '', $historyTable);
+    $historyPropertySafe = preg_replace('/[^A-Za-z0-9_]/', '', $historyPropertyColumn);
+    $tablePropertySafe = preg_replace('/[^A-Za-z0-9_]/', '', $tablePropertyColumn);
+    $historyDeptSafe = preg_replace('/[^A-Za-z0-9_]/', '', $historyDeptColumn);
+    if ($tableSafe === '' || $historySafe === '' || $historyPropertySafe === '' || $tablePropertySafe === '' || $historyDeptSafe === '') {
+        return $rows;
+    }
+
+    $placeholders = implode(',', array_fill(0, count($refs), '?'));
+    $parsIn = count($pars) ? implode(',', array_fill(0, count($pars), '?')) : '';
+    $sql = "SELECT
+            h.{$historyPropertySafe} AS par_number,
+            h.reference_number,
+            '' AS previous_user,
+            '' AS previous_dept,
+            h.emp_id AS new_user,
+            COALESCE(d_code.department_code, d_id.department_code, '') AS new_dept,
+            COALESCE(d_code.department_code, d_id.department_code, '') AS department_code,
+            COALESCE(d_code.department_name, d_id.department_name, '') AS department_name,
+            t.par_ics_number AS par_ics_number,
+            t.model AS model,
+            t.description AS description,
+            t.unit AS unit,
+            t.serial_number AS serial_number,
+            t.serial_number_2 AS serial_number_2,
+            t.account_code AS account_code,
+            t.date_aquired AS date_aquired,
+            t.unit_value AS unit_value,
+            t.supplier AS supplier,
+            t.purchase_order AS purchase_order,
+            t.purchase_request AS purchase_request,
+            t.obr_number AS obr_number,
+            e.emp_name AS user,
+            e.emp_id,
+            UPPER(h.category) AS category,
+            'OLD' AS source
+        FROM {$historySafe} AS h
+        JOIN {$tableSafe} AS t ON t.{$tablePropertySafe} = h.{$historyPropertySafe}
+        LEFT JOIN department AS d_code ON d_code.department_code = h.{$historyDeptSafe}
+        LEFT JOIN department AS d_id ON d_id.dept_id = h.{$historyDeptSafe}
+        LEFT JOIN employee AS e ON e.emp_id = h.emp_id
+        WHERE h.reference_number IN ($placeholders)
+          AND REPLACE(UPPER(h.category), '.', '') = 'ICS'
+          AND h.status = 1";
+    if (count($pars) > 0) {
+        $sql .= " AND UPPER(h.{$historyPropertySafe}) IN ({$parsIn})";
+    }
+
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) { return $rows; }
+    $types = str_repeat('s', count($refs)) . str_repeat('s', count($pars));
+    $params = array_merge($refs, array_map('strtoupper', $pars));
+    $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    while ($r = $res->fetch_assoc()) { $rows[] = $r; }
+    $stmt->close();
+    return $rows;
+}
+
 // Validate and sanitize input
 $ref_num = isset($_GET['reference_number']) ? trim($_GET['reference_number']) : '';
 $refs_csv = isset($_GET['refs']) ? trim($_GET['refs']) : '';
@@ -162,6 +236,24 @@ if ($refs_csv !== '') {
             ['table' => 'donation', 'history' => 'donation_history'],
         ] as $fundSource) {
             $rows = array_merge($rows, gso_fetch_new_condition_ics_rows($conn, $fundSource['table'], $fundSource['history'], $refs, $pars));
+        }
+        foreach ([
+            ['table' => 'par_gen_fund', 'history' => 'general_fund_property_history', 'history_property' => 'par_number', 'table_property' => 'par_number', 'history_dept' => 'dept_id'],
+            ['table' => 'property_sef', 'history' => 'sef_property_history', 'history_property' => 'property_number', 'table_property' => 'property_number', 'history_dept' => 'sch_id'],
+        ] as $existingSource) {
+            $rows = array_merge(
+                $rows,
+                gso_fetch_existing_condition_ics_rows(
+                    $conn,
+                    $existingSource['table'],
+                    $existingSource['history'],
+                    $existingSource['history_property'],
+                    $existingSource['table_property'],
+                    $existingSource['history_dept'],
+                    $refs,
+                    $pars
+                )
+            );
         }
 
         // Legacy (existing inventory)
@@ -263,6 +355,24 @@ if ($refs_csv !== '') {
         ['table' => 'donation', 'history' => 'donation_history'],
     ] as $fundSource) {
         $rows = array_merge($rows, gso_fetch_new_condition_ics_rows($conn, $fundSource['table'], $fundSource['history'], [$ref_num], $pars));
+    }
+    foreach ([
+        ['table' => 'par_gen_fund', 'history' => 'general_fund_property_history', 'history_property' => 'par_number', 'table_property' => 'par_number', 'history_dept' => 'dept_id'],
+        ['table' => 'property_sef', 'history' => 'sef_property_history', 'history_property' => 'property_number', 'table_property' => 'property_number', 'history_dept' => 'sch_id'],
+    ] as $existingSource) {
+        $rows = array_merge(
+            $rows,
+            gso_fetch_existing_condition_ics_rows(
+                $conn,
+                $existingSource['table'],
+                $existingSource['history'],
+                $existingSource['history_property'],
+                $existingSource['table_property'],
+                $existingSource['history_dept'],
+                [$ref_num],
+                $pars
+            )
+        );
     }
 
     // Legacy (existing inventory)
@@ -810,9 +920,7 @@ function render_ics_page($pdf, $row, $ics_no) {
     $pdf->SetFont('dejavusans', '', 10);
 
     // Footer details for this item
-    $source = strtoupper(trim((string)($row['source'] ?? '')));
-    $cancelMsg = ($source === 'NEW') ? '' : 'This will cancel previous I.C.S to ' . (isset($row['previous_user']) ? $row['previous_user'] : '') . ' of ' . (isset($row['previous_dept']) ? $row['previous_dept'] : '');
-    $pdf->Cell(0, 8, $cancelMsg, 'TLR', 1, 'L');
+    $pdf->Cell(0, 8, '', 'TLR', 1, 'L');
     // Supplier / PR / PO / OBR / Account Code rows
     $footerDetails = [
         ['Supplier: ', (isset($row['supplier']) ? $row['supplier'] : '')],

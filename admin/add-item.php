@@ -214,7 +214,7 @@ if(!isset($_SESSION['alogin'])){
                   </div>
                   <div class="form-group col-md-6">
                     <label>P.R</label>
-                    <input type="text" class="form-control" id="pr" name="pr" placeholder="Enter purchase request no.">
+                    <input type="text" class="form-control" id="pr" name="pr" placeholder="Enter purchase request no." inputmode="numeric" pattern="^[0-9-]+$" title="Numbers and hyphen only.">
                   </div>
                 </div>
                 <div class="form-row">
@@ -226,11 +226,11 @@ if(!isset($_SESSION['alogin'])){
                 <div class="form-row mb-0">
                   <div class="form-group col-md-4 mb-0">
                     <label>P.O</label>
-                    <input type="text" class="form-control" id="po" name="po" placeholder="Enter purchase order">
+                    <input type="text" class="form-control" id="po" name="po" placeholder="Enter purchase order" inputmode="numeric" pattern="^[0-9-]+$" title="Numbers and hyphen only.">
                   </div>
                   <div class="form-group col-md-4 mb-0">
                     <label>O.B.R</label>
-                    <input type="text" class="form-control" id="obr" name="obr" placeholder="Enter obr">
+                    <input type="text" class="form-control" id="obr" name="obr" placeholder="Enter obr" inputmode="numeric" pattern="^[0-9-]+$" title="Numbers and hyphen only.">
                   </div>
                   <div class="form-group col-md-4 mb-0">
                     <label>J.E.V No.</label>
@@ -669,7 +669,7 @@ if(!isset($_SESSION['alogin'])){
                       </div>
                       <div class="form-group col-md-6">
                         <label>P.R</label>
-                        <input type="text" class="form-control text-uppercase" id="edit_np_pr" name="purchase_request" placeholder="Enter purchase request no.">
+                        <input type="text" class="form-control text-uppercase" id="edit_np_pr" name="purchase_request" placeholder="Enter purchase request no." inputmode="numeric" pattern="^[0-9-]+$" title="Numbers and hyphen only.">
                       </div>
                     </div>
                     <div class="form-row">
@@ -681,11 +681,11 @@ if(!isset($_SESSION['alogin'])){
                     <div class="form-row mb-0">
                       <div class="form-group col-md-4 mb-0">
                         <label>P.O</label>
-                        <input type="text" class="form-control text-uppercase" id="edit_np_po" name="purchase_order" placeholder="Enter purchase order">
+                        <input type="text" class="form-control text-uppercase" id="edit_np_po" name="purchase_order" placeholder="Enter purchase order" inputmode="numeric" pattern="^[0-9-]+$" title="Numbers and hyphen only.">
                       </div>
                       <div class="form-group col-md-4 mb-0">
                         <label>O.B.R</label>
-                        <input type="text" class="form-control text-uppercase" id="edit_np_obr" name="obr_number" placeholder="Enter obr">
+                        <input type="text" class="form-control text-uppercase" id="edit_np_obr" name="obr_number" placeholder="Enter obr" inputmode="numeric" pattern="^[0-9-]+$" title="Numbers and hyphen only.">
                       </div>
                       <div class="form-group col-md-4 mb-0">
                         <label>J.E.V No.</label>

@@ -5165,6 +5165,31 @@ $(function(){
       return categories;
     }
 
+    function buildIcsPrintUrl(refs, pars) {
+      var refList = $.map($.isArray(refs) ? refs : [refs], function (ref) {
+        ref = String(ref || '').trim();
+        return ref ? [ref] : [];
+      });
+      var parList = $.map($.isArray(pars) ? pars : [pars], function (par) {
+        par = String(par || '').trim();
+        return par ? [par] : [];
+      });
+
+      if (!refList.length) {
+        return '';
+      }
+
+      var url = refList.length === 1
+        ? 'inventory_custodian_slip.php?reference_number=' + encodeURIComponent(refList[0])
+        : 'inventory_custodian_slip.php?refs=' + refList.map(encodeURIComponent).join(',');
+
+      if (parList.length) {
+        url += '&pars=' + parList.map(encodeURIComponent).join(',');
+      }
+
+      return url;
+    }
+
     function npDetailPrintCurrentGroup() {
       var group = npDetailState.group || {};
       var referenceNumber = String(group.reference_number || '').trim();
@@ -5192,10 +5217,11 @@ $(function(){
       }
       if (categories.ICS) {
         if (icsRefs.length) {
-          window.open('inventory_custodian_slip.php?refs=' + $.map(icsRefs, function (ref) {
-            return encodeURIComponent(String(ref || '').trim());
-          }).join(','), '_blank');
-          opened++;
+          var icsUrl = buildIcsPrintUrl(icsRefs);
+          if (icsUrl) {
+            window.open(icsUrl, '_blank');
+            opened++;
+          }
         }
       }
 
@@ -5698,6 +5724,10 @@ $(function(){
           return;
         }
 
+        if (!validateEditNpReferenceFields(true)) {
+          return;
+        }
+
         var deptCode = npDetailFindDeptCodeByName($('#editNpDeptSearch').val()) || npDetailCurrentDeptCode();
         if (!deptCode) {
           Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'Please select a valid department from the list.' }) : alert('Please select a valid department from the list.');
@@ -5955,11 +5985,10 @@ $(function(){
             // ICS: one window for all selected ICS items, filtered to only selected property numbers
             if (icsList.length) {
               var allIcsPars = icsList.reduce(function (acc, ref) { return acc.concat(icsRefs[ref]); }, []);
-              window.open(
-                'inventory_custodian_slip.php?refs=' + icsList.map(encodeURIComponent).join(',')
-                + '&pars=' + allIcsPars.map(encodeURIComponent).join(','),
-                '_blank'
-              );
+              var icsUrl = buildIcsPrintUrl(icsList, allIcsPars);
+              if (icsUrl) {
+                window.open(icsUrl, '_blank');
+              }
             }
           }
         }
@@ -8656,6 +8685,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       asset: '',
       accountCode: '',
       noAccountProperty: false,
+      manualParIcs: false,
+      parIcsManual: '',
       brand: '',
       noBrand: false,
       addSerial: false,
@@ -8759,9 +8790,16 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
   function applyParIcsPreview(list){
     $('#itemSetRows .item-set-card').each(function(index){
+      var $row = $(this);
+      if ($row.find('.js-item-manual-par-ics').is(':checked')) {
+        var manualValue = String($row.find('.js-item-par-ics').val() || '').trim().toUpperCase();
+        $row.find('.js-item-par-ics').val(manualValue);
+        $row.find('.js-item-par-ics-value').val(manualValue);
+        return;
+      }
       var value = String(list[index] || '').trim().toUpperCase();
-      $(this).find('.js-item-par-ics').val(value);
-      $(this).find('.js-item-par-ics-value').val(value);
+      $row.find('.js-item-par-ics').val(value);
+      $row.find('.js-item-par-ics-value').val(value);
     });
   }
 
@@ -8786,6 +8824,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         asset: String($row.find('.js-item-asset').val() || ''),
         accountCode: String($row.find('.js-item-account-code').val() || ''),
         noAccountProperty: $row.find('.js-item-no-account-property').is(':checked'),
+        manualParIcs: $row.find('.js-item-manual-par-ics').is(':checked'),
+        parIcsManual: String($row.find('.js-item-par-ics').val() || ''),
         brand: String($row.find('.js-item-brand').val() || ''),
         noBrand: $row.find('.js-item-no-brand').is(':checked'),
         addSerial: $row.find('.js-item-add-serial').is(':checked'),
@@ -8962,9 +9002,15 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       + '  </div>'
       + '  <div class="form-row mb-0">'
       + '    <div class="form-group col-md-6 mb-0">'
-      + '      <label>PAR/ICS No.</label>'
-      + '      <input type="hidden" class="js-item-par-ics-value" name="par_ics_number_preview_value[' + setIndex + ']" value="">'
-      + '      <textarea class="form-control js-item-par-ics" name="par_ics_number_preview[' + setIndex + ']" rows="3" readonly></textarea>'
+      + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+      + '        <label class="mb-0">PAR/ICS No.</label>'
+      + '        <div class="form-check form-check-inline mb-0 text-muted">'
+      + '          <input type="checkbox" class="form-check-input js-item-manual-par-ics" name="item_manual_par_ics[' + setIndex + ']" value="1"' + (state.manualParIcs ? ' checked' : '') + '>'
+      + '          <label class="form-check-label">manual input</label>'
+      + '        </div>'
+      + '      </div>'
+      + '      <input type="hidden" class="js-item-par-ics-value" name="par_ics_number_preview_value[' + setIndex + ']" value="' + esc(state.parIcsManual || '') + '">'
+      + '      <textarea class="form-control js-item-par-ics" name="par_ics_number_preview[' + setIndex + ']" rows="3"' + (state.manualParIcs ? '' : ' readonly') + '>' + esc(state.parIcsManual || '') + '</textarea>'
       + '    </div>'
       + '    <div class="form-group col-md-6 mb-0">'
       + '      <label>Property Number</label>'
@@ -9041,6 +9087,21 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $('#itemSetRows .item-set-card').each(function(){
       applyNoAccountPropertyState($(this));
     });
+  }
+
+  function applyManualParIcsState($row){
+    var $manual = $row.find('.js-item-manual-par-ics');
+    var $input = $row.find('.js-item-par-ics');
+    var $value = $row.find('.js-item-par-ics-value');
+    if(!$manual.length || !$input.length || !$value.length) { return; }
+
+    if($manual.is(':checked')){
+      $input.prop('readonly', false).attr('placeholder', 'Enter PAR/ICS No.');
+      $value.val(String($input.val() || '').trim().toUpperCase());
+      return;
+    }
+
+    $input.prop('readonly', true).attr('placeholder', '');
   }
 
   function applySerialVisibilityState($row, animate){
@@ -9156,6 +9217,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         var $row = $(this);
         applyNoBrandModelState($row);
         applyNoAccountPropertyState($row);
+        applyManualParIcsState($row);
         applySerialVisibilityState($row);
         applyNoAmountValueState($row);
         updateItemSetTotal($row);
@@ -9178,6 +9240,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       var $row = $(this);
       applyNoBrandModelState($row);
       applyNoAccountPropertyState($row);
+      applyManualParIcsState($row);
       applySerialVisibilityState($row);
       applyNoAmountValueState($row);
       updateItemSetTotal($row);
@@ -9265,7 +9328,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   }
 
   function isValidNewPurchaseOrderValue(){
-    return /^\d{5,8}$/.test(String($('#po').val() || '').trim());
+    var value = String($('#po').val() || '').trim();
+    return value !== '' && /^[0-9-]+$/.test(value);
   }
 
   function isDonationFund(){
@@ -9282,15 +9346,63 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $po.prop('required', required);
     if (required) {
       $po.attr('inputmode', 'numeric');
-      $po.attr('maxlength', '8');
-      $po.attr('pattern', '^\\d{5,8}$');
-      $po.attr('title', 'Enter 5 to 8 digits.');
+      $po.attr('pattern', '^[0-9-]+$');
+      $po.attr('title', 'Numbers and hyphen only.');
     } else {
       $po.removeAttr('inputmode');
-      $po.removeAttr('maxlength');
       $po.removeAttr('pattern');
       $po.removeAttr('title');
     }
+  }
+
+  function sanitizeReferenceNumberValue(value){
+    return String(value || '').replace(/[^0-9-]/g, '');
+  }
+
+  function isValidReferenceNumberValue(value){
+    var normalized = String(value || '').trim();
+    return normalized === '' || /^[0-9-]+$/.test(normalized);
+  }
+
+  function applyReferenceNumberFieldState($field){
+    if (!$field || !$field.length) { return; }
+    var value = String($field.val() || '').trim();
+    $field.toggleClass('is-invalid', value !== '' && !isValidReferenceNumberValue(value));
+  }
+
+  function validateAddItemReferenceFields(shouldFocus){
+    var isValid = true;
+    $('#pr, #po, #obr').each(function(){
+      var $field = $(this);
+      var value = String($field.val() || '').trim();
+      var required = $field.prop('required');
+      var fieldValid = isValidReferenceNumberValue(value) && (!required || value !== '');
+      $field.toggleClass('is-invalid', !fieldValid);
+      if (!fieldValid && shouldFocus && isValid) {
+        try { $field.trigger('focus'); } catch (e) {}
+        isValid = false;
+      } else if (!fieldValid) {
+        isValid = false;
+      }
+    });
+    return isValid;
+  }
+
+  function validateEditNpReferenceFields(shouldFocus){
+    var isValid = true;
+    $('#edit_np_pr, #edit_np_po, #edit_np_obr').each(function(){
+      var $field = $(this);
+      var value = String($field.val() || '').trim();
+      var fieldValid = isValidReferenceNumberValue(value);
+      $field.toggleClass('is-invalid', !fieldValid);
+      if (!fieldValid && shouldFocus && isValid) {
+        try { $field.trigger('focus'); } catch (e) {}
+        isValid = false;
+      } else if (!fieldValid) {
+        isValid = false;
+      }
+    });
+    return isValid;
   }
 
   function syncAddItemSubmitButton(){
@@ -9298,7 +9410,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     if (!$btn.length) { return; }
     if ($btn.data('submitting')) { return; }
     syncPurchaseOrderRequirement();
-    $btn.prop('disabled', isPurchaseOrderRequired() && !isValidNewPurchaseOrderValue());
+    $btn.prop('disabled', !validateAddItemReferenceFields(false));
   }
 
   function hideAddNewEmployeeSection(){
@@ -9602,6 +9714,11 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       }
 
       var $row = $(rows[index]);
+      if ($row.find('.js-item-manual-par-ics').is(':checked')) {
+        list[index] = String($row.find('.js-item-par-ics').val() || '').trim().toUpperCase();
+        generateRow(index + 1);
+        return;
+      }
       var category = String($row.find('.js-item-category').val() || '').trim().toUpperCase();
       if (!category) {
         list[index] = '';
@@ -10041,6 +10158,29 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .on('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #quantity, #year', scheduleUpdateParIcsNumber);
 
     $(document)
+      .off('change.gsoAddItemPageParIcsManual', '.js-item-manual-par-ics')
+      .on('change.gsoAddItemPageParIcsManual', '.js-item-manual-par-ics', function(){
+        var $row = $(this).closest('.item-set-card');
+        applyManualParIcsState($row);
+        if ($(this).is(':checked')) {
+          $row.find('.js-item-par-ics').trigger('focus');
+        } else {
+          scheduleUpdateParIcsNumber();
+        }
+        snapshotItemSetInputsIntoCache();
+      });
+
+    $(document)
+      .off('input.gsoAddItemPageParIcsManualValue blur.gsoAddItemPageParIcsManualValue', '.js-item-par-ics')
+      .on('input.gsoAddItemPageParIcsManualValue blur.gsoAddItemPageParIcsManualValue', '.js-item-par-ics', function(){
+        var $row = $(this).closest('.item-set-card');
+        if (!$row.find('.js-item-manual-par-ics').is(':checked')) { return; }
+        var value = String($(this).val() || '').trim().toUpperCase();
+        $(this).val(value);
+        $row.find('.js-item-par-ics-value').val(value);
+      });
+
+    $(document)
       .off('input.gsoAddItemPageTrustAcct', 'input.js-item-account-code')
       .on('input.gsoAddItemPageTrustAcct', 'input.js-item-account-code', function(){
         if (!usesManualAccountCodeInput()) { return; }
@@ -10083,18 +10223,25 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       });
 
     $(document)
-      .off('input.gsoAddItemPagePoDigits', '#po')
-      .on('input.gsoAddItemPagePoDigits', '#po', function(){
-        if (!isPurchaseOrderRequired()) { return; }
-        var clean = String($(this).val() || '').replace(/\D/g, '').slice(0, 8);
+      .off('input.gsoAddItemPageRef change.gsoAddItemPageRef blur.gsoAddItemPageRef', '#pr, #po, #obr')
+      .on('input.gsoAddItemPageRef change.gsoAddItemPageRef blur.gsoAddItemPageRef', '#pr, #po, #obr', function(){
+        var clean = sanitizeReferenceNumberValue($(this).val());
         if ($(this).val() !== clean) {
           $(this).val(clean);
         }
+        applyReferenceNumberFieldState($(this));
+        syncAddItemSubmitButton();
       });
 
     $(document)
-      .off('input.gsoAddItemPagePo change.gsoAddItemPagePo', '#po')
-      .on('input.gsoAddItemPagePo change.gsoAddItemPagePo', '#po', syncAddItemSubmitButton);
+      .off('input.editNpReference change.editNpReference blur.editNpReference', '#edit_np_pr, #edit_np_po, #edit_np_obr')
+      .on('input.editNpReference change.editNpReference blur.editNpReference', '#edit_np_pr, #edit_np_po, #edit_np_obr', function(){
+        var clean = sanitizeReferenceNumberValue($(this).val());
+        if ($(this).val() !== clean) {
+          $(this).val(clean);
+        }
+        applyReferenceNumberFieldState($(this));
+      });
 
     (function(){
       var $deptSelect = $('#dept');
@@ -10203,6 +10350,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         return false;
       }
 
+      if(!validateAddItemReferenceFields(true)){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return false;
+      }
+
       syncNoEndUserState();
 
       var condition = String($('#condition').val() || '').toUpperCase();
@@ -10247,6 +10400,48 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 })();
 
 //par general fund
+function collectAddItemPrintCategories() {
+  var hasPar = false;
+  var hasIcs = false;
+  $('#itemSetRows .js-item-category').each(function(){
+    var value = String($(this).val() || '').trim().toUpperCase();
+    if (value === 'PAR') { hasPar = true; }
+    if (value === 'ICS') { hasIcs = true; }
+  });
+  return { hasPar: hasPar, hasIcs: hasIcs };
+}
+
+function openAddItemPrintWindows(categories) {
+  var printWins = { par: null, ics: null };
+  var state = categories || collectAddItemPrintCategories();
+
+  if (state.hasPar) {
+    try { printWins.par = window.open('', '_blank'); } catch(e) { printWins.par = null; }
+  }
+  if (state.hasIcs) {
+    try { printWins.ics = window.open('', '_blank'); } catch(e) { printWins.ics = null; }
+  }
+
+  return printWins;
+}
+
+function buildAddItemIcsPrintUrl(refs) {
+  var refList = $.map($.isArray(refs) ? refs : [refs], function (ref) {
+    ref = String(ref || '').trim();
+    return ref ? [ref] : [];
+  });
+
+  if (!refList.length) {
+    return '';
+  }
+
+  if (refList.length === 1) {
+    return 'inventory_custodian_slip.php?reference_number=' + encodeURIComponent(refList[0]);
+  }
+
+  return 'inventory_custodian_slip.php?refs=' + refList.map(encodeURIComponent).join(',');
+}
+
 $(document).on('submit','#addItem',function(e){//to save p.a.r general fund information
   e.preventDefault();
 
@@ -10282,6 +10477,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
           reverseButtons: true
         }).then(function(result){
           if (result && result.isConfirmed) {
+            $form.data('printWindows', openAddItemPrintWindows(collectAddItemPrintCategories()));
             $form.data('printPreference', 'now');
             $form.trigger('submit');
           } else if (result && result.isDenied) {
@@ -10304,6 +10500,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
           reverseButtons: true
         }).then(function(result){
           if (result && result.isConfirmed) {
+            $form.data('printWindows', openAddItemPrintWindows(collectAddItemPrintCategories()));
             $form.data('printPreference', 'now');
             $form.trigger('submit');
           } else if (result && result.isDenied) {
@@ -10318,6 +10515,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     }
 
     if (window.confirm('Select OK to print and save, or Cancel to go back.')) {
+      $form.data('printWindows', openAddItemPrintWindows(collectAddItemPrintCategories()));
       $form.data('printPreference', 'now');
       $form.trigger('submit');
     } else {
@@ -10332,22 +10530,11 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
   $btn.data('submitting', true);
   $btn.prop('disabled', true).html('<i class="fas fa-circle-notch fa-spin"></i>&nbsp;Saving...');
 
-  var printWins = { par: null, ics: null };
-  if(shouldPrintAfterSave){
-    var hasPar = false;
-    var hasIcs = false;
-    $('#itemSetRows .js-item-category').each(function(){
-      var value = String($(this).val() || '').trim().toUpperCase();
-      if (value === 'PAR') { hasPar = true; }
-      if (value === 'ICS') { hasIcs = true; }
-    });
-    if (hasPar) {
-      try { printWins.par = window.open('', '_blank'); } catch(e) { printWins.par = null; }
-    }
-    if (hasIcs) {
-      try { printWins.ics = window.open('', '_blank'); } catch(e) { printWins.ics = null; }
-    }
+  var printWins = $form.data('printWindows') || { par: null, ics: null };
+  if(shouldPrintAfterSave && !printWins.par && !printWins.ics){
+    printWins = openAddItemPrintWindows(collectAddItemPrintCategories());
   }
+  $form.removeData('printWindows');
 
   var fd = new FormData(this);
   fd.append("save_item",true);
@@ -10531,10 +10718,10 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
             }
 
             if (icsRefs.length) {
-              var icsUrl = 'inventory_custodian_slip.php?refs=' + icsRefs.map(encodeURIComponent).join(',');
-              if (printWins.ics && !printWins.ics.closed) {
+              var icsUrl = buildAddItemIcsPrintUrl(icsRefs);
+              if (icsUrl && printWins.ics && !printWins.ics.closed) {
                 printWins.ics.location = icsUrl;
-              } else {
+              } else if (icsUrl) {
                 window.open(icsUrl, '_blank');
               }
             } else if (printWins.ics && !printWins.ics.closed) {
