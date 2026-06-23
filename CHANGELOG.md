@@ -12,6 +12,7 @@ This file is generated from git history by `php tools/release.php`.
 - Merge branch 'main' of https://github.com/akosidonel/gso-pims (2 times)
 - Increase the number of sets from 10 to 100 in the edit item or equipment modal
 - Improvements on par/ics no
+- Validation has been added in the input name field in the add employee information
 
 ### Fixed
 - Bug fix on change log and version number

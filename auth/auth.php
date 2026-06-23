@@ -3871,10 +3871,14 @@ if(!function_exists('gso_create_employee_atomic')){
         }
 
         if(!gso_emp_id_lock_acquire($conn, 10)){
-            return ['ok'=>false,'message'=>'System is busy. Please try again.'];
+            return ['ok'=>false,'status'=>500,'message'=>'System is busy. Please try again.'];
         }
 
         try {
+            if(gso_employee_name_exists($conn, $empName)){
+                return ['ok'=>false,'status'=>422,'message'=>'Employee name already exists.'];
+            }
+
             $tries = 0;
             while($tries < 30){
                 $tries++;
@@ -3905,9 +3909,9 @@ if(!function_exists('gso_create_employee_atomic')){
                     continue;
                 }
 
-                return ['ok'=>false,'message'=>'Error creating employee: '.mysqli_error($conn)];
+                return ['ok'=>false,'status'=>500,'message'=>'Error creating employee: '.mysqli_error($conn)];
             }
-            return ['ok'=>false,'message'=>'Unable to allocate employee number. Please retry.'];
+            return ['ok'=>false,'status'=>500,'message'=>'Unable to allocate employee number. Please retry.'];
         } finally {
             gso_emp_id_lock_release($conn);
         }
@@ -3951,12 +3955,119 @@ if(!function_exists('employee_status_from_clearance_name')){
 }
 if(!function_exists('gso_employee_name_exists')){
     function gso_employee_name_exists($conn, $employeeName){
-        $employeeName = strtoupper(trim((string)$employeeName));
+        $employeeName = gso_normalize_employee_name($employeeName);
         if($employeeName === ''){ return false; }
 
-        $nameEsc = mysqli_real_escape_string($conn, $employeeName);
-        $query = mysqli_query($conn, "SELECT 1 FROM employee WHERE UPPER(emp_name) = '{$nameEsc}' LIMIT 1");
-        return $query && mysqli_num_rows($query) > 0;
+        $allNames = gso_fetch_employee_names($conn);
+        foreach($allNames as $existingName){
+            if(gso_normalize_employee_name($existingName) === $employeeName){
+                return true;
+            }
+        }
+        return false;
+    }
+}
+if(!function_exists('gso_normalize_employee_name')){
+    function gso_normalize_employee_name($employeeName){
+        $employeeName = strtoupper(trim((string)$employeeName));
+        if($employeeName === ''){
+            return '';
+        }
+
+        $employeeName = preg_replace('/[.,]/', ' ', $employeeName);
+        $employeeName = preg_replace('/\s+/', ' ', (string)$employeeName);
+        $employeeName = preg_replace('/\b(JR|SR)\./', '$1', (string)$employeeName);
+        return trim((string)$employeeName);
+    }
+}
+if(!function_exists('gso_fetch_employee_names')){
+    function gso_fetch_employee_names($conn){
+        $names = [];
+        $query = mysqli_query($conn, "SELECT emp_name FROM employee WHERE emp_name <> ''");
+        if(!$query){
+            return $names;
+        }
+
+        while($row = mysqli_fetch_assoc($query)){
+            $name = trim((string)($row['emp_name'] ?? ''));
+            if($name !== ''){
+                $names[] = $name;
+            }
+        }
+        return $names;
+    }
+}
+if(!function_exists('gso_name_tokens')){
+    function gso_name_tokens($employeeName){
+        $normalized = gso_normalize_employee_name($employeeName);
+        if($normalized === ''){
+            return [];
+        }
+        return array_values(array_filter(explode(' ', $normalized), 'strlen'));
+    }
+}
+if(!function_exists('gso_find_similar_employee_names')){
+    function gso_find_similar_employee_names($conn, $employeeName, $limit = 5){
+        $normalizedInput = gso_normalize_employee_name($employeeName);
+        if($normalizedInput === ''){
+            return [];
+        }
+
+        $inputTokens = gso_name_tokens($normalizedInput);
+        $inputFirst = $inputTokens ? $inputTokens[0] : '';
+        $inputLast = $inputTokens ? $inputTokens[count($inputTokens) - 1] : '';
+        $matches = [];
+
+        foreach(gso_fetch_employee_names($conn) as $existingName){
+            $normalizedExisting = gso_normalize_employee_name($existingName);
+            if($normalizedExisting === '' || $normalizedExisting === $normalizedInput){
+                continue;
+            }
+
+            $existingTokens = gso_name_tokens($normalizedExisting);
+            $existingFirst = $existingTokens ? $existingTokens[0] : '';
+            $existingLast = $existingTokens ? $existingTokens[count($existingTokens) - 1] : '';
+            $distance = levenshtein($normalizedInput, $normalizedExisting);
+            $sameFirst = $inputFirst !== '' && $inputFirst === $existingFirst;
+            $sameLast = $inputLast !== '' && $inputLast === $existingLast;
+            $sameSound = $inputLast !== '' && $existingLast !== '' && soundex($inputLast) === soundex($existingLast);
+            $looksClose = $distance <= 3 || ($distance <= 5 && ($sameFirst || $sameLast));
+
+            if(!$looksClose && !($sameFirst && $sameSound) && !($sameLast && $distance <= 6)){
+                continue;
+            }
+
+            $score = $distance;
+            if($sameFirst){ $score -= 1; }
+            if($sameLast){ $score -= 2; }
+            if($sameSound){ $score -= 1; }
+
+            $matches[] = [
+                'name' => $existingName,
+                'normalized' => $normalizedExisting,
+                'score' => $score,
+            ];
+        }
+
+        usort($matches, static function($left, $right){
+            if($left['score'] === $right['score']){
+                return strcasecmp($left['name'], $right['name']);
+            }
+            return $left['score'] <=> $right['score'];
+        });
+
+        $results = [];
+        foreach($matches as $match){
+            if(count($results) >= $limit){
+                break;
+            }
+            if(in_array($match['name'], $results, true)){
+                continue;
+            }
+            $results[] = $match['name'];
+        }
+
+        return $results;
     }
 }
 
@@ -5495,7 +5606,7 @@ if (isset($_POST['save_employee_info'])) {
     if(isset($created['ok']) && $created['ok']){
         return json_response(200,'Added successfully!.', ['emp_id'=>$created['emp_id']]);
     }
-    return json_response(500, $created['message'] ?? 'opps..something went wrong..');
+    return json_response((int)($created['status'] ?? 500), $created['message'] ?? 'opps..something went wrong..');
 }
 //fetch employee details
 if (isset($_GET['empid'])) {
@@ -14740,21 +14851,23 @@ if (isset($_POST['iirup_update_appraise_value'])) {
 if (isset($_POST['validate_employee_name'])) {
     header('Content-Type: application/json');
     $raw = isset($_POST['emp_name']) ? $_POST['emp_name'] : '';
-    $trimmed = strtoupper(trim($raw));
-    if ($trimmed === '' || strlen($trimmed) > 128) { echo json_encode(['exists'=>false]); return false; }
+    $trimmed = trim((string)$raw);
+    $normalized = gso_normalize_employee_name($trimmed);
+    if ($normalized === '' || strlen($normalized) > 128) { echo json_encode(['exists'=>false, 'similar_names'=>[]]); return false; }
     // Session-cache common validations within 2 minutes
     if (!isset($_SESSION['cache'])) { $_SESSION['cache'] = []; }
-    $ckey = 'emp_exists_' . md5($trimmed);
+    $ckey = 'emp_validation_' . md5($normalized);
     if (isset($_SESSION['cache'][$ckey]) && (time() - $_SESSION['cache'][$ckey]['ts'] < 120)) {
-        echo json_encode(['exists'=>$_SESSION['cache'][$ckey]['val']]);
+        echo json_encode($_SESSION['cache'][$ckey]['val']);
         return false;
     }
-    $emp_name = mysqli_real_escape_string($conn, $trimmed);
-    $sql = "SELECT 1 FROM employee WHERE UPPER(emp_name) = '$emp_name' LIMIT 1";
-    $query = mysqli_query($conn, $sql);
-    $exists = ($query && mysqli_num_rows($query) > 0);
-    $_SESSION['cache'][$ckey] = ['val'=>$exists, 'ts'=>time()];
-    echo json_encode(['exists' => $exists]);
+    $response = [
+        'exists' => gso_employee_name_exists($conn, $normalized),
+        'normalized_name' => $normalized,
+        'similar_names' => gso_find_similar_employee_names($conn, $normalized),
+    ];
+    $_SESSION['cache'][$ckey] = ['val'=>$response, 'ts'=>time()];
+    echo json_encode($response);
     return false;
 }
 

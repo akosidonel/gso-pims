@@ -7476,8 +7476,192 @@ $(function(){
     }
  });
 //employee
+(function(){
+  var employeeNameValidationTimer = null;
+  window.gsoEmployeeNameHasExactDuplicate = false;
+  window.gsoEmployeeNameIsChecking = false;
+
+  function employeeNameMessageElement(){
+    var $field = $('#fname');
+    var $message = $('#employee-name-validation-msg');
+
+    if(!$field.length){
+      return $();
+    }
+
+    if(!$message.length){
+      $message = $('<small id="employee-name-validation-msg" class="form-text"></small>');
+      $field.after($message);
+    }
+
+    return $message;
+  }
+
+  function employeeNameSimilarElement(){
+    var $field = $('#fname');
+    var $warning = $('#employee-name-similar-msg');
+
+    if(!$field.length){
+      return $();
+    }
+
+    if(!$warning.length){
+      $warning = $('<div id="employee-name-similar-msg" class="small text-warning mt-1" style="display:none;"></div>');
+      employeeNameMessageElement().after($warning);
+    }
+
+    return $warning;
+  }
+
+  function setEmployeeNameValidationState(message, isValid){
+    var $field = $('#fname');
+    var $message = employeeNameMessageElement();
+
+    if(!$field.length){
+      return;
+    }
+
+    $field.toggleClass('is-invalid', isValid === false);
+    $field.toggleClass('is-valid', isValid === true);
+    $message.text(message || '');
+
+    if(isValid === false){
+      $message.removeClass('text-success').addClass('text-danger');
+      return;
+    }
+
+    if(isValid === true){
+      $message.removeClass('text-danger').addClass('text-success');
+      return;
+    }
+
+    $message.removeClass('text-danger text-success');
+  }
+
+  function addEmployeeSaveButton(){
+    return $('#emp_form').find('button[type="submit"]');
+  }
+
+  function hasValidDepartmentSelection(){
+    var typedDepartment = $.trim($('#departmentSearch').val() || '');
+    var departmentCode = $.trim($('#department').val() || '');
+    return typedDepartment !== '' && departmentCode !== '';
+  }
+
+  function addEmployeeFormIsReady(){
+    var name = $.trim($('#fname').val() || '');
+    var position = $.trim($('#position').val() || '');
+    var custodian = $.trim($('#pcustodian').val() || '');
+    var hasRequiredFields = name !== '' && position !== '' && custodian !== '';
+    var hasNoErrors = !window.gsoEmployeeNameHasExactDuplicate && !window.gsoEmployeeNameIsChecking && !$('#fname').hasClass('is-invalid');
+
+    return hasRequiredFields && hasValidDepartmentSelection() && hasNoErrors;
+  }
+
+  function updateAddEmployeeSaveState(){
+    var $button = addEmployeeSaveButton();
+    if(!$button.length){
+      return;
+    }
+    $button.prop('disabled', !addEmployeeFormIsReady());
+  }
+
+  function setEmployeeNameSimilarWarning(similarNames){
+    var $warning = employeeNameSimilarElement();
+    var safeNames = $.isArray(similarNames) ? similarNames : [];
+
+    if(!$warning.length){
+      return;
+    }
+
+    if(!safeNames.length){
+      $warning.hide().empty();
+      return;
+    }
+
+    $warning.html('Possible similar employee name(s): <strong>' + safeNames.join(', ') + '</strong>. Please double-check before saving.').show();
+  }
+
+  window.gsoSetEmployeeNameValidationState = setEmployeeNameValidationState;
+  window.gsoUpdateAddEmployeeSaveState = updateAddEmployeeSaveState;
+
+  $(document).on('input', '#fname', function(){
+    var name = $.trim($(this).val() || '');
+    clearTimeout(employeeNameValidationTimer);
+    window.gsoEmployeeNameHasExactDuplicate = false;
+
+    if(!name){
+      window.gsoEmployeeNameIsChecking = false;
+      setEmployeeNameValidationState('', null);
+      setEmployeeNameSimilarWarning([]);
+      updateAddEmployeeSaveState();
+      return;
+    }
+
+    window.gsoEmployeeNameIsChecking = true;
+    setEmployeeNameValidationState('Validating...', null);
+    setEmployeeNameSimilarWarning([]);
+    updateAddEmployeeSaveState();
+    employeeNameValidationTimer = setTimeout(function(){
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        dataType: 'json',
+        data: { validate_employee_name: 1, emp_name: name },
+        success: function(res){
+          window.gsoEmployeeNameIsChecking = false;
+          if(res && res.exists){
+            window.gsoEmployeeNameHasExactDuplicate = true;
+            setEmployeeNameValidationState('Employee name already exists.', false);
+            setEmployeeNameSimilarWarning([]);
+          } else {
+            window.gsoEmployeeNameHasExactDuplicate = false;
+            setEmployeeNameValidationState('Employee name is available.', true);
+            setEmployeeNameSimilarWarning(res && res.similar_names ? res.similar_names : []);
+          }
+          updateAddEmployeeSaveState();
+        },
+        error: function(){
+          window.gsoEmployeeNameHasExactDuplicate = false;
+          window.gsoEmployeeNameIsChecking = false;
+          setEmployeeNameValidationState('Validation error.', false);
+          setEmployeeNameSimilarWarning([]);
+          updateAddEmployeeSaveState();
+        }
+      });
+    }, 500);
+  });
+
+  $(document).on('input change', '#departmentSearch, #department, #position, #pcustodian', function(){
+    updateAddEmployeeSaveState();
+  });
+
+  $('#addEmployeeModal').on('hidden.bs.modal', function(){
+    clearTimeout(employeeNameValidationTimer);
+    window.gsoEmployeeNameHasExactDuplicate = false;
+    window.gsoEmployeeNameIsChecking = false;
+    setEmployeeNameValidationState('', null);
+    setEmployeeNameSimilarWarning([]);
+    updateAddEmployeeSaveState();
+  });
+
+  $('#addEmployeeModal').on('shown.bs.modal', function(){
+    updateAddEmployeeSaveState();
+  });
+})();
+
 $(document).on('submit','#emp_form',function(e){// to save employee information
   e.preventDefault();
+  if($('#fname').hasClass('is-invalid') || window.gsoEmployeeNameHasExactDuplicate || window.gsoEmployeeNameIsChecking){
+    $('#fname').trigger('focus');
+    return false;
+  }
+  if(window.gsoUpdateAddEmployeeSaveState){
+    window.gsoUpdateAddEmployeeSaveState();
+  }
+  if($('#emp_form').find('button[type="submit"]').prop('disabled')){
+    return false;
+  }
   var fd = new FormData(this);
   fd.append("save_employee_info",true);
   $.ajax({
@@ -7486,8 +7670,9 @@ $(document).on('submit','#emp_form',function(e){// to save employee information
     data: fd,
     processData: false,
     contentType: false,
+    dataType: 'json',
     success:function(response){
-      var res = jQuery.parseJSON(response);
+      var res = response;
       if(res.status==200){
         Swal.fire({
           position: 'center',
@@ -7500,6 +7685,34 @@ $(document).on('submit','#emp_form',function(e){// to save employee information
           $('#emp_form')[0].reset();
           location.reload();
       });  
+      } else if(res.status==422){
+        window.gsoSetEmployeeNameValidationState('Employee name already exists.', false);
+        $('#employee-name-similar-msg').hide().empty();
+        Swal.fire({
+          icon: 'warning',
+          title: 'Duplicate employee',
+          text: res.message || 'Employee name already exists.'
+        });
+        $('#fname').trigger('focus');
+        if(window.gsoUpdateAddEmployeeSaveState){
+          window.gsoUpdateAddEmployeeSaveState();
+        }
+      }
+    },
+    error:function(xhr){
+      var res = xhr.responseJSON || {};
+      if(res.status==422){
+        window.gsoSetEmployeeNameValidationState('Employee name already exists.', false);
+        $('#employee-name-similar-msg').hide().empty();
+        Swal.fire({
+          icon: 'warning',
+          title: 'Duplicate employee',
+          text: res.message || 'Employee name already exists.'
+        });
+        $('#fname').trigger('focus');
+        if(window.gsoUpdateAddEmployeeSaveState){
+          window.gsoUpdateAddEmployeeSaveState();
+        }
       }
     }
   })
