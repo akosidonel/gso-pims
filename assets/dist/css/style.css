@@ -473,6 +473,12 @@
   line-height: 1.55;
 }
 
+.gso-simple-log-date {
+  margin-top: 6px;
+  color: var(--gso-muted);
+  font-size: 13px;
+}
+
 .gso-live-pill {
   display: inline-flex;
   align-items: center;

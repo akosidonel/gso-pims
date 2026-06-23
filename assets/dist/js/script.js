@@ -14376,12 +14376,14 @@ window.GSO.ChangeLogLive = window.GSO.ChangeLogLive || (function(){
 
   function renderVersionCard(version){
     version = version || {};
+    var versionDate = version.updated_label || version.updated_at || '';
 
     $('#gsoChangeLogVersion').html(
       '<div class="gso-live-cardhead">' +
         '<h2 class="gso-live-cardtitle">Current Version</h2>' +
       '</div>' +
-      '<div class="gso-live-version">' + escapeHtml(version.full || 'Unavailable') + '</div>'
+      '<div class="gso-live-version">' + escapeHtml(version.full || 'Unavailable') + '</div>' +
+      '<div class="gso-live-meta">' + escapeHtml(versionDate ? ('Updated ' + versionDate) : 'Date unavailable') + '</div>'
     );
   }
 
@@ -14393,10 +14395,12 @@ window.GSO.ChangeLogLive = window.GSO.ChangeLogLive || (function(){
       html = '<p class="gso-changelog-empty">No comments yet.</p>';
     } else {
       commits.forEach(function(commit){
+        var commitDate = commit.committed_label || commit.committed_at || commit.committed_ago || '';
         html += '' +
           '<article class="gso-simple-log-row">' +
             '<div class="gso-simple-log-version">' + escapeHtml(commit.patch_version || 'Pending') + '</div>' +
             '<div class="gso-simple-log-comment">' + escapeHtml(commit.subject || commit.raw_subject || 'Updated project files') + '</div>' +
+            '<div class="gso-simple-log-date">' + escapeHtml(commitDate || 'Date unavailable') + '</div>' +
           '</article>';
       });
     }
@@ -14405,7 +14409,9 @@ window.GSO.ChangeLogLive = window.GSO.ChangeLogLive || (function(){
   }
 
   function renderPayload(data){
-    renderVersionCard(data.version || {});
+    var version = data.version || {};
+    version.updated_label = data.updated_label || version.updated_label || '';
+    renderVersionCard(version);
     renderComments(data.recent_comments || []);
   }
 

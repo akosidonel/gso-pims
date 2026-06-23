@@ -158,6 +158,40 @@ function gso_fetch_existing_condition_ics_rows(
     return $rows;
 }
 
+function gso_ics_deduplicate_rows(array $rows): array {
+    $deduped = [];
+    $order = [];
+
+    foreach ($rows as $row) {
+        $key = implode('|', [
+            strtoupper(trim((string)($row['reference_number'] ?? ''))),
+            strtoupper(trim((string)($row['par_number'] ?? ''))),
+            strtoupper(trim((string)($row['category'] ?? ''))),
+            strtoupper(trim((string)($row['emp_id'] ?? ($row['new_user'] ?? $row['user'] ?? '')))),
+            strtoupper(trim((string)($row['department_code'] ?? ($row['new_dept'] ?? $row['department_name'] ?? '')))),
+        ]);
+
+        if (!isset($deduped[$key])) {
+            $deduped[$key] = $row;
+            $order[] = $key;
+            continue;
+        }
+
+        foreach ($row as $field => $value) {
+            if (!isset($deduped[$key][$field]) || trim((string)$deduped[$key][$field]) === '') {
+                $deduped[$key][$field] = $value;
+            }
+        }
+    }
+
+    $result = [];
+    foreach ($order as $key) {
+        $result[] = $deduped[$key];
+    }
+
+    return $result;
+}
+
 // Validate and sanitize input
 $ref_num = isset($_GET['reference_number']) ? trim($_GET['reference_number']) : '';
 $refs_csv = isset($_GET['refs']) ? trim($_GET['refs']) : '';
@@ -412,6 +446,8 @@ if ($refs_csv !== '') {
     }
 }
 
+$rows = gso_ics_deduplicate_rows($rows);
+
 // Ensure each row has a par_ics_number; if missing, generate and persist
 if (count($rows) > 0) {
     foreach ($rows as $idx => $r) {
@@ -490,6 +526,52 @@ function gso_ics_distinct_values(array $rows, string $field): array {
 
 function gso_ics_join_distinct(array $rows, string $field): string {
     return implode('/', gso_ics_distinct_values($rows, $field));
+}
+
+function gso_ics_footer_details(array $rows): array {
+    $details = [];
+    $previousUsers = gso_ics_join_distinct($rows, 'previous_user');
+    $previousDepts = gso_ics_join_distinct($rows, 'previous_dept');
+
+    if ($previousUsers !== '') {
+        $details[] = ['label' => '', 'value' => 'This will cancel previous I.C.S issued to ' . $previousUsers, 'full_width' => true];
+        if ($previousDepts !== '') {
+            $details[] = ['label' => '', 'value' => 'of ' . $previousDepts, 'full_width' => true];
+        }
+    }
+
+    $details[] = ['label' => 'Supplier: ', 'value' => gso_ics_join_distinct($rows, 'supplier')];
+    $details[] = ['label' => 'Purchase Request: ', 'value' => gso_ics_join_distinct($rows, 'purchase_request')];
+    $details[] = ['label' => 'Purchase Order: ', 'value' => gso_ics_join_distinct($rows, 'purchase_order')];
+    $details[] = ['label' => 'OBR: ', 'value' => gso_ics_join_distinct($rows, 'obr_number')];
+    $details[] = ['label' => 'Account Code: ', 'value' => gso_ics_join_distinct($rows, 'account_code')];
+
+    return $details;
+}
+
+function gso_ics_render_footer_details(TCPDF $pdf, array $details): void {
+    foreach ($details as $index => $detail) {
+        $label = (string)($detail['label'] ?? '');
+        $value = (string)($detail['value'] ?? '');
+        $isFullWidth = !empty($detail['full_width']);
+        $leftBorder = ($index === 0) ? 'TL' : 'L';
+        $rightBorder = ($index === 0) ? 'TR' : 'R';
+        $fullWidthBorder = ($index === 0) ? 'TLR' : 'LR';
+
+        if ($isFullWidth) {
+            $pdf->SetFont('dejavusans', 'B', 10);
+            $pdf->Cell(0, 6, $value, $fullWidthBorder, 1, 'L');
+            continue;
+        }
+
+        $pdf->SetFont('dejavusans', '', 10);
+        $pdf->Cell(40, 6, $label, $leftBorder, 0, 'L');
+        $pdf->SetFont('dejavusans', 'B', 10);
+        $pdf->Cell(0, 6, $value, $rightBorder, 1, 'L');
+    }
+
+    $pdf->SetFont('dejavusans', '', 10);
+    $pdf->Cell(0, 1, '', 'LR', 1, 'L');
 }
 
 function gso_ics_collapse_numbers(array $numbers): string {
@@ -693,11 +775,23 @@ function gso_ics_render_office_row($pdf, string $leftOffice, string $rightOffice
     $pdf->SetFont('dejavusans', '', 10);
 }
 
+function gso_ics_render_supply_note(TCPDF $pdf): void {
+    $noteY = $pdf->GetY() + 0.5;
+    $autoPageBreak = $pdf->getAutoPageBreak();
+    $breakMargin = method_exists($pdf, 'getBreakMargin') ? $pdf->getBreakMargin() : 0;
+
+    $pdf->SetAutoPageBreak(false, 0);
+    $pdf->SetY($noteY);
+    $pdf->SetFont('dejavusans', 'I', 9);
+    $pdf->Cell(0, 3, 'For Use of Supply and/or Property Division/Unit', 0, 1, 'L');
+    $pdf->SetAutoPageBreak($autoPageBreak, $breakMargin);
+}
+
 function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) {
     if (count($rows) === 0) { return; }
     $pdf->AddPage();
     $pdf->SetFont('dejavusans', 'I', 10);
-    $pdf->SetY(10);
+    $pdf->SetY(8);
     $pdf->Cell(0, 5, 'Appendix 52', 0, 1, 'R');
     $logoPath = '../admin/logo.jpg';
     if (file_exists($logoPath)) {
@@ -705,9 +799,9 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
         $usableWidth = $pageWidth - 2 * $margin;
         $centerX = $margin + ($usableWidth - $logoWidth) / 2;
         $currentY = $pdf->GetY();
-        $logoY = max(10, $currentY - 2);
+        $logoY = max(8, $currentY - 2);
         $pdf->Image($logoPath, $centerX, $logoY, $logoWidth, $logoHeight, '', '', '', false, 300, '', false, false, 0);
-        $pdf->SetY($logoY + $logoHeight + 4);
+        $pdf->SetY($logoY + $logoHeight + 5);
     } else {
         $pdf->Ln(20);
     }
@@ -788,22 +882,7 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
     }
 
     $pdf->SetFont('dejavusans', '', 10);
-    $pdf->Cell(0, 8, '', 'TLR', 1, 'L');
-    $footerDetails = [
-        ['Supplier: ', gso_ics_join_distinct($rows, 'supplier')],
-        ['Purchase Request: ', gso_ics_join_distinct($rows, 'purchase_request')],
-        ['Purchase Order: ', gso_ics_join_distinct($rows, 'purchase_order')],
-        ['OBR: ', gso_ics_join_distinct($rows, 'obr_number')],
-        ['Account Code: ', gso_ics_join_distinct($rows, 'account_code')]
-    ];
-    foreach ($footerDetails as $detail) {
-        $pdf->SetFont('dejavusans', '', 10);
-        $pdf->Cell(40, 6, $detail[0], 'L', 0, 'L');
-        $pdf->SetFont('dejavusans', 'B', 10);
-        $pdf->Cell(0, 6, $detail[1], 'R', 1, 'L');
-    }
-    $pdf->SetFont('dejavusans', '', 10);
-    $pdf->Cell(0, 1, '', 'LR', 1, 'L');
+    gso_ics_render_footer_details($pdf, gso_ics_footer_details($rows));
 
     $firstRow = $rows[0];
     $pdf->SetFont('dejavusans', '', 10);
@@ -828,9 +907,7 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
     $pdf->Cell(95, 8, 'Date', 1, 0, 'C');
     $pdf->Cell(95, 8, 'Date', 1, 1, 'C');
 
-    $pdf->Ln(2);
-    $pdf->SetFont('dejavusans', 'I', 9);
-    $pdf->Cell(0, 3, 'For Use of Supply and/or Property Division/Unit', 0, 1, 'L');
+    gso_ics_render_supply_note($pdf);
 }
 
 // Helper to render a full single-page ICS for one item
@@ -838,7 +915,7 @@ function render_ics_page($pdf, $row, $ics_no) {
     // Appendix and logo
     $pdf->AddPage();
     $pdf->SetFont('dejavusans', 'I', 10);
-    $pdf->SetY(10);
+    $pdf->SetY(8);
     $pdf->Cell(0, 5, 'Appendix 52', 0, 1, 'R');
     $logoPath = '../admin/logo.jpg';
     if (file_exists($logoPath)) {
@@ -846,9 +923,9 @@ function render_ics_page($pdf, $row, $ics_no) {
         $usableWidth = $pageWidth - 2 * $margin;
         $centerX = $margin + ($usableWidth - $logoWidth) / 2;
         $currentY = $pdf->GetY();
-        $logoY = max(10, $currentY - 2);
+        $logoY = max(8, $currentY - 2);
         $pdf->Image($logoPath, $centerX, $logoY, $logoWidth, $logoHeight, '', '', '', false, 300, '', false, false, 0);
-        $pdf->SetY($logoY + $logoHeight + 4);
+        $pdf->SetY($logoY + $logoHeight + 5);
     } else {
         $pdf->Ln(20);
     }
@@ -920,23 +997,7 @@ function render_ics_page($pdf, $row, $ics_no) {
     $pdf->SetFont('dejavusans', '', 10);
 
     // Footer details for this item
-    $pdf->Cell(0, 8, '', 'TLR', 1, 'L');
-    // Supplier / PR / PO / OBR / Account Code rows
-    $footerDetails = [
-        ['Supplier: ', (isset($row['supplier']) ? $row['supplier'] : '')],
-        ['Purchase Request: ', (isset($row['purchase_request']) ? $row['purchase_request'] : '')],
-        ['Purchase Order: ', (isset($row['purchase_order']) ? $row['purchase_order'] : '')],
-        ['OBR: ', (isset($row['obr_number']) ? $row['obr_number'] : '')],
-        ['Account Code: ', (isset($row['account_code']) ? $row['account_code'] : '')]
-    ];
-    foreach ($footerDetails as $detail) {
-        $pdf->SetFont('dejavusans', '', 10);
-        $pdf->Cell(40, 6, $detail[0], 'L', 0, 'L');
-        $pdf->SetFont('dejavusans', 'B', 10);
-        $pdf->Cell(0, 6, $detail[1], 'R', 1, 'L');
-    }
-    $pdf->SetFont('dejavusans', '', 10);
-    $pdf->Cell(0, 1, '', 'LR', 1, 'L');
+    gso_ics_render_footer_details($pdf, gso_ics_footer_details([$row]));
 
     // Signature block
     $pdf->SetFont('dejavusans', '', 10);
@@ -961,9 +1022,7 @@ function render_ics_page($pdf, $row, $ics_no) {
     $pdf->Cell(95, 8, 'Date', 1, 0, 'C');
     $pdf->Cell(95, 8, 'Date', 1, 1, 'C');
 
-    $pdf->Ln(2);
-    $pdf->SetFont('dejavusans', 'I', 9);
-    $pdf->Cell(0, 3, 'For Use of Supply and/or Property Division/Unit', 0, 1, 'L');
+    gso_ics_render_supply_note($pdf);
 }
 
 // Summarize identical items with no serial numbers into single rows

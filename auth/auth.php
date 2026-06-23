@@ -752,6 +752,7 @@ if(!function_exists('gso_release_flatten_changelog_entries')){
                         'committed_at' => null,
                         'committed_timestamp' => 0,
                         'committed_ago' => trim((string)($entry['date'] ?? '')),
+                        'committed_label' => trim((string)($entry['date'] ?? '')),
                     ];
                     if (count($rows) >= $limit) {
                         return $rows;
@@ -935,6 +936,10 @@ if(!function_exists('gso_release_fetch_changelog_comments')){
         }
         foreach ($rows as $index => $row) {
             $rows[$index]['committed_ago'] = pims_release_relative_time((int)($row['committed_timestamp'] ?? 0));
+            $committedAt = trim((string)($row['committed_at'] ?? ''));
+            $rows[$index]['committed_label'] = $committedAt !== ''
+                ? date('M j, Y g:i A', strtotime($committedAt))
+                : trim((string)($rows[$index]['committed_ago'] ?? ''));
         }
         return $rows;
     }
@@ -961,6 +966,7 @@ if(!function_exists('gso_realtime_changelog_payload')){
         $displayVersion = $version;
         $displayVersion['version'] = $currentPatchVersion;
         $displayVersion['full'] = $currentPatchVersion;
+        $displayVersion['updated_label'] = date('M j, Y g:i:s A');
         return [
             'version' => $displayVersion,
             'recent_comments' => $recentCommits,
