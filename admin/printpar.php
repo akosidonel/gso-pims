@@ -547,7 +547,8 @@ function gso_print_unit_label($unitRaw, $qty) {
 
   $alreadyPlural = [
     'pcs', 'pieces', 'units', 'boxes', 'liters', 'pairs', 'sets', 'lots',
-    'reams', 'packs', 'bottles', 'cans', 'bags', 'rolls', 'dozens'
+    'reams', 'packs', 'bottles', 'cans', 'bags', 'rolls', 'dozens', 'books',
+    'copies', 'tanks'
   ];
   if (in_array($unit, $alreadyPlural, true)) {
     return $unit;
@@ -568,7 +569,10 @@ function gso_print_unit_label($unitRaw, $qty) {
     'can' => 'cans',
     'bag' => 'bags',
     'roll' => 'rolls',
-    'dozen' => 'dozens'
+    'dozen' => 'dozens',
+    'book' => 'books',
+    'copy' => 'copies',
+    'tank' => 'tanks'
   ];
   if (isset($irregular[$unit])) {
     return $irregular[$unit];

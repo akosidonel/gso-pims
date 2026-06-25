@@ -654,7 +654,10 @@ function gso_ics_unit_label(array $row): string {
         'PACKS' => 'PACK',
         'ROLLS' => 'ROLL',
         'METERS' => 'METER',
-        'METRES' => 'METER'
+        'METRES' => 'METER',
+        'BOOKS' => 'BOOK',
+        'COPIES' => 'COPY',
+        'TANKS' => 'TANK'
     ];
     if (isset($singularUnits[$unit])) { $unit = $singularUnits[$unit]; }
 
@@ -670,7 +673,10 @@ function gso_ics_unit_label(array $row): string {
         'BOX' => 'BOXES',
         'PACK' => 'PACKS',
         'ROLL' => 'ROLLS',
-        'METER' => 'METERS'
+        'METER' => 'METERS',
+        'BOOK' => 'BOOKS',
+        'COPY' => 'COPIES',
+        'TANK' => 'TANKS'
     ];
 
     return $pluralUnits[$unit] ?? ($unit . 'S');

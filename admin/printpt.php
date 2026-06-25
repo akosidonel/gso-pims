@@ -142,6 +142,60 @@ class PDF extends TCPDF
                 EOD;
             }
 
+            function gso_pt_unit_label($unitRaw, $qty) {
+                $unit = strtoupper(trim((string)$unitRaw));
+                $qty = (int)$qty;
+
+                if ($unit === '') {
+                    $unit = 'UNIT';
+                }
+
+                $singularUnits = [
+                    'PCS' => 'PC',
+                    'PIECE' => 'PC',
+                    'PIECES' => 'PC',
+                    'UNITS' => 'UNIT',
+                    'LOTS' => 'LOT',
+                    'SETS' => 'SET',
+                    'GALS' => 'GAL',
+                    'LITERS' => 'L',
+                    'LITRES' => 'L',
+                    'BOXES' => 'BOX',
+                    'PACKS' => 'PACK',
+                    'ROLLS' => 'ROLL',
+                    'METERS' => 'METER',
+                    'METRES' => 'METER',
+                    'BOOKS' => 'BOOK',
+                    'COPIES' => 'COPY',
+                    'TANKS' => 'TANK'
+                ];
+                if (isset($singularUnits[$unit])) {
+                    $unit = $singularUnits[$unit];
+                }
+
+                if ($qty <= 1) {
+                    return $unit;
+                }
+
+                $pluralUnits = [
+                    'PC' => 'PCS',
+                    'UNIT' => 'UNITS',
+                    'LOT' => 'LOTS',
+                    'SET' => 'SETS',
+                    'GAL' => 'GALS',
+                    'L' => 'L',
+                    'BOX' => 'BOXES',
+                    'PACK' => 'PACKS',
+                    'ROLL' => 'ROLLS',
+                    'METER' => 'METERS',
+                    'BOOK' => 'BOOKS',
+                    'COPY' => 'COPIES',
+                    'TANK' => 'TANKS'
+                ];
+
+                return $pluralUnits[$unit] ?? ($unit . 'S');
+            }
+
             function splitTextByRenderedLines($pdf, $text, $widthMm, $maxLinesFirstPage, $maxLinesNextPages) {
                 $words = preg_split('/\s+/', trim((string)$text));
                 $words = array_values(array_filter($words, function($w) { return $w !== ''; }));
@@ -492,7 +546,7 @@ class PDF extends TCPDF
                   $displayDate = ($idx === 0) ? $date : '';
                   $displayAmount = ($idx === 0) ? $amount : '';
                   $displayQty = ($idx === 0) ? (string)$qty : '';
-                  $displayUnit = ($idx === 0) ? ($qty > 1 ? 'Units' : 'Unit') : '';
+                  $displayUnit = ($idx === 0) ? gso_pt_unit_label((string)($row['unit'] ?? ''), $qty) : '';
 
                                     $html = buildPtRowHtml(
                                             $chunkHtml,
