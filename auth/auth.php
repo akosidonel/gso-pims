@@ -9804,6 +9804,7 @@ if (isset($_POST['save_item'])) {
     $itemManualParIcsRows = (isset($_POST['item_manual_par_ics']) && is_array($_POST['item_manual_par_ics'])) ? $_POST['item_manual_par_ics'] : null;
     $itemParIcsPreviewRows = (isset($_POST['par_ics_number_preview_value']) && is_array($_POST['par_ics_number_preview_value'])) ? $_POST['par_ics_number_preview_value'] : null;
     $itemNoAccountPropertyRows = (isset($_POST['item_no_account_property']) && is_array($_POST['item_no_account_property'])) ? $_POST['item_no_account_property'] : null;
+    $itemSkipPropertyNumberRows = (isset($_POST['item_skip_property_number']) && is_array($_POST['item_skip_property_number'])) ? $_POST['item_skip_property_number'] : null;
 
     $resolveRowInput = function (?array $rows, int $rowIndex, string $fallback = ''): string {
         if ($rows === null) {
@@ -10094,6 +10095,7 @@ if (isset($_POST['save_item'])) {
 
         $parentPropertyNumbers = [];
         $parentEmpIds = [];
+        $parentSkipPropertyNumbers = [];
         $insertedCount = 0;
         $printRefs = ['PAR' => [], 'ICS' => []];
         $reservedPropertyNumbers = [];
@@ -10175,7 +10177,8 @@ if (isset($_POST['save_item'])) {
                 $manualParIcsForRow = $resolveRowBool($itemManualParIcsRows, $i, false);
                 $manualParIcsValueForRow = strtoupper(trim($resolveRowInput($itemParIcsPreviewRows, $i, '')));
                 $omitAccountPropertyForRow = $resolveRowBool($itemNoAccountPropertyRows, $i, false);
-                $skipPropertyNumberForRow = $propertyNumberOptionalFund || $omitAccountPropertyForRow;
+                $doNotGeneratePropertyForRow = $resolveRowBool($itemSkipPropertyNumberRows, $i, false);
+                $skipPropertyNumberForRow = $propertyNumberOptionalFund || $omitAccountPropertyForRow || $doNotGeneratePropertyForRow;
                 $accountCodeForRow = $resolveRowUpper($itemAccountCodeRows, $i, $accountCodeInput);
                 if ($accountCodeForRow === '' && !$omitAccountPropertyForRow) {
                     throw new Exception('Account code is required for row ' . $i . '.');
@@ -10191,7 +10194,7 @@ if (isset($_POST['save_item'])) {
                 if ($omitAccountPropertyForRow) {
                     $accountCodeForRow = null;
                     $par_number = null;
-                } elseif ($propertyNumberOptionalFund) {
+                } elseif ($skipPropertyNumberForRow) {
                     $par_number = null;
                 } else {
                     $allocation = gso_allocate_property_number($conn, $fundNorm, $parNumberForSet, $reservedPropertyNumbers);
@@ -10364,6 +10367,7 @@ if (isset($_POST['save_item'])) {
 
                 $parentPropertyNumbers[$i] = $firstParNumberForSet;
                 $parentEmpIds[$i] = $empForRowInt;
+                $parentSkipPropertyNumbers[$i] = $skipPropertyNumberForRow;
             }
 
             // Save bundle equipment rows (if any)
@@ -10403,10 +10407,15 @@ if (isset($_POST['save_item'])) {
                     if ($parentIdx < 1 || $parentIdx > $quantity) {
                         throw new Exception('Bundle set is out of range (row '.($j+1).').');
                     }
-                    if (!$propertyNumberOptionalFund && (!isset($parentPropertyNumbers[$parentIdx]) || trim((string)$parentPropertyNumbers[$parentIdx]) === '')) {
+                    $parentSkipsPropertyNumber = !empty($parentSkipPropertyNumbers[$parentIdx]);
+                    if (
+                        !$propertyNumberOptionalFund
+                        && !$parentSkipsPropertyNumber
+                        && (!isset($parentPropertyNumbers[$parentIdx]) || trim((string)$parentPropertyNumbers[$parentIdx]) === '')
+                    ) {
                         throw new Exception('Unable to resolve parent item for bundle row '.($j+1).'.');
                     }
-                    $bundleWithNumber = $propertyNumberOptionalFund ? null : (string)$parentPropertyNumbers[$parentIdx];
+                    $bundleWithNumber = ($propertyNumberOptionalFund || $parentSkipsPropertyNumber) ? null : (string)$parentPropertyNumbers[$parentIdx];
 
                     // Bundle uses the same property number as its parent
                     $bPar = $bundleWithNumber;
@@ -10663,6 +10672,7 @@ if (isset($_POST['save_item'])) {
         }
         $manualParIcsForRow = $resolveRowBool($itemManualParIcsRows, $i, false);
         $manualParIcsValueForRow = strtoupper(trim($resolveRowInput($itemParIcsPreviewRows, $i, '')));
+        $skipPropertyNumberForRow = $propertyNumberOptionalFund || $resolveRowBool($itemSkipPropertyNumberRows, $i, false);
         if ($accountCodeForRow === '') {
             mysqli_rollback($conn);
             echo json_encode(['status'=>422,'message'=>'Account code is required for row '.$i.'.']);
@@ -10675,12 +10685,12 @@ if (isset($_POST['save_item'])) {
         }
 
         $parNumberForSet = strtoupper(trim($resolveRowInput($itemPropertyNumberRows, $i, ($i === 1 ? $par_number_raw : ''))));
-        if (!$propertyNumberOptionalFund && $parNumberForSet === '') {
+        if (!$skipPropertyNumberForRow && $parNumberForSet === '') {
             mysqli_rollback($conn);
             echo json_encode(['status'=>422,'message'=>'Property number is required for row '.$i.'.']);
             return false;
         }
-        if ($propertyNumberOptionalFund) {
+        if ($skipPropertyNumberForRow) {
             $par_number = null;
         } else {
             $allocation = gso_allocate_property_number($conn, $fundUpper, $parNumberForSet, $reservedPropertyNumbers);
@@ -10714,7 +10724,7 @@ if (isset($_POST['save_item'])) {
         $remarksSql = ($remarksForRow === null) ? 'NULL' : "'" . mysqli_real_escape_string($conn, $remarksForRow) . "'";
 
         for ($copyIndex = 1; $copyIndex <= $itemQuantityForRow; $copyIndex++) {
-            if (!$propertyNumberOptionalFund && $copyIndex > 1) {
+            if (!$skipPropertyNumberForRow && $copyIndex > 1) {
                 $nextCandidate = gso_next_property_number_value($par_number);
                 $allocation = gso_allocate_property_number($conn, $fundUpper, $nextCandidate, $reservedPropertyNumbers);
                 if (!isset($allocation['ok']) || !$allocation['ok']) {
@@ -10724,7 +10734,7 @@ if (isset($_POST['save_item'])) {
                 }
                 $par_number = (string)$allocation['property_number'];
             }
-            if (!$propertyNumberOptionalFund && $par_number !== null && $par_number !== '') {
+            if (!$skipPropertyNumberForRow && $par_number !== null && $par_number !== '') {
                 $reservedPropertyNumbers[] = $par_number;
             }
 
@@ -10748,13 +10758,24 @@ if (isset($_POST['save_item'])) {
             if ($serial2ForCopy === null && $copyIndex === 1 && $snid2SingleValue !== null && $snid2SingleValue !== '') { $serial2ForCopy = $snid2SingleValue; }
             $s1 = ($serial1ForCopy === null) ? 'NULL' : "'" . mysqli_real_escape_string($conn, $serial1ForCopy) . "'";
             $s2 = ($serial2ForCopy === null) ? 'NULL' : "'" . mysqli_real_escape_string($conn, $serial2ForCopy) . "'";
+            $parNumberSql = ($par_number === null || $par_number === '') ? 'NULL' : "'" . mysqli_real_escape_string($conn, $par_number) . "'";
 
             if ($isGF) {
-                $multi .= "INSERT INTO par_gen_fund(category,item,model,description,serial_number,serial_number_2,par_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
-                $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$deptIdInt."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                $multi .= "INSERT INTO par_gen_fund(category,item,model,description,serial_number,serial_number_2,par_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,".$parNumberSql.",$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
+                if ($skipPropertyNumberForRow) {
+                    $multi .= "SET @gso_add_item_gf_id = LAST_INSERT_ID();";
+                    $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$deptIdInt."',CONCAT('NPID:', @gso_add_item_gf_id),'".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                } else {
+                    $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$deptIdInt."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                }
             } elseif ($isSEF) {
-                $multi .= "INSERT INTO property_sef(category,item,model,description,serial_number,serial_number_2,property_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,'".$par_number."',$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
-                $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                $multi .= "INSERT INTO property_sef(category,item,model,description,serial_number,serial_number_2,property_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,".$parNumberSql.",$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
+                if ($skipPropertyNumberForRow) {
+                    $multi .= "SET @gso_add_item_sef_id = LAST_INSERT_ID();";
+                    $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$dept."',CONCAT('NPID:', @gso_add_item_sef_id),'".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                } else {
+                    $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                }
             } elseif ($isTrustFund) {
                 $fundRecordId = $nextTrustFundId;
                 $nextTrustFundId--;
@@ -15679,6 +15700,9 @@ if (isset($_POST['update_new_purchase_item'])) {
 
     $propNum = strtoupper(trim((string)($_POST['property_number'] ?? '')));
     $newPropNum = strtoupper(trim((string)($_POST['new_property_number'] ?? $propNum)));
+    if ($newPropNum === 'NO PROPERTY NUMBER') {
+        $newPropNum = '';
+    }
 
     $item        = gso_clean_inventory_text_for_db($_POST['item'] ?? '');
     $model       = gso_clean_inventory_text_for_db($_POST['model'] ?? '');

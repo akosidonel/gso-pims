@@ -3649,6 +3649,27 @@ $(function(){
         .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
     }
 
+    function npDetailValidReferenceNumber(value) {
+      var normalized = String(value || '').trim();
+      return normalized === '' || /^[0-9-]+$/.test(normalized);
+    }
+
+    function validateEditNpReferenceFields(shouldFocus) {
+      var isValid = true;
+      $('#edit_np_pr, #edit_np_po, #edit_np_obr').each(function () {
+        var $field = $(this);
+        var fieldValid = npDetailValidReferenceNumber($field.val());
+        $field.toggleClass('is-invalid', !fieldValid);
+        if (!fieldValid) {
+          if (shouldFocus && isValid) {
+            try { $field.trigger('focus'); } catch (e) {}
+          }
+          isValid = false;
+        }
+      });
+      return isValid;
+    }
+
     function npDetailPropertyOptionalFund() {
       var fund = npDetailNormalizeFund($('#edit_np_fund').val());
       return fund === 'TRUST FUND' || fund === 'DONATION';
@@ -3729,6 +3750,11 @@ $(function(){
         }
       }
       return copies;
+    }
+
+    function npDetailPropertyDisplay(value) {
+      var text = String(value || '').trim();
+      return text ? text : 'no property number';
     }
 
     function npDetailBuildSerialRows(item) {
@@ -4704,7 +4730,7 @@ $(function(){
           + '    <div class="form-group col-md-6">'
           + '      <label>Property Number</label>'
           + '      <input type="hidden" name="property_number[' + npDetailEsc(itemKey) + ']" class="edit-np-property-value" value="' + npDetailEsc(item.property_number) + '">'
-          + '      <textarea class="form-control edit-np-property-preview" rows="3" readonly>' + npDetailEsc(item.property_number_preview || item.property_number) + '</textarea>'
+          + '      <textarea class="form-control edit-np-property-preview" rows="3" readonly>' + npDetailEsc(npDetailPropertyDisplay(item.property_number_preview || item.property_number)) + '</textarea>'
           + '    </div>'
           + '  </div>'
           + '  <div class="form-row mb-0">'
@@ -4736,6 +4762,7 @@ $(function(){
       var quantity = npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val());
       var firstValue = String(value || '').trim();
       var previewValue = npDetailPropertyCopies(firstValue, quantity).join(', ');
+      var displayValue = npDetailPropertyDisplay(previewValue);
       var item = npDetailFindItem(itemId);
 
       if (item) {
@@ -4744,7 +4771,7 @@ $(function(){
       }
 
       $hidden.val(firstValue);
-      $preview.val(previewValue);
+      $preview.val(displayValue);
       npDetailSnapshotBundleRows();
       npDetailRenderBundleRows();
     }
@@ -4826,8 +4853,8 @@ $(function(){
         return;
       }
 
-      if (unchanged && savedPropertyNumber) {
-        npDetailSetProperty(itemId, savedPropertyNumber, 'Generated from account code.');
+      if (unchanged) {
+        npDetailSetProperty(itemId, savedPropertyNumber, savedPropertyNumber ? 'Generated from account code.' : 'No property number.', 'info');
         if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
         return;
       }
@@ -5006,13 +5033,6 @@ $(function(){
       $.each(npDetailState.items, function (_, item) {
         if (needsRefresh) { return false; }
         if (!String(item.par_ics_number || '').trim()) {
-          needsRefresh = true;
-          return false;
-        }
-        if (npDetailPropertyOptionalFund() || item.no_account_property) {
-          return;
-        }
-        if (!String(item.property_number || '').trim()) {
           needsRefresh = true;
           return false;
         }
@@ -6067,6 +6087,11 @@ $(function(){
       $help.removeClass(classes).addClass(className).text(message || 'Generated from account code.');
     }
 
+    function npPropertyDisplay(value) {
+      var text = String(value || '').trim();
+      return text ? text : 'no property number';
+    }
+
     function npGetDeptFromPropertyNumber(value) {
       var parts = String(value || '').trim().split('-');
 
@@ -6168,7 +6193,7 @@ $(function(){
       var oldPropertyNumber = String(npEditOriginal.propertyNumber || '').trim();
 
       if (!npShouldRegeneratePropertyNumber()) {
-        $('#show_property_number').val(oldPropertyNumber);
+        $('#show_property_number').val(npPropertyDisplay(oldPropertyNumber));
         npSetPropertyHelp('Generated from account code.');
         npEditPropertyValid = true;
         return;
@@ -6181,7 +6206,7 @@ $(function(){
       var dept = String(npEditOriginal.dept || '').trim() || npGetDeptFromPropertyNumber(oldPropertyNumber);
 
       if (fund === 'TRUST FUND' || fund === 'DONATION') {
-        $('#show_property_number').val('');
+        $('#show_property_number').val(npPropertyDisplay(''));
         npSetPropertyHelp('Property number is not generated for ' + fund + '.', 'info');
         npEditPropertyGenerating = false;
         npEditPropertyValid = true;
@@ -6190,7 +6215,7 @@ $(function(){
       }
 
       if (!accountCode || !category || !year || !fund || !dept) {
-        $('#show_property_number').val(oldPropertyNumber);
+        $('#show_property_number').val(npPropertyDisplay(oldPropertyNumber));
         npSetPropertyHelp('Select account code, category, fund, and year to generate a property number.', 'error');
         npEditPropertyValid = false;
         return;
@@ -6229,7 +6254,7 @@ $(function(){
             return;
           }
 
-          $('#show_property_number').val(oldPropertyNumber);
+          $('#show_property_number').val(npPropertyDisplay(oldPropertyNumber));
           npSetPropertyHelp((resp && resp.message) ? resp.message : 'Unable to generate an available property number.', 'error');
           npEditPropertyValid = false;
         },
@@ -6238,7 +6263,7 @@ $(function(){
             return;
           }
 
-          $('#show_property_number').val(oldPropertyNumber);
+          $('#show_property_number').val(npPropertyDisplay(oldPropertyNumber));
           npSetPropertyHelp('Unable to check property number availability.', 'error');
           npEditPropertyValid = false;
         },
@@ -6293,7 +6318,7 @@ $(function(){
 
         $('#edit_new_purchase_id').val(d.id || '');
         $('#edit_property_number').val(d.property_number  || '');
-        $('#show_property_number').val(d.property_number  || '');
+        $('#show_property_number').val(npPropertyDisplay(d.property_number));
         $('#edit_item').val(d.item             || '');
         $('#edit_model').val(d.model            || '');
         $('#edit_description').val(d.description      || '');
@@ -6340,6 +6365,8 @@ $(function(){
       $.each(formData, function (_, field) {
         if (field.name === 'unit_value') {
           field.value = npCleanUnitValue(field.value);
+        } else if (field.name === 'new_property_number' && String(field.value || '').trim().toLowerCase() === 'no property number') {
+          field.value = '';
         }
       });
 
@@ -8241,6 +8268,9 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     var out = [];
     $('#itemSetRows .js-item-property-number').each(function(){
       var value = String($(this).val() || '').trim();
+      if (value.toLowerCase() === 'no property number') {
+        value = '';
+      }
       out.push(value);
     });
     return out.filter(function(v){ return v !== ''; });
@@ -8261,7 +8291,9 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     return String(raw || '')
       .split(/[\n\r,]+/)
       .map(function(value){ return String(value || '').trim(); })
-      .filter(function(value){ return value !== ''; });
+      .filter(function(value){
+        return value !== '' && value.toLowerCase() !== 'no property number';
+      });
   }
 
   function getParentSetQuantity(setIndex){
@@ -8684,7 +8716,7 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
       scheduleRefresh();
     });
 
-    $(document).off('input.bundleQty change.bundleQty', '#quantity').on('input.bundleQty change.bundleQty', '#quantity', function(){
+    $(document).off('change.bundleQty', '#quantity').on('change.bundleQty', '#quantity', function(){
       bundleRowEls().each(function(){
         syncBundleGroup($(this));
       });
@@ -8745,11 +8777,20 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     });
   }
 
+  function refreshAll(){
+    syncBundleSetSelectors();
+    bundleRowEls().each(function(){
+      syncBundleGroup($(this));
+    });
+    scheduleRefresh();
+  }
+
   // Best-effort auto-init
   $(function(){ init(); });
 
   return {
     init: init,
+    refreshAll: refreshAll,
     refreshBundlePropertyNumbers: refreshBundlePropertyNumbers,
     syncBundleCardVisibility: syncBundleCardVisibility
   };
@@ -8847,6 +8888,7 @@ window.GSO = window.GSO || {};
 window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   var inited = false;
   var MAX_ITEM_SETS = 100;
+  var QUANTITY_RENDER_DELAY_MS = 120;
 
   var empOptionsAll = '';
   var itemSetByRow = {};
@@ -8856,6 +8898,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   var debFundDepts = null;
   var debPropNum = null;
   var debParIcsNum = null;
+  var debQuantityRender = null;
+  var lastRenderedSetCount = 1;
 
   function hasUI(){
     return $('#addItemModal').length && $('#addItem').length;
@@ -8878,6 +8922,13 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     return normalized;
   }
 
+  function sanitizeSetCountInput(value){
+    var digits = String(value || '').replace(/[^\d]/g, '');
+    if (!digits) { return '1'; }
+    if (digits.length > 3) { return String(MAX_ITEM_SETS); }
+    return digits;
+  }
+
   function getSetCount(){
     var count = normalizeSetCount($('#quantity').val());
     if (String($('#quantity').val() || '') !== String(count)) {
@@ -8898,6 +8949,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       asset: '',
       accountCode: '',
       noAccountProperty: false,
+      skipPropertyNumber: false,
       manualParIcs: false,
       parIcsManual: '',
       brand: '',
@@ -8937,6 +8989,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       total: 'total_amount',
       accountCode: 'account_code',
       noAccountProperty: 'noAccountPropertyCheckBox',
+      skipPropertyNumber: 'skipPropertyNumberCheckBox',
       remarks: 'remarks'
     };
     return idMap[fieldName] ? (' id="' + idMap[fieldName] + '"') : '';
@@ -8974,7 +9027,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   function buildAccountCodeControlHtml(setIndex, state){
     var primaryId = setPrimaryId('accountCode', setIndex);
     if (usesManualAccountCodeInput()) {
-      return '<input type="text" class="form-control js-item-account-code" name="account_code[' + setIndex + ']" inputmode="numeric" maxlength="18" pattern="^[0-9-]{1,18}$" title="Use numbers and hyphen only, maximum 18 characters" placeholder="Enter account code" value="' + esc(sanitizeManualAccountCode(state.accountCode)) + '" required' + primaryId + '>';
+      return '<input type="text" class="form-control js-item-account-code" name="account_code[' + setIndex + ']" inputmode="numeric" maxlength="18" pattern="^[0-9\\-]{1,18}$" title="Use numbers and hyphen only, maximum 18 characters" placeholder="Enter account code" value="' + esc(sanitizeManualAccountCode(state.accountCode)) + '" required' + primaryId + '>';
     }
     return '<select class="form-control js-item-account-code" name="account_code[' + setIndex + ']" required' + primaryId + '>' + withSelectedOption(getItemAccountCodeOptionsHtml(), state.accountCode) + '</select>';
   }
@@ -9037,6 +9090,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         asset: String($row.find('.js-item-asset').val() || ''),
         accountCode: String($row.find('.js-item-account-code').val() || ''),
         noAccountProperty: $row.find('.js-item-no-account-property').is(':checked'),
+        skipPropertyNumber: $row.find('.js-item-skip-property-number').is(':checked'),
         manualParIcs: $row.find('.js-item-manual-par-ics').is(':checked'),
         parIcsManual: String($row.find('.js-item-par-ics').val() || ''),
         brand: String($row.find('.js-item-brand').val() || ''),
@@ -9226,7 +9280,13 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       + '      <textarea class="form-control js-item-par-ics" name="par_ics_number_preview[' + setIndex + ']" rows="3"' + (state.manualParIcs ? '' : ' readonly') + '>' + esc(state.parIcsManual || '') + '</textarea>'
       + '    </div>'
       + '    <div class="form-group col-md-6 mb-0">'
-      + '      <label>Property Number</label>'
+      + '      <div class="d-flex align-items-center justify-content-between mb-2">'
+      + '        <label class="mb-0">Property Number</label>'
+      + '        <div class="form-check form-check-inline mb-0 text-muted js-item-skip-property-number-wrap">'
+      + '          <input type="checkbox" class="form-check-input js-item-skip-property-number" name="item_skip_property_number[' + setIndex + ']" value="1"' + (state.skipPropertyNumber ? ' checked' : '') + setPrimaryId('skipPropertyNumber', setIndex) + '>'
+      + '          <label class="form-check-label">do not generate</label>'
+      + '        </div>'
+      + '      </div>'
       + '      <input type="hidden" class="js-item-property-number-value" name="property_numbers[' + setIndex + ']" value="">'
       + '      <textarea class="form-control js-item-property-number" name="property_number_preview[' + setIndex + ']" rows="3" readonly></textarea>'
       + '    </div>'
@@ -9269,12 +9329,9 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     var $cb = $row.find('.js-item-no-account-property');
     var $wrap = $row.find('.js-item-no-account-property-wrap');
     var $account = $row.find('.js-item-account-code');
-    var $propertyPreview = $row.find('.js-item-property-number');
-    var $propertyValue = $row.find('.js-item-property-number-value');
     if(!$cb.length || !$account.length) return;
 
     var allowOptional = isNewCondition();
-    var skipPropertyNumber = propertyNumberOptionalFund();
     $wrap.toggle(allowOptional);
     $cb.prop('disabled', !allowOptional);
     if(!allowOptional && $cb.is(':checked')){
@@ -9283,23 +9340,46 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
     if(allowOptional && $cb.is(':checked')){
       $account.val('').prop('disabled', true).prop('required', false);
-      $propertyPreview.val('').attr('placeholder', 'No property number');
-      $propertyValue.val('');
     } else {
       $account.prop('disabled', false).prop('required', true);
-      if (skipPropertyNumber) {
-        $propertyPreview.val('').attr('placeholder', 'No property number');
-        $propertyValue.val('');
-      } else {
-        $propertyPreview.attr('placeholder', '');
-      }
     }
   }
 
   function applyNoAccountPropertyStateToAll(){
     $('#itemSetRows .item-set-card').each(function(){
       applyNoAccountPropertyState($(this));
+      applySkipPropertyNumberState($(this));
     });
+  }
+
+  function shouldSkipPropertyNumber($row){
+    if (!$row || !$row.length) { return propertyNumberOptionalFund(); }
+    return propertyNumberOptionalFund()
+      || $row.find('.js-item-no-account-property').is(':checked')
+      || $row.find('.js-item-skip-property-number').is(':checked');
+  }
+
+  function applySkipPropertyNumberState($row){
+    var $cb = $row.find('.js-item-skip-property-number');
+    var $wrap = $row.find('.js-item-skip-property-number-wrap');
+    var $propertyPreview = $row.find('.js-item-property-number');
+    var $propertyValue = $row.find('.js-item-property-number-value');
+    var forceSkip = propertyNumberOptionalFund() || $row.find('.js-item-no-account-property').is(':checked');
+    if (!$cb.length || !$wrap.length || !$propertyPreview.length || !$propertyValue.length) { return; }
+
+    $wrap.show();
+    if (forceSkip) {
+      $cb.prop('checked', true).prop('disabled', true);
+    } else {
+      $cb.prop('disabled', false);
+    }
+
+    if (shouldSkipPropertyNumber($row)) {
+      $propertyPreview.val('').attr('placeholder', 'No property number');
+      $propertyValue.val('');
+    } else {
+      $propertyPreview.attr('placeholder', '');
+    }
   }
 
   function applyManualParIcsState($row){
@@ -9391,6 +9471,11 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     return copies;
   }
 
+  function propertyNumberDisplay(value){
+    var text = String(value || '').trim();
+    return text ? text : 'no property number';
+  }
+
   function applyPropertyNumberPreview(list){
     var previewList = Array.isArray(list) ? list : [];
     var allNumbers = [];
@@ -9403,7 +9488,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $('#itemSetRows .item-set-card').each(function(index){
       var rowNumbers = previewList[index] || [];
       var numbers = Array.isArray(rowNumbers) ? rowNumbers : (rowNumbers ? [rowNumbers] : []);
-      $(this).find('.js-item-property-number').attr('rows', 3).val(numbers.join(', '));
+      var displayValue = propertyNumberDisplay(numbers.join(', '));
+      $(this).find('.js-item-property-number').attr('rows', 3).val(displayValue);
       $(this).find('.js-item-property-number-value').val(numbers.length ? numbers[0] : '');
     });
     if (window.GSO && window.GSO.AddItemBundle && typeof window.GSO.AddItemBundle.refreshBundlePropertyNumbers === 'function') {
@@ -9430,6 +9516,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         var $row = $(this);
         applyNoBrandModelState($row);
         applyNoAccountPropertyState($row);
+        applySkipPropertyNumberState($row);
         applyManualParIcsState($row);
         applySerialVisibilityState($row);
         applyNoAmountValueState($row);
@@ -9453,6 +9540,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       var $row = $(this);
       applyNoBrandModelState($row);
       applyNoAccountPropertyState($row);
+      applySkipPropertyNumberState($row);
       applyManualParIcsState($row);
       applySerialVisibilityState($row);
       applyNoAmountValueState($row);
@@ -9518,6 +9606,26 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .toggle(q >= MAX_ITEM_SETS);
   }
 
+  function applyQuantityChange(){
+    var nextCount = getSetCount();
+    enforcePerRowQtyLimit();
+    if (nextCount === lastRenderedSetCount) { return; }
+    lastRenderedSetCount = nextCount;
+    renderItemSetRows();
+    renderEndUserRows();
+    updateTotalAmount();
+    scheduleUpdateParIcsNumber();
+    scheduleUpdatePropertyNumber();
+    if (window.GSO && window.GSO.AddItemBundle && typeof window.GSO.AddItemBundle.refreshAll === 'function') {
+      window.GSO.AddItemBundle.refreshAll();
+    }
+  }
+
+  function scheduleQuantityChange(){
+    clearTimeout(debQuantityRender);
+    debQuantityRender = setTimeout(applyQuantityChange, QUANTITY_RENDER_DELAY_MS);
+  }
+
   function getEmployeeOptionsHtml() {
     var html = (empOptionsAll && empOptionsAll.trim()) ? empOptionsAll : String($('#parEmp').html() || '');
     if (!html || !html.trim()) html = '<option value="">-SELECT-</option>';
@@ -9559,7 +9667,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $po.prop('required', required);
     if (required) {
       $po.attr('inputmode', 'numeric');
-      $po.attr('pattern', '^[0-9-]+$');
+      $po.attr('pattern', '^[0-9\\-]+$');
       $po.attr('title', 'Numbers and hyphen only.');
     } else {
       $po.removeAttr('inputmode');
@@ -9852,7 +9960,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       }
 
       var $row = $(rows[index]);
-      if (isNewCondition() && $row.find('.js-item-no-account-property').is(':checked')) {
+      if (shouldSkipPropertyNumber($row)) {
         list[index] = [];
         generateRow(index + 1);
         return;
@@ -10112,6 +10220,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         itemSetByRow = reindexCache(itemSetByRow, setIndex, currentCount);
         endUserByRow = reindexCache(endUserByRow, setIndex, currentCount);
         $('#quantity').val(currentCount - 1);
+        lastRenderedSetCount = currentCount - 1;
         renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
         renderEndUserRows();
         scheduleUpdateParIcsNumber();
@@ -10127,7 +10236,19 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $(document)
       .off('change.gsoAddItemPageNoAccountProperty', '.js-item-no-account-property')
       .on('change.gsoAddItemPageNoAccountProperty', '.js-item-no-account-property', function(){
-        applyNoAccountPropertyState($(this).closest('.item-set-card'));
+        var $row = $(this).closest('.item-set-card');
+        applyNoAccountPropertyState($row);
+        applySkipPropertyNumberState($row);
+        snapshotItemSetInputsIntoCache();
+        scheduleUpdatePropertyNumber();
+      });
+
+    $(document)
+      .off('change.gsoAddItemPageSkipPropertyNumber', '.js-item-skip-property-number')
+      .on('change.gsoAddItemPageSkipPropertyNumber', '.js-item-skip-property-number', function(){
+        var $row = $(this).closest('.item-set-card');
+        applySkipPropertyNumberState($row);
+        snapshotItemSetInputsIntoCache();
         scheduleUpdatePropertyNumber();
       });
 
@@ -10152,11 +10273,13 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         itemSetByRow = {};
         endUserByRow = {};
         $('#quantity').val(1);
+        lastRenderedSetCount = 1;
         renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
         applyPropertyNumberPreview([]);
       })
       .off('shown.bs.modal.gsoAddItemPageBrand')
       .on('shown.bs.modal.gsoAddItemPageBrand', function(){
+        lastRenderedSetCount = getSetCount();
         renderItemSetRows();
       });
 
@@ -10165,6 +10288,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .on('change.gsoAddItemPageFund', '#fund', function(){
         var fund = String($(this).val() || '').trim();
         snapshotItemSetInputsIntoCache();
+        lastRenderedSetCount = getSetCount();
         renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
         scheduleUpdateParIcsNumber();
         resetDepartmentAndEmployeeFields();
@@ -10193,12 +10317,13 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $(document)
       .off('input.gsoAddItemPageQty blur.gsoAddItemPageQty', '#quantity')
       .on('input.gsoAddItemPageQty blur.gsoAddItemPageQty', '#quantity', function(){
-        $('#quantity').val(normalizeSetCount($(this).val()));
+        var sanitized = sanitizeSetCountInput($(this).val());
+        var normalized = normalizeSetCount(sanitized);
+        if (String($(this).val() || '') !== String(normalized)) {
+          $(this).val(normalized);
+        }
         enforcePerRowQtyLimit();
-        renderItemSetRows();
-        renderEndUserRows();
-        updateTotalAmount();
-        scheduleUpdateParIcsNumber();
+        scheduleQuantityChange();
       });
 
     $(document)
@@ -10229,9 +10354,6 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         updateParEmpStateAddItem();
       });
     $(document)
-      .off('input.gsoAddItemPageMulti change.gsoAddItemPageMulti', '#quantity')
-      .on('input.gsoAddItemPageMulti change.gsoAddItemPageMulti', '#quantity', renderEndUserRows);
-    $(document)
       .off('change.gsoAddItemPageMultiRow', '#endUserRows select.parEmpRow')
       .on('change.gsoAddItemPageMultiRow', '#endUserRows select.parEmpRow', function(){
         snapshotEndUserInputsIntoCache();
@@ -10248,7 +10370,9 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $(document)
       .off('change.gsoAddItemPageDeptEmp', '#dept')
       .on('change.gsoAddItemPageDeptEmp', '#dept', function(){
+        var deptCode = String($(this).val() || '').trim();
         updateParEmpStateAddItem();
+        loadEmployeesForDept(deptCode);
         toggleAddNewEmpSectionAddItem();
       });
 
@@ -10339,8 +10463,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       });
 
     $(document)
-      .off('input.gsoAddItemPageTotal change.gsoAddItemPageTotal blur.gsoAddItemPageTotal', '.js-item-unitvalue, #quantity')
-      .on('input.gsoAddItemPageTotal change.gsoAddItemPageTotal blur.gsoAddItemPageTotal', '.js-item-unitvalue, #quantity', updateTotalAmount);
+      .off('input.gsoAddItemPageTotal change.gsoAddItemPageTotal blur.gsoAddItemPageTotal', '.js-item-unitvalue')
+      .on('input.gsoAddItemPageTotal change.gsoAddItemPageTotal blur.gsoAddItemPageTotal', '.js-item-unitvalue', updateTotalAmount);
     $(document)
       .off('change.gsoAddItemPageUnit', '.js-item-category, #year')
       .on('change.gsoAddItemPageUnit', '.js-item-category, #year', validateUnitValue);
@@ -10363,12 +10487,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       });
 
     $(document)
-      .off('change.gsoAddItemPageProp input.gsoAddItemPageProp', '.js-item-category, .js-item-account-code, #dept, #year, #quantity')
-      .on('change.gsoAddItemPageProp input.gsoAddItemPageProp', '.js-item-category, .js-item-account-code, #dept, #year, #quantity', scheduleUpdatePropertyNumber);
+      .off('change.gsoAddItemPageProp input.gsoAddItemPageProp', '.js-item-category, .js-item-account-code, #dept, #year')
+      .on('change.gsoAddItemPageProp input.gsoAddItemPageProp', '.js-item-category, .js-item-account-code, #dept, #year', scheduleUpdatePropertyNumber);
 
     $(document)
-      .off('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #quantity, #year')
-      .on('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #quantity, #year', scheduleUpdateParIcsNumber);
+      .off('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #year')
+      .on('change.gsoAddItemPageParIcs input.gsoAddItemPageParIcs', '.js-item-category, #condition, #year', scheduleUpdateParIcsNumber);
 
     $(document)
       .off('change.gsoAddItemPageParIcsManual', '.js-item-manual-par-ics')
@@ -10419,6 +10543,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         if (window.GSO && window.GSO.AddItemMeta && typeof window.GSO.AddItemMeta.fillYearOptions === 'function') {
           window.GSO.AddItemMeta.fillYearOptions();
         }
+        lastRenderedSetCount = getSetCount();
         renderItemSetRows();
         enforcePerRowQtyLimit();
         syncYearAcquiredWithCondition();
@@ -10483,16 +10608,27 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       var wasSetFromSelect = false;
       var clearedForRetype = false;
 
-      $deptInput.off('change.gsoAddItemPageDept').on('change.gsoAddItemPageDept', function(){
-        var code = findDeptCodeByExactName($(this).val());
+      function syncSelectedDeptFromInput(){
+        var typedValue = String($deptInput.val() || '').trim();
+        var code = findDeptCodeByExactName(typedValue);
+
         if (code) {
-          $deptSelect.val(code).trigger('change');
+          if ($deptSelect.val() !== code) {
+            $deptSelect.val(code).trigger('change');
+          }
           wasSetFromSelect = true;
           clearedForRetype = false;
-        } else {
+          return;
+        }
+
+        if (!typedValue && $deptSelect.val()) {
           $deptSelect.val('').trigger('change');
         }
-      });
+      }
+
+      $deptInput
+        .off('input.gsoAddItemPageDeptSync change.gsoAddItemPageDeptSync')
+        .on('input.gsoAddItemPageDeptSync change.gsoAddItemPageDeptSync', syncSelectedDeptFromInput);
 
       function markClearedIfNeeded(e){
         if (wasSetFromSelect && !clearedForRetype) {
@@ -10508,12 +10644,6 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       $deptInput.off('beforeinput.gsoAddItemPageDept').on('beforeinput.gsoAddItemPageDept', markClearedIfNeeded);
       $deptInput.off('keydown.gsoAddItemPageDept').on('keydown.gsoAddItemPageDept', function(e){ if (e.key !== 'Tab') markClearedIfNeeded(e); });
       $deptInput.off('paste.gsoAddItemPageDept compositionstart.gsoAddItemPageDept').on('paste.gsoAddItemPageDept compositionstart.gsoAddItemPageDept', function(e){ markClearedIfNeeded(e); });
-
-      $deptInput.off('input.gsoAddItemPageDept').on('input.gsoAddItemPageDept', function(){
-        if (!$(this).val()) {
-          $deptSelect.val('').trigger('change');
-        }
-      });
 
       $deptInput.off('mousedown.gsoAddItemPageDept').on('mousedown.gsoAddItemPageDept', function(e){
         var rect = this.getBoundingClientRect();
@@ -10814,6 +10944,12 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
   // container is rendered outside the <form> subtree by the browser.
   var bundleRows = $('#bundleRows .bundle-row');
   var isPropertyNumberOptionalFund = selectedFund === 'TRUST FUND' || selectedFund === 'DONATION';
+  function parentSetSkipsPropertyNumber(setIndex){
+    var idx = String(setIndex || '').trim();
+    if (!idx) { return false; }
+    var $parentRow = $('#itemSetRows .item-set-card[data-set-index="' + idx + '"]');
+    return shouldSkipPropertyNumber($parentRow);
+  }
   if(bundleRows.length){
     fd.delete('bundle_parent_index[]');
     fd.delete('bundle_category[]');
@@ -10854,7 +10990,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
         var s2 = String($copy.find('.js-bundle-serial2').val() || '').trim();
         var par = String($copy.find('.js-bundle-property-number').val() || '').trim();
 
-        if(!isPropertyNumberOptionalFund && !par){
+        if(!isPropertyNumberOptionalFund && !parentSetSkipsPropertyNumber(parentIdx) && !par){
           rowHasMissing = true;
           return false;
         }

@@ -2,7 +2,7 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.0.16) - June 23, 2026
+## Unreleased (planned v1.0.16) - June 30, 2026
 
 ### Changed
 - Updated internal project files (6 times)
@@ -13,10 +13,11 @@ This file is generated from git history by `php tools/release.php`.
 - Increase the number of sets from 10 to 100 in the edit item or equipment modal
 - Improvements on par/ics no
 - Validation has been added in the input name field in the add employee information
+- Update the Unit selection
 
 ### Fixed
 - Bug fix on change log and version number
-- General bug fixes and maintenance improvements (5 times)
+- General bug fixes and maintenance improvements (6 times)
 - Minor bug fix and improvements
 - Bug fix in the change log and auth files
 - Fix the mitchmatch of the version number
