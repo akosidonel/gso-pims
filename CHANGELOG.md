@@ -29,7 +29,7 @@ This file is generated from git history by `php tools/release.php`.
 - Bug fix on updating the data on edit item or equipment and fund selection
 - Bug fixes and system updates
 - Fix the
-- Bug fix and system improvements
+- Bug fix and system improvements (2 times)
 - Fix bugs on printing ICS docs not showing the correct data
 - Fix the double count issue on inventory custodian slip and fix the issue on the change log page
 - Fix the update issues regarding the input of this "/" character in the p.o and obr input field

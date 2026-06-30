@@ -3725,7 +3725,7 @@ $(function(){
     function npDetailNormalizeItemQuantity(value) {
       var count = parseInt(value, 10) || 1;
       if (count < 1) { count = 1; }
-      if (count > 5000) { count = 5000; }
+      if (count > 10000) { count = 10000; }
       return count;
     }
 

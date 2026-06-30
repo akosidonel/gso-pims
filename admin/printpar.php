@@ -166,7 +166,17 @@ $sqlNew = "
     LIMIT 1
   )
   LEFT JOIN employee AS e ON e.emp_id = h.emp_id
-  LEFT JOIN department AS d ON (d.dept_id = h.dept_id OR d.department_code = h.dept_id)
+  LEFT JOIN department AS d ON (
+    d.dept_id = h.dept_id
+    OR (
+      d.department_code = h.dept_id
+      AND NOT EXISTS (
+        SELECT 1
+        FROM department AS exact_dept
+        WHERE exact_dept.dept_id = h.dept_id
+      )
+    )
+  )
   WHERE h.reference_number = ?
     AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
@@ -221,7 +231,17 @@ $sqlGf = "
   FROM general_fund_property_history AS h
   JOIN par_gen_fund AS p ON p.par_number = h.par_number
   LEFT JOIN employee AS e ON e.emp_id = h.emp_id
-  LEFT JOIN department AS d ON (d.dept_id = h.dept_id OR d.department_code = h.dept_id)
+  LEFT JOIN department AS d ON (
+    d.dept_id = h.dept_id
+    OR (
+      d.department_code = h.dept_id
+      AND NOT EXISTS (
+        SELECT 1
+        FROM department AS exact_dept
+        WHERE exact_dept.dept_id = h.dept_id
+      )
+    )
+  )
   WHERE h.reference_number = ?
     AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
@@ -276,7 +296,17 @@ $sqlSef = "
   FROM sef_property_history AS h
   JOIN property_sef AS p ON p.property_number = h.property_number
   JOIN employee AS e ON e.emp_id = h.emp_id
-  JOIN department AS d ON (d.department_code = h.sch_id OR d.dept_id = h.sch_id)
+  JOIN department AS d ON (
+    d.dept_id = h.sch_id
+    OR (
+      d.department_code = h.sch_id
+      AND NOT EXISTS (
+        SELECT 1
+        FROM department AS exact_dept
+        WHERE exact_dept.dept_id = h.sch_id
+      )
+    )
+  )
   WHERE h.reference_number = ?
     AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
@@ -332,7 +362,17 @@ function gso_printpar_append_fund_rows(mysqli $conn, array &$items, array &$meta
     FROM {$historyTable} AS h
     JOIN {$table} AS f ON f.id = h.id
     LEFT JOIN employee AS e ON e.emp_id = h.emp_id
-    LEFT JOIN department AS d ON (d.dept_id = h.dept_id OR d.department_code = h.dept_id)
+    LEFT JOIN department AS d ON (
+      d.dept_id = h.dept_id
+      OR (
+        d.department_code = h.dept_id
+        AND NOT EXISTS (
+          SELECT 1
+          FROM department AS exact_dept
+          WHERE exact_dept.dept_id = h.dept_id
+        )
+      )
+    )
     WHERE h.reference_number = ?
       AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
       AND h.status = 1
@@ -680,6 +720,37 @@ function gso_split_rendered_lines($pdf, $text, $widthMm, $maxLines) {
   return [$first, $rest];
 }
 
+function gso_wrap_pdf_text_lines($pdf, string $text, float $widthMm): array {
+  $lines = [];
+  $paragraphs = preg_split('/\R+/', trim($text));
+  if (!$paragraphs) { return []; }
+
+  foreach ($paragraphs as $paragraph) {
+    $words = preg_split('/\s+/', trim($paragraph));
+    $words = array_values(array_filter($words ?: [], function($word) { return $word !== ''; }));
+    if (count($words) === 0) {
+      $lines[] = '';
+      continue;
+    }
+
+    $line = '';
+    foreach ($words as $word) {
+      $candidate = trim($line . ' ' . $word);
+      if ($line === '' || $pdf->GetStringWidth($candidate) <= $widthMm) {
+        $line = $candidate;
+        continue;
+      }
+      $lines[] = $line;
+      $line = $word;
+    }
+    if ($line !== '') {
+      $lines[] = $line;
+    }
+  }
+
+  return $lines;
+}
+
 class PDF extends TCPDF  
 {
     protected function fitTextFontSize($text, $width, $baseSize = 10, $minSize = 7, $maxLines = 2) {
@@ -785,7 +856,48 @@ class PDF extends TCPDF
         $usableHeightMm = max(20, $footerContentTopY - $contentStartY - 1.0 - $totalReserveMm);
         $baseMaxLines   = max(8, (int)floor($usableHeightMm / $lineHeightMm));
         $visibleRowCount = max(1, count($rows));
-        $maxLinesPerPage = max(6, (int)floor($baseMaxLines / $visibleRowCount) - 1);
+        $tableSplitSafetyLines = 13;
+        $maxLinesPerPage = max(6, (int)floor($baseMaxLines / $visibleRowCount) - $tableSplitSafetyLines);
+
+        $continuationOnly = count($rows) > 0;
+        foreach ($rows as $row) {
+          if (empty($row['is_continuation'])) {
+            $continuationOnly = false;
+            break;
+          }
+        }
+        if ($continuationOnly) {
+          $this->SetFont('dejavusans', '', 8);
+          $this->SetAutoPageBreak(false, 0);
+          $x = 45.0;
+          $y = $contentStartY;
+          $width = 120.0;
+          $lineHeight = 3.4;
+          $maxContentY = $this->getPageHeight() - 74;
+          foreach ($rows as $row) {
+            $serialText = preg_replace('/<br\s*\/?>/i', "\n", (string)($row['serial_block_html'] ?? ''));
+            $serialText = html_entity_decode(trim(strip_tags((string)$serialText)), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $text = trim((string)($row['description'] ?? ''));
+            if ($serialText !== '') {
+              $text = trim($text . "\n\n" . $serialText);
+            }
+            foreach (gso_wrap_pdf_text_lines($this, $text, $width) as $line) {
+              if ($y + $lineHeight > $maxContentY) {
+                $this->AddPage();
+                $y = $contentStartY;
+              }
+              $this->SetXY($x, $y);
+              $this->Cell($width, $lineHeight, $line, 0, 1, 'L');
+              $y += $lineHeight;
+            }
+            $y += 1.5;
+          }
+          $this->SetAutoPageBreak(true, 82);
+          if ($grandTotal !== null) {
+            $this->drawGrandTotalBlock($grandTotal, $footerContentTopY);
+          }
+          return [];
+        }
 
         $idx = 1;
         foreach($rows as $r){
@@ -992,8 +1104,7 @@ foreach ($pageOrder as $pk) {
       $pdf->renderProcurementDetails();
     }
 
-    // If any item description exceeds 140 words, print the remainder on the next page
-    // immediately after this end user's page.
+    // Print overflow text immediately after this end user's page.
     if (is_array($continuations) && count($continuations) > 0) {
       // Build continuation rows (only description column filled)
       $contRows = [];
@@ -1010,6 +1121,7 @@ foreach ($pageOrder as $pk) {
           'date_aquired' => (string)($c['date_aquired'] ?? ''),
           'serials' => [],
           'is_continuation' => true,
+          'no_split' => true,
           ];
       }
       if ($pageIndex + 1 < count($rowPages)) {

@@ -8855,7 +8855,7 @@ if (isset($_POST['update_new_purchase_group'])) {
         $normalizeItemQuantity = function ($value) {
             $qty = (int)trim((string)$value);
             if ($qty < 1) { $qty = 1; }
-            if ($qty > 5000) { $qty = 5000; }
+            if ($qty > 10000) { $qty = 10000; }
             return $qty;
         };
 
@@ -9146,7 +9146,7 @@ if (isset($_POST['update_new_purchase_group'])) {
     $normalizeItemQuantity = function ($value) {
         $qty = (int)trim((string)$value);
         if ($qty < 1) { $qty = 1; }
-        if ($qty > 5000) { $qty = 5000; }
+        if ($qty > 10000) { $qty = 10000; }
         return $qty;
     };
     $normalizeCategory = function ($value) {
@@ -9197,7 +9197,7 @@ if (isset($_POST['update_new_purchase_group'])) {
         $accountCode = strtoupper(trim((string)$accountCode));
         $existingId = (int)$existingId;
         $oldPropertyNumber = strtoupper(trim((string)$oldPropertyNumber));
-        $quantity = max(1, min(5000, (int)$quantity));
+        $quantity = max(1, min(10000, (int)$quantity));
         $excludeList = [];
 
         if ($oldPropertyNumber !== '') {
@@ -9256,8 +9256,8 @@ if (isset($_POST['update_new_purchase_group'])) {
     foreach ($setKeys as $setKey) {
         $totalRequestedItems += $normalizeItemQuantity($getPostedMapValue('item_quantity', $setKey, '1'));
     }
-    if ($totalRequestedItems > 5000) {
-        echo json_encode(['status' => 422, 'message' => 'A maximum of 5,000 total quantity is allowed per update.']);
+    if ($totalRequestedItems > 10000) {
+        echo json_encode(['status' => 422, 'message' => 'A maximum of 10,000 total quantity is allowed per update.']);
         return false;
     }
 
@@ -9859,8 +9859,8 @@ if (isset($_POST['save_item'])) {
     for ($rowIndex = 1; $rowIndex <= $quantity; $rowIndex++) {
         $totalRequestedItems += $resolveRowInt($itemQuantityRows, $rowIndex, 1);
     }
-    if ($totalRequestedItems > 5000) {
-        echo json_encode(['status' => 422, 'message' => 'A maximum of 5,000 total quantity is allowed per submission.']);
+    if ($totalRequestedItems > 10000) {
+        echo json_encode(['status' => 422, 'message' => 'A maximum of 10,000 total quantity is allowed per submission.']);
         return false;
     }
     // Determine PAR/ICS number input (manual only used when quantity==1)
@@ -10511,8 +10511,8 @@ if (isset($_POST['save_item'])) {
     if(!$isGF && !$isSEF && !$isTrustFund && !$isDonation){ echo json_encode(['status'=>422,'message'=>'Invalid fund selected.']); return false; }
 
     // Safety limits for very large submissions (server-side)
-    if ($quantity > 5000) {
-        echo json_encode(['status'=>422,'message'=>'Quantity is too large. Please add in smaller batches (max 5000 per submission).']);
+    if ($quantity > 10000) {
+        echo json_encode(['status'=>422,'message'=>'Quantity is too large. Please add in smaller batches (max 10000 per submission).']);
         return false;
     }
     // PHP often defaults to max_input_vars=1000; per-row inputs (serials/multi end-user) can exceed this.
@@ -15610,7 +15610,7 @@ if (isset($_POST['generate_new_purchase_edit_property_number'])) {
     $accountCode = strtoupper(trim((string)($_POST['account_code'] ?? '')));
     $dept = trim((string)($_POST['dept'] ?? ''));
     $fund = strtoupper(trim((string)($_POST['fund'] ?? '')));
-    $itemQuantity = max(1, min(5000, (int)($_POST['item_quantity'] ?? 1)));
+    $itemQuantity = max(1, min(10000, (int)($_POST['item_quantity'] ?? 1)));
     $postedExcludedNumbers = isset($_POST['exclude_property_numbers']) && is_array($_POST['exclude_property_numbers'])
         ? $_POST['exclude_property_numbers']
         : [];
