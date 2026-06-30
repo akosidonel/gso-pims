@@ -3651,7 +3651,7 @@ $(function(){
 
     function npDetailValidReferenceNumber(value) {
       var normalized = String(value || '').trim();
-      return normalized === '' || /^[0-9-]+$/.test(normalized);
+      return normalized === '' || /^[0-9/-]+$/.test(normalized);
     }
 
     function validateEditNpReferenceFields(shouldFocus) {
@@ -9650,7 +9650,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
   function isValidNewPurchaseOrderValue(){
     var value = String($('#po').val() || '').trim();
-    return value !== '' && /^[0-9-]+$/.test(value);
+    return value !== '' && /^[0-9/-]+$/.test(value);
   }
 
   function isDonationFund(){
@@ -9666,9 +9666,9 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     var $po = $('#po');
     $po.prop('required', required);
     if (required) {
-      $po.attr('inputmode', 'numeric');
-      $po.attr('pattern', '^[0-9\\-]+$');
-      $po.attr('title', 'Numbers and hyphen only.');
+      $po.attr('inputmode', 'text');
+      $po.attr('pattern', '^[0-9/-]+$');
+      $po.attr('title', 'Numbers, slash, and hyphen only.');
     } else {
       $po.removeAttr('inputmode');
       $po.removeAttr('pattern');

@@ -32,3 +32,4 @@ This file is generated from git history by `php tools/release.php`.
 - Bug fix and system improvements
 - Fix bugs on printing ICS docs not showing the correct data
 - Fix the double count issue on inventory custodian slip and fix the issue on the change log page
+- Fix the update issues regarding the input of this "/" character in the p.o and obr input field
