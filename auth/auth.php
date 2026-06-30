@@ -116,7 +116,7 @@ if(!function_exists('gso_reference_number_is_valid')){
         if ($text === '') {
             return $allowEmpty;
         }
-        return preg_match('/^[0-9-]+$/', $text) === 1;
+        return preg_match('/^[0-9\/-]+$/', $text) === 1;
     }
 }
 if(!function_exists('gso_par_ics_source_tables')){
@@ -8801,7 +8801,7 @@ if (isset($_POST['update_new_purchase_group'])) {
         $deptInput = trim((string)($_POST['dept_id'] ?? ''));
 
         if (!gso_reference_number_is_valid($purchaseOrder, true) || !gso_reference_number_is_valid($purchaseRequest, true) || !gso_reference_number_is_valid($obrNumber, true)) {
-            echo json_encode(['status' => 422, 'message' => 'P.O, P.R, and O.B.R must contain numbers and hyphen only.']);
+            echo json_encode(['status' => 422, 'message' => 'P.O, P.R, and O.B.R must contain numbers, slash, and hyphen only.']);
             return false;
         }
 
@@ -9070,7 +9070,7 @@ if (isset($_POST['update_new_purchase_group'])) {
     $deptInput = trim((string)($_POST['dept_id'] ?? ''));
 
     if (!gso_reference_number_is_valid($purchaseOrder, true) || !gso_reference_number_is_valid($purchaseRequest, true) || !gso_reference_number_is_valid($obrNumber, true)) {
-        echo json_encode(['status' => 422, 'message' => 'P.O, P.R, and O.B.R must contain numbers and hyphen only.']);
+        echo json_encode(['status' => 422, 'message' => 'P.O, P.R, and O.B.R must contain numbers, slash, and hyphen only.']);
         return false;
     }
 
@@ -9910,7 +9910,7 @@ if (isset($_POST['save_item'])) {
     $purchaseRequestRaw = strtoupper(trim((string)($_POST['pr'] ?? '')));
     $obrRaw = strtoupper(trim((string)($_POST['obr'] ?? '')));
     if (!gso_reference_number_is_valid($purchaseOrderRaw, true) || !gso_reference_number_is_valid($purchaseRequestRaw, true) || !gso_reference_number_is_valid($obrRaw, true)) {
-        echo json_encode(['status' => 422, 'message' => 'P.O, P.R, and O.B.R must contain numbers and hyphen only.']);
+        echo json_encode(['status' => 422, 'message' => 'P.O, P.R, and O.B.R must contain numbers, slash, and hyphen only.']);
         return false;
     }
     if ($requiresPurchaseOrder && $purchaseOrderRaw === '') {

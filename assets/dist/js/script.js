@@ -9677,12 +9677,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   }
 
   function sanitizeReferenceNumberValue(value){
-    return String(value || '').replace(/[^0-9-]/g, '');
+    return String(value || '').replace(/[^0-9/-]/g, '');
   }
 
   function isValidReferenceNumberValue(value){
     var normalized = String(value || '').trim();
-    return normalized === '' || /^[0-9-]+$/.test(normalized);
+    return normalized === '' || /^[0-9/-]+$/.test(normalized);
   }
 
   function applyReferenceNumberFieldState($field){

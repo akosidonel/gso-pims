@@ -5,7 +5,7 @@ This file is generated from git history by `php tools/release.php`.
 ## Unreleased (planned v1.0.16) - June 30, 2026
 
 ### Changed
-- Updated internal project files (6 times)
+- Updated internal project files (7 times)
 - Re-arraged the infobox in the dashboard for better user experience
 - Re-ordering infoBox for better user experience
 - Implementing progressive login lockout on the login page

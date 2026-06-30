@@ -214,7 +214,7 @@ if(!isset($_SESSION['alogin'])){
                   </div>
                   <div class="form-group col-md-6">
                     <label>P.R</label>
-                    <input type="text" class="form-control" id="pr" name="pr" placeholder="Enter purchase request no." inputmode="numeric" pattern="^[0-9\-]+$" title="Numbers and hyphen only.">
+                    <input type="text" class="form-control" id="pr" name="pr" placeholder="Enter purchase request no." inputmode="text" pattern="^[0-9\\-/]+$" title="Numbers, slash, and hyphen only.">
                   </div>
                 </div>
                 <div class="form-row">
@@ -669,7 +669,7 @@ if(!isset($_SESSION['alogin'])){
                       </div>
                       <div class="form-group col-md-6">
                         <label>P.R</label>
-                        <input type="text" class="form-control text-uppercase" id="edit_np_pr" name="purchase_request" placeholder="Enter purchase request no." inputmode="numeric" pattern="^[0-9\-]+$" title="Numbers and hyphen only.">
+                        <input type="text" class="form-control text-uppercase" id="edit_np_pr" name="purchase_request" placeholder="Enter purchase request no." inputmode="text" pattern="^[0-9\\-/]+$" title="Numbers, slash, and hyphen only.">
                       </div>
                     </div>
                     <div class="form-row">
