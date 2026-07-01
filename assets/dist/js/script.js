@@ -12458,7 +12458,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
         var $q = $('#ri_qty');
         var qty = parseInt($q.val(), 10);
         if(!qty || qty < 1){ qty = 1; $q.val(1); }
-        if(qty > 50){ qty = 50; $q.val(50); }
+        if(qty > 1000){ qty = 1000; $q.val(1000); }
         return qty;
       }
 

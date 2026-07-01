@@ -6562,7 +6562,8 @@ if (isset($_POST['manual_return_item'])) {
 
     $qty = isset($_POST['qty']) ? (int)$_POST['qty'] : 1;
     if ($qty < 1) { $qty = 1; }
-    if ($qty > 50) { $qty = 50; }
+    if ($qty > 1000) { $qty = 1000; }
+    if ($qty >= 250) { @set_time_limit(300); }
 
     $fund = strtoupper(trim((string)($_POST['fund'] ?? '')));
     $category = strtoupper(trim((string)($_POST['category'] ?? '')));

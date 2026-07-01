@@ -94,7 +94,7 @@ if (isset($conn) && $conn instanceof mysqli) {
                           <div class="form-row">
                             <div class="form-group col-md-6">
                               <label>Qty</label>
-                              <input type="number" class="form-control" name="qty" id="ri_qty" min="1" value="1" placeholder="Enter qty">
+                              <input type="number" class="form-control" name="qty" id="ri_qty" min="1" max="1000" value="1" placeholder="Enter qty">
                               <small class="text-warning" id="ri_qty_warning" style="display:none;"></small>
                             </div>
                             <div class="form-group col-md-6">
@@ -603,7 +603,7 @@ if (isset($conn) && $conn instanceof mysqli) {
           return qty;
         }
 
-        var maxQty = 50;
+        var maxQty = 1000;
         if (qty > maxQty) {
           qty = maxQty;
           $('#ri_qty').val(maxQty);

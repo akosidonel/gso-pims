@@ -3,6 +3,7 @@ ini_set("display_errors", "1");
 error_reporting(E_ALL);
 require '../database/databaseConnection.php';
 require_once('../tcpdf/tcpdf.php');
+require_once('../include/summarize_print_rows.php');
 
 function prs_splitTextToFitCellHeight(TCPDF $pdf, string $text, float $cellWidth, float $maxHeight): array {
     $normalized = trim(preg_replace('/\s+/', ' ', $text));
@@ -89,6 +90,64 @@ function prs_renderHeader(TCPDF $pdf, string $controlNumber, string $purposeType
     $purpose = 'Purpose: ' . $box($isDisposal) . ' Disposal    ' . $box($isReturnToStock) . ' Returned to Stock    ' . $box(!$isDisposal && !$isReturnToStock) . ' Other __________________';
     $pdf->Cell(0, 6, $purpose, 0, 1, 'L');
     $pdf->Ln(4);
+}
+
+function prs_hasSerial(array $row): bool {
+    $sn1 = strtoupper(trim((string)($row['serial_number'] ?? '')));
+    $sn2 = strtoupper(trim((string)($row['serial_number_2'] ?? '')));
+    return ($sn1 !== '' && $sn1 !== 'N/A') || ($sn2 !== '' && $sn2 !== 'N/A');
+}
+
+function prs_normalizeQty($value): int {
+    $qty = (int)$value;
+    return $qty > 0 ? $qty : 1;
+}
+
+function prs_groupReturnRows(array $rows): array {
+    $out = [];
+    $groups = [];
+
+    foreach ($rows as $row) {
+        $row['qty'] = prs_normalizeQty($row['qty'] ?? 1);
+        $row['par_numbers'] = [trim((string)($row['par_number'] ?? ''))];
+
+        if (prs_hasSerial($row)) {
+            $out[] = $row;
+            continue;
+        }
+
+        $keyParts = [
+            strtoupper(trim((string)($row['emp_id'] ?? ''))),
+            strtoupper(trim((string)($row['dept_id'] ?? ''))),
+            strtoupper(trim((string)($row['item'] ?? ''))),
+            strtoupper(trim((string)($row['model'] ?? ''))),
+            strtoupper(trim((string)($row['description'] ?? ''))),
+            number_format((float)($row['unit_value'] ?? 0), 2, '.', ''),
+        ];
+        $key = implode('|', $keyParts);
+
+        if (!isset($groups[$key])) {
+            $groups[$key] = $row;
+            continue;
+        }
+
+        $groups[$key]['qty'] += $row['qty'];
+        $groups[$key]['par_numbers'][] = trim((string)($row['par_number'] ?? ''));
+    }
+
+    return array_merge($out, array_values($groups));
+}
+
+function prs_formatUnitValue(array $row): string {
+    $qty = prs_normalizeQty($row['qty'] ?? 1);
+    $unitValue = (float)($row['unit_value'] ?? 0);
+    $amount = number_format($unitValue, 2);
+
+    if ($qty <= 1) {
+        return $amount;
+    }
+
+    return $amount . "\nTotal: " . number_format($unitValue * $qty, 2);
 }
 
     if(isset($_GET['reference_number'])){
@@ -197,6 +256,8 @@ if (isset($result) && $result && mysqli_num_rows($result) > 0) {
     } else {
         $purposeType = '';
     }
+
+    $rows = prs_groupReturnRows($rows);
 }
 
 // Build pages; if a DESCRIPTION overflows, continuation always starts on a new page
@@ -258,9 +319,9 @@ foreach ($rows as $r) {
         $qtyVal,
         $unitLabel,
         $descChunks[0],
-        (string)$r['par_number'],
+        collapsePropertyNumbers($r['par_numbers'] ?? [$r['par_number'] ?? '']),
         '',
-        number_format((float)$r['unit_value'], 2)
+        prs_formatUnitValue($r)
     ]);
 
     // If more chunks exist, start them on a new page (avoid splitting in the middle of the table)
