@@ -2,7 +2,7 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.0.16) - June 30, 2026
+## Unreleased (planned v1.0.16) - July 6, 2026
 
 ### Changed
 - Updated internal project files (7 times)
@@ -17,7 +17,7 @@ This file is generated from git history by `php tools/release.php`.
 
 ### Fixed
 - Bug fix on change log and version number
-- General bug fixes and maintenance improvements (6 times)
+- General bug fixes and maintenance improvements (7 times)
 - Minor bug fix and improvements
 - Bug fix in the change log and auth files
 - Fix the mitchmatch of the version number

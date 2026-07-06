@@ -854,10 +854,9 @@ class PDF extends TCPDF
         $contentStartY = 54;
         $totalReserveMm = ($grandTotal !== null) ? 12.0 : 0.0;
         $usableHeightMm = max(20, $footerContentTopY - $contentStartY - 1.0 - $totalReserveMm);
-        $baseMaxLines   = max(8, (int)floor($usableHeightMm / $lineHeightMm));
-        $visibleRowCount = max(1, count($rows));
-        $tableSplitSafetyLines = 13;
-        $maxLinesPerPage = max(6, (int)floor($baseMaxLines / $visibleRowCount) - $tableSplitSafetyLines);
+        $baseMaxLines = max(8, (int)floor($usableHeightMm / $lineHeightMm));
+        $usedLines = 0;
+        $minimumLinesForNextRow = 3;
 
         $continuationOnly = count($rows) > 0;
         foreach ($rows as $row) {
@@ -900,7 +899,8 @@ class PDF extends TCPDF
         }
 
         $idx = 1;
-        foreach($rows as $r){
+        $rowCount = count($rows);
+        foreach($rows as $rowIndex => $r){
           $desc     = (string)($r['description'] ?? '');
             $baseDesc = trim($desc);
           $noSplit = !empty($r['no_split']);
@@ -909,8 +909,12 @@ class PDF extends TCPDF
             $descRest  = '';
           } else {
             $this->SetFont('dejavusans', '', 8);
-            [$descFirst, $descRest] = gso_split_rendered_lines($this, $baseDesc, $descWidthMm, $maxLinesPerPage);
+            $remainingRows = max(0, $rowCount - $rowIndex - 1);
+            $reservedLines = $remainingRows * $minimumLinesForNextRow;
+            $availableLines = max(4, $baseMaxLines - $usedLines - $reservedLines);
+            [$descFirst, $descRest] = gso_split_rendered_lines($this, $baseDesc, $descWidthMm, $availableLines);
           }
+          $renderedLineCount = max(1, (int)$this->getNumLines($descFirst, $descWidthMm));
           $descFirstSafe = htmlspecialchars($descFirst, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
           $qty = (int)($r['qty'] ?? 1);
@@ -966,7 +970,11 @@ class PDF extends TCPDF
                 ];
             } else {
                 $cell .= $serialBlockHtml;
+                if (trim(strip_tags($serialBlockHtml)) !== '') {
+                  $renderedLineCount += max(1, (int)$this->getNumLines(trim(strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $serialBlockHtml))), $descWidthMm));
+                }
             }
+            $usedLines += $renderedLineCount + 1;
 
             $isContinuationOnly = !empty($r['is_continuation']);
             $qtyCell = $isContinuationOnly ? '' : (string)$qty;
@@ -1075,7 +1083,7 @@ foreach ($printRows as $r) {
 foreach ($pageOrder as $pk) {
   $bucket = $pageBuckets[$pk];
   $rows = $bucket['rows'];
-  $maxItemsPerPage = 3;
+  $maxItemsPerPage = 8;
   $rowPages = array_chunk($rows, $maxItemsPerPage);
 
   // startPageGroup() must be called BEFORE AddPage() — it marks the *next* added

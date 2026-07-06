@@ -210,7 +210,7 @@ if ($refs_csv !== '') {
         // NEW purchases
         $sqlNew = "SELECT
             np.id AS new_purchase_id,
-                np.property_number AS par_number,
+                COALESCE(NULLIF(np.property_number, ''), h.par_number, CONCAT('NPID:', np.id)) AS par_number,
                 h.reference_number,
                 '' AS previous_user,
                 '' AS previous_dept,
@@ -333,7 +333,7 @@ if ($refs_csv !== '') {
     // NEW purchases
     $sqlNew = "SELECT
             np.id AS new_purchase_id,
-            np.property_number AS par_number,
+            COALESCE(NULLIF(np.property_number, ''), h.par_number, CONCAT('NPID:', np.id)) AS par_number,
             h.reference_number,
             '' AS previous_user,
             '' AS previous_dept,
@@ -724,7 +724,62 @@ function gso_ics_row_height($pdf, array $row, array $colWidths): float {
     $pdf->SetFont('dejavusans', 'B', 7.5);
     $descriptionLines = (int)$pdf->getNumLines(gso_ics_description($row), $colWidths[4]);
     $lineCount = max(1, $descriptionLines);
-    return max(9.5, min(48.0, ($lineCount * 2.8) + 2.4));
+    return max(9.5, ($lineCount * 4.0) + 2.8);
+}
+
+function gso_ics_split_text_by_lines($pdf, string $text, float $widthMm, int $maxLines): array {
+    $words = preg_split('/\s+/', trim($text));
+    $words = array_values(array_filter($words ?: [], function ($word) {
+        return $word !== '';
+    }));
+    if (count($words) === 0) { return ['', '']; }
+
+    $current = [];
+    foreach ($words as $word) {
+        $candidate = trim(implode(' ', array_merge($current, [$word])));
+        $lineCount = (int)$pdf->getNumLines($candidate, $widthMm);
+        if ($lineCount <= $maxLines || count($current) === 0) {
+            $current[] = $word;
+            continue;
+        }
+        break;
+    }
+
+    return [
+        implode(' ', $current),
+        implode(' ', array_slice($words, count($current)))
+    ];
+}
+
+function gso_ics_split_row_for_body($pdf, array $row, array $colWidths, float $availableHeight): array {
+    $maxLines = max(1, (int)floor(($availableHeight - 2.8) / 4.0));
+    $description = trim((string)($row['description'] ?? ''));
+    if ($description === '' || gso_ics_row_height($pdf, $row, $colWidths) <= $availableHeight) {
+        return [$row];
+    }
+
+    $parts = [];
+    $remaining = $description;
+    $isFirst = true;
+    while ($remaining !== '') {
+        [$first, $rest] = gso_ics_split_text_by_lines($pdf, $remaining, $colWidths[4], $maxLines);
+        if ($first === '') {
+            $first = $remaining;
+            $rest = '';
+        }
+
+        $part = $row;
+        $part['description'] = $first;
+        if (!$isFirst) {
+            $part['is_continuation'] = true;
+        }
+        $parts[] = $part;
+
+        $remaining = trim($rest);
+        $isFirst = false;
+    }
+
+    return $parts;
 }
 
 function gso_ics_new_batches($pdf, array $rows, array $colWidths, float $availableHeight): array {
@@ -732,16 +787,19 @@ function gso_ics_new_batches($pdf, array $rows, array $colWidths, float $availab
     $current = [];
     $currentHeight = 0.0;
     foreach ($rows as $row) {
-        $rowHeight = gso_ics_row_height($pdf, $row, $colWidths);
-        $wouldOverflowHeight = count($current) > 0 && (($currentHeight + $rowHeight) > $availableHeight);
-        $wouldOverflowCount = count($current) >= 10;
-        if ($wouldOverflowHeight || $wouldOverflowCount) {
-            $batches[] = $current;
-            $current = [];
-            $currentHeight = 0.0;
+        $splitRows = gso_ics_split_row_for_body($pdf, $row, $colWidths, $availableHeight);
+        foreach ($splitRows as $splitRow) {
+            $rowHeight = min(gso_ics_row_height($pdf, $splitRow, $colWidths), $availableHeight);
+            $wouldOverflowHeight = count($current) > 0 && (($currentHeight + $rowHeight) > $availableHeight);
+            $wouldOverflowCount = count($current) >= 10;
+            if ($wouldOverflowHeight || $wouldOverflowCount) {
+                $batches[] = $current;
+                $current = [];
+                $currentHeight = 0.0;
+            }
+            $current[] = $splitRow;
+            $currentHeight += $rowHeight;
         }
-        $current[] = $row;
-        $currentHeight += $rowHeight;
     }
     if (count($current) > 0) { $batches[] = $current; }
     return $batches;
@@ -859,6 +917,7 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
     $pdf->SetXY($startX, $startY + 14);
     $rowIndex = 0;
     foreach ($rows as $row) {
+        $isContinuation = !empty($row['is_continuation']);
         $qty = (int)($row['qty'] ?? 1);
         if ($qty < 1) { $qty = 1; }
         $unitValue = (float)($row['unit_value'] ?? 0);
@@ -867,12 +926,12 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
         $xRow = $pdf->GetX();
         $yRow = $pdf->GetY();
         $pdf->SetFont('dejavusans', 'B', 7.5);
-        $pdf->MultiCell($colWidths[0], $rowHeight, (string)$qty, 'LR', 'C', false, 0, $xRow, $yRow, true, 0, false, true, $rowHeight, 'T');
+        $pdf->MultiCell($colWidths[0], $rowHeight, $isContinuation ? '' : (string)$qty, 'LR', 'C', false, 0, $xRow, $yRow, true, 0, false, true, $rowHeight, 'T');
         $pdf->SetFont('dejavusans', 'B', 6);
-        $pdf->MultiCell($colWidths[1], $rowHeight, gso_ics_unit_label($row), 'LR', 'C', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
+        $pdf->MultiCell($colWidths[1], $rowHeight, $isContinuation ? '' : gso_ics_unit_label($row), 'LR', 'C', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
         $pdf->SetFont('dejavusans', 'B', 7.5);
-        $pdf->MultiCell($colWidths[2], $rowHeight, '₱ ' . number_format($unitValue, 2), 'LR', 'R', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
-        $pdf->MultiCell($colWidths[3], $rowHeight, '₱ ' . number_format($totalValue, 2), 'LR', 'R', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
+        $pdf->MultiCell($colWidths[2], $rowHeight, $isContinuation ? '' : '₱ ' . number_format($unitValue, 2), 'LR', 'R', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
+        $pdf->MultiCell($colWidths[3], $rowHeight, $isContinuation ? '' : '₱ ' . number_format($totalValue, 2), 'LR', 'R', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
         $pdf->MultiCell($colWidths[4], $rowHeight, gso_ics_description($row), 'LR', 'L', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
         $pdf->MultiCell($colWidths[5], $rowHeight, '', 'LR', 'C', false, 0, '', '', true, 0, false, true, $rowHeight, 'T', true);
         $pdf->MultiCell($colWidths[6], $rowHeight, '', 'LR', 'C', false, 1, '', '', true, 0, false, true, $rowHeight, 'T');
