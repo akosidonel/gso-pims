@@ -9,11 +9,12 @@ This file is generated from git history by `php tools/release.php`.
 - Re-arraged the infobox in the dashboard for better user experience
 - Re-ordering infoBox for better user experience
 - Implementing progressive login lockout on the login page
-- Merge branch 'main' of https://github.com/akosidonel/gso-pims (2 times)
+- Merge branch 'main' of https://github.com/akosidonel/gso-pims (3 times)
 - Increase the number of sets from 10 to 100 in the edit item or equipment modal
 - Improvements on par/ics no
 - Validation has been added in the input name field in the add employee information
 - Update the Unit selection
+- Can now summarize the total amount of the returned items in the return slip and increase the quantity of the returned items in the inventory
 
 ### Fixed
 - Bug fix on change log and version number
@@ -33,3 +34,4 @@ This file is generated from git history by `php tools/release.php`.
 - Fix bugs on printing ICS docs not showing the correct data
 - Fix the double count issue on inventory custodian slip and fix the issue on the change log page
 - Fix the update issues regarding the input of this "/" character in the p.o and obr input field
+- Fix the issue on the update of adding new employee in the edit item or equipment

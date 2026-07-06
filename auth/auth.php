@@ -6562,7 +6562,8 @@ if (isset($_POST['manual_return_item'])) {
 
     $qty = isset($_POST['qty']) ? (int)$_POST['qty'] : 1;
     if ($qty < 1) { $qty = 1; }
-    if ($qty > 50) { $qty = 50; }
+    if ($qty > 1000) { $qty = 1000; }
+    if ($qty >= 250) { @set_time_limit(300); }
 
     $fund = strtoupper(trim((string)($_POST['fund'] ?? '')));
     $category = strtoupper(trim((string)($_POST['category'] ?? '')));
@@ -9153,6 +9154,30 @@ if (isset($_POST['update_new_purchase_group'])) {
         $category = strtoupper(trim((string)$value));
         return in_array($category, ['PAR', 'ICS'], true) ? $category : '';
     };
+    $employeeCreateCache = [];
+    $resolveNewPurchaseEmployeeId = function ($employeeRaw, $newEmployeeName, $newEmployeePosition) use ($conn, $departmentCode, &$employeeCreateCache) {
+        $employeeRaw = trim((string)$employeeRaw);
+        if (strtolower($employeeRaw) !== 'add_new_emp') {
+            return $employeeRaw !== '' ? (int)$employeeRaw : 0;
+        }
+
+        if ($newEmployeeName === '' || $newEmployeePosition === '') {
+            throw new RuntimeException('New employee name and position are required for all add-new rows.');
+        }
+
+        $cacheKey = $departmentCode . '|' . $newEmployeeName . '|' . $newEmployeePosition;
+        if (isset($employeeCreateCache[$cacheKey])) {
+            return $employeeCreateCache[$cacheKey];
+        }
+
+        $createdEmployee = gso_create_employee_atomic($conn, $newEmployeeName, $departmentCode, $newEmployeePosition, 1, null);
+        if (!isset($createdEmployee['ok']) || !$createdEmployee['ok']) {
+            throw new RuntimeException($createdEmployee['message'] ?? 'Unable to create employee for one of the sets.');
+        }
+
+        $employeeCreateCache[$cacheKey] = (int)$createdEmployee['emp_id'];
+        return $employeeCreateCache[$cacheKey];
+    };
     $nextPropertyNumber = function ($current) {
         $parts = explode('-', (string)$current);
         if (count($parts) < 4) { return (string)$current; }
@@ -9388,19 +9413,7 @@ if (isset($_POST['update_new_purchase_group'])) {
                 || trim((string)($currentRow['department_code'] ?? '')) !== $departmentCode
             );
 
-            $employeeId = 0;
-            if (strtolower($employeeRaw) === 'add_new_emp') {
-                if ($newEmployeeName === '' || $newEmployeePosition === '') {
-                    throw new RuntimeException('New employee name and position are required for all add-new rows.');
-                }
-                $createdEmployee = gso_create_employee_atomic($conn, $newEmployeeName, $departmentCode, $newEmployeePosition, 1, null);
-                if (!$createdEmployee || !isset($createdEmployee['emp_id'])) {
-                    throw new RuntimeException('Unable to create employee for one of the sets.');
-                }
-                $employeeId = (int)$createdEmployee['emp_id'];
-            } elseif ($employeeRaw !== '') {
-                $employeeId = (int)$employeeRaw;
-            }
+            $employeeId = $resolveNewPurchaseEmployeeId($employeeRaw, $newEmployeeName, $newEmployeePosition);
 
             $serial1Values = [];
             $serial2Values = [];
