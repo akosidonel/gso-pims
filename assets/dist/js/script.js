@@ -8369,6 +8369,12 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     $row.find('.js-bundle-par-ics-preview').val(code);
   }
 
+  function parIcsMatchesSelectedYear(code, selectedYear){
+    var year = String(selectedYear || '').trim().toUpperCase();
+    var value = String(code || '').trim().toUpperCase();
+    return !year || value.indexOf(year) === 0;
+  }
+
   function refreshBundleParIcsNumbers(){
     var selectedYear = String($('#year').val() || '').trim().toUpperCase();
     bundleRowEls().each(function(){
@@ -8380,7 +8386,7 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
         return;
       }
       var existingCode = getItemParIcsCodeByCategory(category) || bundleParIcsCache[cacheKey] || '';
-      if (existingCode && selectedYear && existingCode.indexOf(selectedYear + '-') !== 0) {
+      if (existingCode && !parIcsMatchesSelectedYear(existingCode, selectedYear)) {
         existingCode = '';
       }
       if (existingCode) {

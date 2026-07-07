@@ -133,21 +133,24 @@ if(!function_exists('gso_normalize_par_ics_year_key')){
     function gso_normalize_par_ics_year_key($value){
         $text = strtoupper(trim((string)$value));
         if ($text === '') {
-            return date('Y');
+            return date('Ym');
         }
         if (preg_match('/^\d{4}$/', $text)) {
+            return $text . date('m');
+        }
+        if (preg_match('/^\d{6}$/', $text)) {
             return $text;
         }
         if ($text === 'RFS') {
             return $text;
         }
-        if (preg_match('/^(\d{4})-\d{2}-\d{2}$/', $text, $matches)) {
-            return $matches[1];
+        if (preg_match('/^(\d{4})-(\d{2})-\d{2}$/', $text, $matches)) {
+            return $matches[1] . $matches[2];
         }
         if (preg_match('/(\d{4})/', $text, $matches)) {
-            return $matches[1];
+            return $matches[1] . date('m');
         }
-        return date('Y');
+        return date('Ym');
     }
 }
 if(!function_exists('gso_build_par_ics_prefix')){
