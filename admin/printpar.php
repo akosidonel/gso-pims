@@ -831,7 +831,10 @@ class PDF extends TCPDF
       $this->SetAutoPageBreak(true, 82);
       $this->SetMargins(15, 54, 15);
       $this->SetFont('dejavusans','',8);
-        $this->SetY(54);
+        $tableTopY = 54.0;
+        $firstRowTopY = $tableTopY + 5.0;
+
+        $this->SetY($tableTopY);
         $this->SetX(15);
 
         $html = '
@@ -851,7 +854,7 @@ class PDF extends TCPDF
         $lineHeightMm  = 3.2;
         $footerTopY    = $this->getPageHeight() - 82;
         $footerContentTopY = $this->getPageHeight() - 102;
-        $contentStartY = 54;
+        $contentStartY = $tableTopY;
         $totalReserveMm = ($grandTotal !== null) ? 12.0 : 0.0;
         $usableHeightMm = max(20, $footerContentTopY - $contentStartY - 1.0 - $totalReserveMm);
         $baseMaxLines = max(8, (int)floor($usableHeightMm / $lineHeightMm));
@@ -869,7 +872,7 @@ class PDF extends TCPDF
           $this->SetFont('dejavusans', '', 8);
           $this->SetAutoPageBreak(false, 0);
           $x = 45.0;
-          $y = $contentStartY;
+          $y = $firstRowTopY;
           $width = 120.0;
           $lineHeight = 3.4;
           $maxContentY = $this->getPageHeight() - 74;
@@ -883,7 +886,7 @@ class PDF extends TCPDF
             foreach (gso_wrap_pdf_text_lines($this, $text, $width) as $line) {
               if ($y + $lineHeight > $maxContentY) {
                 $this->AddPage();
-                $y = $contentStartY;
+                $y = $firstRowTopY;
               }
               $this->SetXY($x, $y);
               $this->Cell($width, $lineHeight, $line, 0, 1, 'L');
@@ -1083,7 +1086,7 @@ foreach ($printRows as $r) {
 foreach ($pageOrder as $pk) {
   $bucket = $pageBuckets[$pk];
   $rows = $bucket['rows'];
-  $maxItemsPerPage = 8;
+  $maxItemsPerPage = 2;
   $rowPages = array_chunk($rows, $maxItemsPerPage);
 
   // startPageGroup() must be called BEFORE AddPage() — it marks the *next* added
