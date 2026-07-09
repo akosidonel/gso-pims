@@ -726,6 +726,7 @@ function gso_wrap_pdf_text_lines($pdf, string $text, float $widthMm): array {
   if (!$paragraphs) { return []; }
 
   foreach ($paragraphs as $paragraph) {
+    $paragraph = preg_replace('/([*,;:])(?=\S)/', '$1 ', trim($paragraph));
     $words = preg_split('/\s+/', trim($paragraph));
     $words = array_values(array_filter($words ?: [], function($word) { return $word !== ''; }));
     if (count($words) === 0) {
@@ -749,6 +750,25 @@ function gso_wrap_pdf_text_lines($pdf, string $text, float $widthMm): array {
   }
 
   return $lines;
+}
+
+function gso_wrap_pdf_text_segments($pdf, string $text, float $widthMm): array {
+  $segments = [];
+  $paragraphs = preg_split('/\R+/', trim($text));
+  if (!$paragraphs) { return []; }
+
+  foreach ($paragraphs as $paragraph) {
+    $lines = gso_wrap_pdf_text_lines($pdf, $paragraph, $widthMm);
+    $lastIndex = count($lines) - 1;
+    foreach ($lines as $index => $line) {
+      $segments[] = [
+        'text' => $line,
+        'justify' => ($index < $lastIndex),
+      ];
+    }
+  }
+
+  return $segments;
 }
 
 class PDF extends TCPDF  
@@ -816,6 +836,40 @@ class PDF extends TCPDF
         $this->writeHTMLCell(0, 0, 15, $targetY, $html, 0, 1, false, true, 'L', false);
     }
 
+    protected function drawJustifiedDescriptionLine($x, $y, $width, $height, $text, $justify) {
+        $text = trim((string)$text);
+        $words = preg_split('/\s+/', $text);
+        $words = array_values(array_filter($words ?: [], function($word) { return $word !== ''; }));
+
+        if (!$justify || count($words) < 2) {
+            $this->SetXY($x, $y);
+            $this->Cell($width, $height, $text, 0, 1, 'L');
+            return;
+        }
+
+        $wordsWidth = 0.0;
+        foreach ($words as $word) {
+            $wordsWidth += $this->GetStringWidth($word);
+        }
+
+        $gapCount = count($words) - 1;
+        $gapWidth = ($width - $wordsWidth) / $gapCount;
+        $spaceWidth = max(0.1, $this->GetStringWidth(' '));
+        if ($gapWidth <= 0 || $wordsWidth < ($width * 0.68) || $gapWidth > ($spaceWidth * 3.5)) {
+            $this->SetXY($x, $y);
+            $this->Cell($width, $height, $text, 0, 1, 'L');
+            return;
+        }
+
+        $cursorX = $x;
+        foreach ($words as $index => $word) {
+            $wordWidth = $this->GetStringWidth($word);
+            $this->SetXY($cursorX, $y);
+            $this->Cell($wordWidth, $height, $word, 0, 0, 'L');
+            $cursorX += $wordWidth + ($index < $gapCount ? $gapWidth : 0);
+        }
+    }
+
     public function header(){
         $this->Ln(42);
         $this->SetFont('dejavusans','',10);
@@ -828,98 +882,28 @@ class PDF extends TCPDF
     }
 
     function renderTable($rows, $continuations = [], $grandTotal = null){
-      $this->SetAutoPageBreak(true, 82);
-      $this->SetMargins(15, 54, 15);
+      $bodyStartY = 63.0;
+      $textStartY = $bodyStartY + 2.0;
+      $this->SetAutoPageBreak(false, 0);
+      $this->SetMargins(15, $bodyStartY, 15);
       $this->SetFont('dejavusans','',8);
-        $tableTopY = 54.0;
-        $firstRowTopY = $tableTopY + 5.0;
 
-        $this->SetY($tableTopY);
-        $this->SetX(15);
-
-        $html = '
-          <table cellpadding="5" cellspacing="0" border="0">
-          <tr align="center">
-            <td width="37" align="center"></td>
-            <td width="42" align="center"></td>
-            <td width="246" align="justified"></td>
-            <td width="47"></td>
-            <td width="79"></td>
-            <td></td>
-          </tr>
-        ';
-
-        // Description column: width="246" px → 123 mm (same 0.5 mm/px ratio as printpt.php width="220" → 110 mm)
-        $descWidthMm   = 123.0;
-        $lineHeightMm  = 3.2;
-        $footerTopY    = $this->getPageHeight() - 82;
+        $descWidthMm   = 87.0;
+        $lineHeightMm  = 3.4;
         $footerContentTopY = $this->getPageHeight() - 102;
-        $contentStartY = $tableTopY;
-        $totalReserveMm = ($grandTotal !== null) ? 12.0 : 0.0;
-        $usableHeightMm = max(20, $footerContentTopY - $contentStartY - 1.0 - $totalReserveMm);
-        $baseMaxLines = max(8, (int)floor($usableHeightMm / $lineHeightMm));
-        $usedLines = 0;
-        $minimumLinesForNextRow = 3;
+        $descriptionLimitY = $this->getPageHeight() - 82;
+        $totalTopLimitY = $footerContentTopY - 12.0;
+        $xQty = 16.5;
+        $xUnit = 30.0;
+        $xDesc = 45.0;
+        $xYear = 134.0;
+        $xUnitValue = 151.0;
+        $xTotal = 182.0;
+        $y = $textStartY;
 
-        $continuationOnly = count($rows) > 0;
-        foreach ($rows as $row) {
-          if (empty($row['is_continuation'])) {
-            $continuationOnly = false;
-            break;
-          }
-        }
-        if ($continuationOnly) {
-          $this->SetFont('dejavusans', '', 8);
-          $this->SetAutoPageBreak(false, 0);
-          $x = 45.0;
-          $y = $firstRowTopY;
-          $width = 120.0;
-          $lineHeight = 3.4;
-          $maxContentY = $this->getPageHeight() - 74;
-          foreach ($rows as $row) {
-            $serialText = preg_replace('/<br\s*\/?>/i', "\n", (string)($row['serial_block_html'] ?? ''));
-            $serialText = html_entity_decode(trim(strip_tags((string)$serialText)), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-            $text = trim((string)($row['description'] ?? ''));
-            if ($serialText !== '') {
-              $text = trim($text . "\n\n" . $serialText);
-            }
-            foreach (gso_wrap_pdf_text_lines($this, $text, $width) as $line) {
-              if ($y + $lineHeight > $maxContentY) {
-                $this->AddPage();
-                $y = $firstRowTopY;
-              }
-              $this->SetXY($x, $y);
-              $this->Cell($width, $lineHeight, $line, 0, 1, 'L');
-              $y += $lineHeight;
-            }
-            $y += 1.5;
-          }
-          $this->SetAutoPageBreak(true, 82);
-          if ($grandTotal !== null) {
-            $this->drawGrandTotalBlock($grandTotal, $footerContentTopY);
-          }
-          return [];
-        }
-
-        $idx = 1;
-        $rowCount = count($rows);
-        foreach($rows as $rowIndex => $r){
+        foreach($rows as $r){
           $desc     = (string)($r['description'] ?? '');
-            $baseDesc = trim($desc);
-          $noSplit = !empty($r['no_split']);
-          if ($noSplit) {
-            $descFirst = $baseDesc;
-            $descRest  = '';
-          } else {
-            $this->SetFont('dejavusans', '', 8);
-            $remainingRows = max(0, $rowCount - $rowIndex - 1);
-            $reservedLines = $remainingRows * $minimumLinesForNextRow;
-            $availableLines = max(4, $baseMaxLines - $usedLines - $reservedLines);
-            [$descFirst, $descRest] = gso_split_rendered_lines($this, $baseDesc, $descWidthMm, $availableLines);
-          }
-          $renderedLineCount = max(1, (int)$this->getNumLines($descFirst, $descWidthMm));
-          $descFirstSafe = htmlspecialchars($descFirst, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-
+          $baseDesc = trim($desc);
           $qty = (int)($r['qty'] ?? 1);
           if ($qty < 1) { $qty = 1; }
 
@@ -932,7 +916,6 @@ class PDF extends TCPDF
             $uvSafe = htmlspecialchars('₱ ' . number_format($uv, 2, '.', ','), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
             $rowTotalSafe = htmlspecialchars('₱ ' . number_format($rowTotal, 2, '.', ','), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
-            $cell = $descFirstSafe;
             $serialBlockHtml = '';
             if (isset($r['serial_block_html'])) {
                 $serialBlockHtml = (string)$r['serial_block_html'];
@@ -961,23 +944,20 @@ class PDF extends TCPDF
                 }
             }
 
-            if (!$noSplit && trim($descRest) !== '') {
-                $continuations[] = [
-                    'qty' => $qty,
-                'unit' => (string)($r['unit'] ?? ''),
-                    'unit_value' => $uv,
-                    'date_aquired' => $rawDate,
-                    'item_condition' => (string)($r['item_condition'] ?? ''),
-                    'description_rest' => $descRest,
-                    'serial_block_html' => $serialBlockHtml,
-                ];
-            } else {
-                $cell .= $serialBlockHtml;
-                if (trim(strip_tags($serialBlockHtml)) !== '') {
-                  $renderedLineCount += max(1, (int)$this->getNumLines(trim(strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $serialBlockHtml))), $descWidthMm));
-                }
+            $serialText = preg_replace('/<br\s*\/?>/i', "\n", $serialBlockHtml);
+            $serialText = html_entity_decode(trim(strip_tags((string)$serialText)), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $rowText = $baseDesc;
+            if ($serialText !== '') {
+              $rowText = trim($rowText . "\n\n" . $serialText);
             }
-            $usedLines += $renderedLineCount + 1;
+            $segments = gso_wrap_pdf_text_segments($this, $rowText, $descWidthMm);
+            if (count($segments) === 0) {
+              $segments = [['text' => '', 'justify' => false]];
+            }
+            if ($y + min(3, count($segments)) * $lineHeightMm > $descriptionLimitY) {
+              $this->AddPage();
+              $y = $textStartY;
+            }
 
             $isContinuationOnly = !empty($r['is_continuation']);
             $qtyCell = $isContinuationOnly ? '' : (string)$qty;
@@ -988,27 +968,45 @@ class PDF extends TCPDF
               $rowTotalSafe = '';
             }
 
-            $html .= '
-                <tr>
-                    <td>' . htmlspecialchars($qtyCell, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>
-                    <td>' . htmlspecialchars($unitCell, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>
-                    <td style="padding-left:5mm">' . $cell . '</td>
-                    <td>' . $yearSafe . '</td>
-                    <td align="right">' . $uvSafe . '</td>
-                    <td align="right">' . $rowTotalSafe . '</td>
-                </tr>
-            ';
+            $this->SetXY($xQty, $y);
+            $this->Cell(10, $lineHeightMm, $qtyCell, 0, 0, 'L');
+            $this->SetXY($xUnit, $y);
+            $this->Cell(12, $lineHeightMm, $unitCell, 0, 0, 'L');
+            $this->SetXY($xYear, $y);
+            $this->Cell(12, $lineHeightMm, $yearSafe, 0, 0, 'L');
+            $this->SetXY($xUnitValue, $y);
+            $this->Cell(27, $lineHeightMm, $uvSafe, 0, 0, 'R');
+            $this->SetXY($xTotal, $y);
+            $this->Cell(27, $lineHeightMm, $rowTotalSafe, 0, 0, 'R');
 
-            $idx++;
+            foreach ($segments as $segment) {
+              if ($y + $lineHeightMm > $descriptionLimitY) {
+                $this->AddPage();
+                $y = $textStartY;
+              }
+              $this->drawJustifiedDescriptionLine(
+                $xDesc,
+                $y,
+                $descWidthMm,
+                $lineHeightMm,
+                (string)($segment['text'] ?? ''),
+                !empty($segment['justify'])
+              );
+              $y += $lineHeightMm;
+            }
+            $y += 2.0;
         }
 
-        $html .= '</table>';
-        $this->writeHTML($html,true,false,false,false,'');
-        if ($grandTotal !== null && count($continuations) === 0) {
+        if ($grandTotal !== null) {
+          if ($y > $totalTopLimitY) {
+            $this->AddPage();
+            $y = $textStartY;
+          }
+          $this->SetY($y);
           $this->drawGrandTotalBlock($grandTotal, $footerContentTopY);
         }
-
-        return $continuations;
+        $this->SetAutoPageBreak(true, 82);
+        return [];
     }
 
     public function Footer(){
@@ -1086,7 +1084,7 @@ foreach ($printRows as $r) {
 foreach ($pageOrder as $pk) {
   $bucket = $pageBuckets[$pk];
   $rows = $bucket['rows'];
-  $maxItemsPerPage = 2;
+  $maxItemsPerPage = 8;
   $rowPages = array_chunk($rows, $maxItemsPerPage);
 
   // startPageGroup() must be called BEFORE AddPage() — it marks the *next* added
