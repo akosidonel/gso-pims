@@ -4963,9 +4963,9 @@ $(function(){
         }
         if (year === 'RFS' && unitValue !== 0) {
           error = 'Unit Value must be 0.00 for Found at Station.';
-        } else if (category === 'ICS' && unitValue >= 50001) {
-          error = 'Unit Value for ICS must be less than 50,000.00.';
-        } else if (category === 'PAR' && unitValue < 50001) {
+        } else if (category === 'ICS' && unitValue >= 50000) {
+          error = 'Unit Value for ICS must be 49,999.99 or below.';
+        } else if (category === 'PAR' && unitValue < 50000) {
           error = 'Unit Value for PAR must be 50,000.00 or above.';
         }
 
@@ -9855,11 +9855,11 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
           error = 'Unit Value must be 0.00 for Found at Station.';
         }
       } else if (category === 'ICS') {
-        if (unitvalue >= 50001) {
-          error = 'Unit Value for ICS must be less than 50,000.00.';
+        if (unitvalue >= 50000) {
+          error = 'Unit Value for ICS must be 49,999.99 or below.';
         }
       } else if (category === 'PAR') {
-        if (unitvalue < 50001) {
+        if (unitvalue < 50000) {
           error = 'Unit Value for PAR must be 50,000.00 or above.';
         }
       }
