@@ -21,11 +21,17 @@ class PDF extends TCPDF
     public $new_user = '';
     public $new_dept = '';
     public $fund_cluster = 'GENERAL FUND';
+    public $parno = '';
     public $itemPage = 1;
     public $itemTotal = 1;
 
     public function header(){
-        $this->Ln(44);
+        // Match the PAR/ICS No. position used by printpar.php.
+        $this->Ln(42);
+        $this->SetFont('dejavusans','',8);
+        $this->SetX(168);
+        $this->Cell(42,5,(string)$this->parno,0,0,'L');
+        $this->SetY($this->GetY() + 2);
         $this->SetFont('dejavusans','',8);
         $this->SetX(28);
         $this->Cell(130,5,"CITY GOVERNMENT OF PARAÑAQUE",0,1);
@@ -432,6 +438,7 @@ class PDF extends TCPDF
               $pr = $row['purchase_request'];
               $obr = $row['obr_number'];
               $code = $row['account_code'];
+              $parIcsNumber = trim((string)($row['par_ics_number'] ?? ''));
               $pvuser = $row['previous_user'];
               $pvdept = $row['previous_dept'];
               $newuser = $row['user'];
@@ -518,6 +525,7 @@ class PDF extends TCPDF
               foreach ($chunks as $idx => $chunk_text) {
                   // Add a page for this chunk (this closes previous page)
                   $pdf->fund_cluster = ($fundCluster === 'SEF' || $fundCluster === 'SPECIAL EDUCATION FUND') ? 'SPECIAL EDUCATION FUND' : 'GENERAL FUND';
+                  $pdf->parno = $parIcsNumber;
                   $pdf->AddPage();
                   if ($idx === 0) {
                       // Set total pages for this item after starting its first page

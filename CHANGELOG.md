@@ -2,7 +2,7 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.0.16) - July 6, 2026
+## Unreleased (planned v1.0.16) - July 12, 2026
 
 ### Changed
 - Updated internal project files (7 times)
@@ -15,6 +15,8 @@ This file is generated from git history by `php tools/release.php`.
 - Validation has been added in the input name field in the add employee information
 - Update the Unit selection
 - Can now summarize the total amount of the returned items in the return slip and increase the quantity of the returned items in the inventory
+- Continuation pages now start their description text at the same visual offset as page 1, matching the normal table spacer between the header and the first description row
+- Adjusted the threshold in both PAR & ICS unit values
 
 ### Fixed
 - Bug fix on change log and version number
@@ -35,3 +37,6 @@ This file is generated from git history by `php tools/release.php`.
 - Fix the double count issue on inventory custodian slip and fix the issue on the change log page
 - Fix the update issues regarding the input of this "/" character in the p.o and obr input field
 - Fix the issue on the update of adding new employee in the edit item or equipment
+- Fixed the PAR/ICS number generation so the Add Item modal goes back to YYYYMM-P####/YYYYMM-I####
+- Fixed the space-gap issue and implementation of justified text in the description
+- Fix existing PAR/ICS No. to remains unchanged during transfers

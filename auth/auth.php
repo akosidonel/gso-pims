@@ -4763,6 +4763,7 @@ if(!function_exists('gso_fetch_printpt_rows')){
                 COALESCE(pg.purchase_request, ps.purchase_request) AS purchase_request,
                 COALESCE(pg.obr_number, ps.obr_number) AS obr_number,
                 COALESCE(pg.account_code, ps.account_code) AS account_code,
+                COALESCE(pg.par_ics_number, ps.par_ics_number) AS par_ics_number,
                 UPPER(COALESCE(pg.category, ps.category)) AS category,
                 UPPER(COALESCE(pg.fund, ps.fund)) AS fund
             FROM items_user_history AS i
@@ -7479,6 +7480,22 @@ if (isset($_POST['bulkTransferPar'])) {
             $prevEmpName  = mysqli_real_escape_string($conn, get_emp_name($conn, $currRow['emp_id']));
             $prevDeptName = mysqli_real_escape_string($conn, get_dept_name($conn, $currRow['dept_id']));
 
+            // Keep the property's existing PAR/ICS No. during transfer. Generate one
+            // only for older records where the value is currently empty.
+            $sourceTable  = $srcIsGF ? 'par_gen_fund' : 'property_sef';
+            $sourcePnCol  = $srcIsGF ? 'par_number' : 'property_number';
+            $numberResult = mysqli_query($conn, "SELECT par_ics_number FROM $sourceTable WHERE $sourcePnCol='$parSafe' LIMIT 1");
+            if (!$numberResult || mysqli_num_rows($numberResult) !== 1) {
+                throw new Exception('Property record was not found for ' . $par . '.');
+            }
+            $numberRow    = mysqli_fetch_assoc($numberResult);
+            $parIcsNumber = trim((string)($numberRow['par_ics_number'] ?? ''));
+            if ($parIcsNumber === '') {
+                $destTable     = $destIsGF ? 'par_gen_fund' : 'property_sef';
+                $parIcsNumber  = $nextParIcs($destTable, $category, $destIsGF ? 'GF' : 'SEF');
+            }
+            $parIcsNumberSafe = mysqli_real_escape_string($conn, $parIcsNumber);
+
             // Deactivate current history
             if ($srcIsGF) {
                 $run("UPDATE general_fund_property_history SET status='0', created_at='$today' WHERE par_number='$parSafe' AND status='1'", true);
@@ -7489,24 +7506,21 @@ if (isset($_POST['bulkTransferPar'])) {
             // Move physical data between fund tables when fund type changes
             if ($srcIsGF && !$destIsGF) {
                 // GF → SEF: copy from par_gen_fund to property_sef, then remove from par_gen_fund
-                $newIcs = mysqli_real_escape_string($conn, $nextParIcs('property_sef', $category, 'SEF'));
                 $run("INSERT INTO property_sef (category,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks)
-                    SELECT category,item,model,description,serial_number,serial_number_2,par_number,unit_value,date_aquired,account_code,'SPECIAL EDUCATION FUND',supplier,'$newIcs',purchase_order,purchase_request,obr_number,jev_number,remarks
+                    SELECT category,item,model,description,serial_number,serial_number_2,par_number,unit_value,date_aquired,account_code,'SPECIAL EDUCATION FUND',supplier,'$parIcsNumberSafe',purchase_order,purchase_request,obr_number,jev_number,remarks
                     FROM par_gen_fund WHERE par_number='$parSafe' LIMIT 1", true);
                 $run("DELETE FROM par_gen_fund WHERE par_number='$parSafe'", true);
             } elseif (!$srcIsGF && $destIsGF) {
                 // SEF → GF: copy from property_sef to par_gen_fund, then remove from property_sef
-                $newIcs = mysqli_real_escape_string($conn, $nextParIcs('par_gen_fund', $category, 'GF'));
                 $run("INSERT INTO par_gen_fund (category,item,model,description,serial_number,serial_number_2,par_number,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks)
-                    SELECT category,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,'GENERAL FUND',supplier,'$newIcs',purchase_order,purchase_request,obr_number,jev_number,remarks
+                    SELECT category,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,'GENERAL FUND',supplier,'$parIcsNumberSafe',purchase_order,purchase_request,obr_number,jev_number,remarks
                     FROM property_sef WHERE property_number='$parSafe' LIMIT 1", true);
                 $run("DELETE FROM property_sef WHERE property_number='$parSafe'", true);
             } else {
-                // Same fund: just refresh par_ics_number in the existing table
+                // Same fund: leave an existing number unchanged; populate only an empty one.
                 $destTable = $destIsGF ? 'par_gen_fund' : 'property_sef';
                 $destPnCol = $destIsGF ? 'par_number'   : 'property_number';
-                $newIcs    = mysqli_real_escape_string($conn, $nextParIcs($destTable, $category, $destIsGF ? 'GF' : 'SEF'));
-                $run("UPDATE $destTable SET par_ics_number='$newIcs' WHERE $destPnCol='$parSafe' LIMIT 1", true);
+                $run("UPDATE $destTable SET par_ics_number='$parIcsNumberSafe' WHERE $destPnCol='$parSafe' LIMIT 1");
             }
 
             // Insert active history in the destination fund table
