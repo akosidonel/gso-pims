@@ -40,3 +40,4 @@ This file is generated from git history by `php tools/release.php`.
 - Fixed the PAR/ICS number generation so the Add Item modal goes back to YYYYMM-P####/YYYYMM-I####
 - Fixed the space-gap issue and implementation of justified text in the description
 - Fix existing PAR/ICS No. to remains unchanged during transfers
+- Fixed the sidebar hover transition on change-log.php

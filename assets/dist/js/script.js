@@ -14575,6 +14575,7 @@ window.GSO.ChangeLogLive = window.GSO.ChangeLogLive || (function(){
 
   function init(){
     if (!hasPage() || timer) { return; }
+    $('body').removeClass('hold-transition');
     poll();
     timer = setInterval(function(){
       if (!document.hidden) {

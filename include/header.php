@@ -24,7 +24,11 @@
     $needsPremiumTheme = in_array($currentPage, ['dashboard.php', 'motor-vehicle-dashboard.php', 'motor-vehicle-statistics.php', 'disposal.php', 'disposal-items.php', 'unserviceable.php', 'add-return.php', 'add-item.php', 'add-infrastructure.php', 'add-land.php', 'general-fund-department.php', 'general-fund-inventory.php', 'sef-institution.php', 'sef-inventory.php', 'new-purchase-items.php', 'change-log.php', 'trust-fund-inventory.php', 'donation-inventory.php'], true);
   ?>
   <?php if ($needsPremiumTheme): ?>
-    <link rel="stylesheet" href="../assets/dist/css/style.css?v=20260517">
+    <?php
+      $premiumThemePath = __DIR__ . '/../assets/dist/css/style.css';
+      $premiumThemeVersion = @filemtime($premiumThemePath) ?: '20260517';
+    ?>
+    <link rel="stylesheet" href="../assets/dist/css/style.css?v=<?= urlencode((string)$premiumThemeVersion); ?>">
   <?php endif; ?>
   
   <style>
@@ -38,7 +42,7 @@
 
 </head>
 
-<body class="hold-transition sidebar-mini sidebar-collapse layout-navbar-fixed layout-fixed">
+<body class="hold-transition sidebar-mini sidebar-collapse layout-navbar-fixed layout-fixed<?= $currentPage === 'change-log.php' ? ' gso-change-log-page' : ''; ?>">
 
 <div class="wrapper"><!-- Site wrapper -->
 
