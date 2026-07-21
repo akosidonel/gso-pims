@@ -9329,21 +9329,21 @@ if (isset($_POST['update_new_purchase_group'])) {
         if (!$historyInsertStmt) {
             throw new RuntimeException('Unable to prepare history insert: ' . $conn->error);
         }
-        $historyUpdateWithOldStmt = $conn->prepare(
-            'UPDATE new_purchase_history
-             SET par_number = ?, category = ?, dept_id = ?, emp_id = CASE WHEN ? > 0 THEN ? ELSE NULL END
-             WHERE (par_number = ? OR par_number = ?) AND status = 1'
+        $historyFindStmt = $conn->prepare(
+            'SELECT id
+             FROM new_purchase_history
+             WHERE status = 1 AND par_number IN (?, ?, ?)
+             ORDER BY id DESC
+             LIMIT 1'
         );
-        if (!$historyUpdateWithOldStmt) {
-            throw new RuntimeException('Unable to prepare history update: ' . $conn->error);
-        }
-        $historyUpdateLinkStmt = $conn->prepare(
+        $historyUpdateStmt = $conn->prepare(
             'UPDATE new_purchase_history
-             SET par_number = ?, category = ?, dept_id = ?, emp_id = CASE WHEN ? > 0 THEN ? ELSE NULL END
-             WHERE par_number = ? AND status = 1'
+             SET emp_id = CASE WHEN ? > 0 THEN ? ELSE NULL END,
+                 dept_id = ?, par_number = ?, reference_number = ?, category = ?, status = 1
+             WHERE id = ?'
         );
-        if (!$historyUpdateLinkStmt) {
-            throw new RuntimeException('Unable to prepare history link update: ' . $conn->error);
+        if (!$historyFindStmt || !$historyUpdateStmt) {
+            throw new RuntimeException('Unable to prepare history synchronization: ' . $conn->error);
         }
         $deleteItemStmt = $conn->prepare('DELETE FROM new_purchase WHERE id = ?');
         $deleteHistoryStmt = $conn->prepare('DELETE FROM new_purchase_history WHERE par_number = ? OR par_number = ?');
@@ -9522,15 +9522,27 @@ if (isset($_POST['update_new_purchase_group'])) {
                     }
 
                     $historyParNumber = $propertyNumberOptionalFund ? $copyNpidLink : ($copyPropertyNumber !== '' ? $copyPropertyNumber : $copyNpidLink);
-                    if ($copyOldPropNum !== '') {
-                        $historyUpdateWithOldStmt->bind_param('ssiiiss', $historyParNumber, $category, $departmentPk, $employeeId, $employeeId, $copyOldPropNum, $copyNpidLink);
-                        if (!$historyUpdateWithOldStmt->execute()) {
+                    $historyFindStmt->bind_param('sss', $copyOldPropNum, $copyNpidLink, $historyParNumber);
+                    if (!$historyFindStmt->execute()) {
+                        throw new RuntimeException('Unable to locate history for item #' . $copyExistingId . '.');
+                    }
+                    $historyResult = $historyFindStmt->get_result();
+                    $historyId = $historyResult ? (int)($historyResult->fetch_assoc()['id'] ?? 0) : 0;
+                    if ($historyResult) {
+                        $historyResult->free();
+                    }
+
+                    if ($historyId > 0) {
+                        $historyUpdateStmt->bind_param('iiisssi', $employeeId, $employeeId, $departmentPk, $historyParNumber, $referenceNumber, $category, $historyId);
+                        if (!$historyUpdateStmt->execute()) {
                             throw new RuntimeException('Unable to update history for item #' . $copyExistingId . '.');
                         }
                     } else {
-                        $historyUpdateLinkStmt->bind_param('ssiiis', $historyParNumber, $category, $departmentPk, $employeeId, $employeeId, $copyNpidLink);
-                        if (!$historyUpdateLinkStmt->execute()) {
-                            throw new RuntimeException('Unable to update history for item #' . $copyExistingId . '.');
+                        $historyCreatedAt = date('Y-m-d H:i:s');
+                        $historyStatus = 1;
+                        $historyInsertStmt->bind_param('iississ', $employeeId, $departmentPk, $historyParNumber, $referenceNumber, $historyStatus, $category, $historyCreatedAt);
+                        if (!$historyInsertStmt->execute()) {
+                            throw new RuntimeException('Unable to create history for item #' . $copyExistingId . '.');
                         }
                     }
 
@@ -9723,8 +9735,8 @@ if (isset($_POST['update_new_purchase_group'])) {
         $itemStmt->close();
         $insertStmt->close();
         $historyInsertStmt->close();
-        $historyUpdateWithOldStmt->close();
-        $historyUpdateLinkStmt->close();
+        $historyFindStmt->close();
+        $historyUpdateStmt->close();
         if ($bundleInsertStmt) { $bundleInsertStmt->close(); }
         if ($deleteItemStmt) { $deleteItemStmt->close(); }
         if ($deleteHistoryStmt) { $deleteHistoryStmt->close(); }
@@ -9742,11 +9754,11 @@ if (isset($_POST['update_new_purchase_group'])) {
         if (isset($historyInsertStmt) && $historyInsertStmt instanceof mysqli_stmt) {
             $historyInsertStmt->close();
         }
-        if (isset($historyUpdateWithOldStmt) && $historyUpdateWithOldStmt instanceof mysqli_stmt) {
-            $historyUpdateWithOldStmt->close();
+        if (isset($historyFindStmt) && $historyFindStmt instanceof mysqli_stmt) {
+            $historyFindStmt->close();
         }
-        if (isset($historyUpdateLinkStmt) && $historyUpdateLinkStmt instanceof mysqli_stmt) {
-            $historyUpdateLinkStmt->close();
+        if (isset($historyUpdateStmt) && $historyUpdateStmt instanceof mysqli_stmt) {
+            $historyUpdateStmt->close();
         }
         if (isset($bundleInsertStmt) && $bundleInsertStmt instanceof mysqli_stmt) {
             $bundleInsertStmt->close();
