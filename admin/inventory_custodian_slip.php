@@ -933,7 +933,8 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
         $pdf->MultiCell($colWidths[2], $rowHeight, $isContinuation ? '' : '₱ ' . number_format($unitValue, 2), 'LR', 'R', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
         $pdf->MultiCell($colWidths[3], $rowHeight, $isContinuation ? '' : '₱ ' . number_format($totalValue, 2), 'LR', 'R', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
         $pdf->MultiCell($colWidths[4], $rowHeight, gso_ics_description($row), 'LR', 'L', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
-        $pdf->MultiCell($colWidths[5], $rowHeight, '', 'LR', 'C', false, 0, '', '', true, 0, false, true, $rowHeight, 'T', true);
+        $inventoryItemNo = $isContinuation ? '' : trim((string)($row['par_number'] ?? ''));
+        $pdf->MultiCell($colWidths[5], $rowHeight, $inventoryItemNo, 'LR', 'C', false, 0, '', '', true, 0, false, true, $rowHeight, 'T', true);
         $pdf->MultiCell($colWidths[6], $rowHeight, '', 'LR', 'C', false, 1, '', '', true, 0, false, true, $rowHeight, 'T');
         $rowIndex++;
     }
@@ -1090,10 +1091,8 @@ function render_ics_page($pdf, $row, $ics_no) {
     gso_ics_render_supply_note($pdf);
 }
 
-// Summarize identical items with no serial numbers into single rows
-$rows = summarizePrintRows($rows);
-
-// Build one page per item (or per summarized group)
+// Keep every inventory item so distinct property numbers are never hidden by
+// quantity summarization. New-purchase rows are paginated below (10 per page).
 if (count($rows) > 0) {
     $newGroups = [];
     $newGroupOrder = [];
