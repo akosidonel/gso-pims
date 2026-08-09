@@ -9,7 +9,7 @@ This file is generated from git history by `php tools/release.php`.
 - Re-arraged the infobox in the dashboard for better user experience
 - Re-ordering infoBox for better user experience
 - Implementing progressive login lockout on the login page
-- Merge branch 'main' of https://github.com/akosidonel/gso-pims (3 times)
+- Merge branch 'main' of https://github.com/akosidonel/gso-pims (4 times)
 - Increase the number of sets from 10 to 100 in the edit item or equipment modal
 - Improvements on par/ics no
 - Validation has been added in the input name field in the add employee information
@@ -20,7 +20,7 @@ This file is generated from git history by `php tools/release.php`.
 
 ### Fixed
 - Bug fix on change log and version number
-- General bug fixes and maintenance improvements (8 times)
+- General bug fixes and maintenance improvements (9 times)
 - Minor bug fix and improvements
 - Bug fix in the change log and auth files
 - Fix the mitchmatch of the version number
@@ -30,7 +30,7 @@ This file is generated from git history by `php tools/release.php`.
 - Fix slow loading of purchase summary
 - Fix the issue fetching the data in the inventory custodian slip if no end user is selected
 - Bug fix on updating the data on edit item or equipment and fund selection
-- Bug fixes and system updates
+- Bug fixes and system updates (2 times)
 - Fix the
 - Bug fix and system improvements (2 times)
 - Fix bugs on printing ICS docs not showing the correct data
@@ -41,3 +41,4 @@ This file is generated from git history by `php tools/release.php`.
 - Fixed the space-gap issue and implementation of justified text in the description
 - Fix existing PAR/ICS No. to remains unchanged during transfers
 - Fixed the sidebar hover transition on change-log.php
+- Fixed the units issue in the printing of par

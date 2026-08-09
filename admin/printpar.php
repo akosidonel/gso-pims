@@ -36,9 +36,13 @@ function gso_printpar_table_has_column(mysqli $conn, string $tableName, string $
   $tableName = trim($tableName);
   $columnName = trim($columnName);
   if ($tableName === '' || $columnName === '') { return false; }
-  $stmt = $conn->prepare('SHOW COLUMNS FROM `' . str_replace('`', '``', $tableName) . '` LIKE ?');
+  $stmt = $conn->prepare(
+    'SELECT 1 FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
+     LIMIT 1'
+  );
   if (!$stmt) { return false; }
-  $stmt->bind_param('s', $columnName);
+  $stmt->bind_param('ss', $tableName, $columnName);
   $stmt->execute();
   $res = $stmt->get_result();
   $exists = ($res && $res->num_rows > 0);
