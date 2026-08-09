@@ -2858,11 +2858,9 @@ if (isset($_REQUEST['motor_vehicle_dashboard'])) {
         $columns = [
             0 => 'v.brand_model',
             1 => 'v.date_aquired',
-            2 => "COALESCE(NULLIF(mv.chassis_no, ''), v.primary_serial)",
-            3 => "COALESCE(NULLIF(mv.engine_no, ''), v.secondary_serial)",
-            4 => 'mv.plate_no',
-            5 => 'v.department_name',
-            6 => 'v.end_user',
+            2 => 'mv.plate_no',
+            3 => 'v.department_name',
+            4 => 'v.end_user',
         ];
         $orderSql = ' ORDER BY v.department_name ASC, v.end_user ASC, v.brand_model ASC';
         if (isset($_POST['order'][0]['column'])) {

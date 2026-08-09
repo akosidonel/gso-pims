@@ -13595,8 +13595,6 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
         columns: [
           { data: 'brand_model', render: function(data) { return displayValue(data); } },
           { data: 'year_acquired', render: function(data) { return displayValue(data); } },
-          { data: 'chassis_no', render: function(data) { return displayValue(data); } },
-          { data: 'engine_no', render: function(data) { return displayValue(data); } },
           { data: 'plate_no', render: function(data) { return displayValue(data); } },
           { data: 'department_name', render: function(data) { return displayValue(data); } },
           { data: 'end_user', render: function(data) { return displayValue(data); } },
@@ -13617,7 +13615,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
             }
           }
         ],
-        order: [[5, 'asc'], [6, 'asc']],
+        order: [[3, 'asc'], [4, 'asc']],
         dom: "<'row gso-mv-dt-toolbar align-items-center mb-2'<'col-sm-12 col-lg-8 gso-mv-dt-actions'B l><'col-sm-12 col-lg-4 gso-mv-dt-search'f>>" +
              "<'row'<'col-sm-12'tr>>" +
              "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
@@ -13631,7 +13629,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
             pageSize: 'LEGAL',
             title: 'Motor Vehicle Dashboard',
             exportOptions: {
-              columns: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+              columns: [0, 1, 2, 3, 4, 5, 6],
               format: {
                 body: function(data) { return $('<div>').html(data).text().replace(/\s+/g, ' ').trim(); }
               }
@@ -13642,7 +13640,7 @@ $(document).on('submit','#unserviceableItems',function(e){//to declare items as 
             orientation: 'landscape',
             pageSize: 'LEGAL',
             title: 'Motor Vehicle Dashboard',
-            exportOptions: { columns: [0, 1, 2, 3, 4, 5, 6, 7, 8] }
+            exportOptions: { columns: [0, 1, 2, 3, 4, 5, 6] }
           }
         ]
       });

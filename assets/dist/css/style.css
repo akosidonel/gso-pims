@@ -56,6 +56,27 @@
   overflow: hidden;
 }
 
+/* Keep the vehicle form inside the scrollable modal viewport. */
+#motorVehicleModal .modal-content > #motorVehicleForm {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#motorVehicleModal #motorVehicleForm .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#motorVehicleModal #motorVehicleForm .modal-footer {
+  flex-shrink: 0;
+}
+
 .gso-hero {
   border: 1px solid rgba(255, 255, 255, 0.20);
   border-radius: var(--gso-radius-lg);
@@ -767,6 +788,24 @@
 
 .content-wrapper.gso-dashboard [data-metric].gso-counting {
   animation: gsoCountPulse 1600ms cubic-bezier(0.16, 1, 0.3, 1) 0ms 1 both;
+}
+
+#motorVehicleDashboardTable {
+  table-layout: fixed;
+}
+
+#motorVehicleDashboardTable .gso-action-column {
+  width: 4.5rem;
+}
+
+#motorVehicleDashboardTable th,
+#motorVehicleDashboardTable td {
+  overflow-wrap: anywhere;
+}
+
+#motorVehicleDashboardTable th:last-child,
+#motorVehicleDashboardTable td:last-child {
+  white-space: nowrap;
 }
 
 #motorVehicleDashboardTable_wrapper .gso-mv-dt-toolbar {

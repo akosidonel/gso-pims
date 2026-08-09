@@ -112,12 +112,14 @@ include('../include/sidebar.php');
 
                 <div class="card-body">
                     <table id="motorVehicleDashboardTable" class="table table-bordered table-hover gso-table w-100">
+                        <colgroup>
+                            <col span="7">
+                            <col class="gso-action-column">
+                        </colgroup>
                         <thead>
                             <tr>
                                 <th>Brand/Model</th>
                                 <th>Year Acquired</th>
-                                <th>Chassis Number</th>
-                                <th>Engine Number</th>
                                 <th>Plate Number</th>
                                 <th>Department</th>
                                 <th>End User</th>
