@@ -645,6 +645,7 @@ function gso_ics_unit_label(array $row): string {
         'PIECE' => 'PC',
         'PIECES' => 'PC',
         'UNITS' => 'UNIT',
+        'PAIRS' => 'PAIR',
         'LOTS' => 'LOT',
         'SETS' => 'SET',
         'GALS' => 'GAL',
@@ -666,6 +667,7 @@ function gso_ics_unit_label(array $row): string {
     $pluralUnits = [
         'PC' => 'PCS',
         'UNIT' => 'UNITS',
+        'PAIR' => 'PAIRS',
         'LOT' => 'LOTS',
         'SET' => 'SETS',
         'GAL' => 'GALS',

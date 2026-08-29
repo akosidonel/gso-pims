@@ -2,7 +2,10 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.0.16) - August 9, 2026
+## Unreleased (planned v1.1.0) - August 29, 2026
+
+### Added
+- Added PAIR to the Unit dropdown in the Add/Edit Item modal
 
 ### Changed
 - Updated internal project files (7 times)

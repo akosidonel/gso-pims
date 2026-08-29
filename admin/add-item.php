@@ -316,7 +316,7 @@ if(!isset($_SESSION['alogin'])){
               </div>
               <div class="card-body">
                 <?php
-                  $itemUnits = ['PC', 'UNIT', 'LOT', 'GAL', 'L', 'BOX', 'PACK', 'ROLL', 'METER', 'SET', 'BOOK', 'COPY', 'TANK'];
+                  $itemUnits = ['PC', 'UNIT', 'PAIR', 'LOT', 'GAL', 'L', 'BOX', 'PACK', 'ROLL', 'METER', 'SET', 'BOOK', 'COPY', 'TANK'];
                   $assetClasses = [
                     'DESKTOP COMPUTER',
                     'LAPTOP',
