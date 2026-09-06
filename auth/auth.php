@@ -1,6 +1,10 @@
 <?php
 require_once __DIR__ . '/../config/session_bootstrap.php';
 gso_start_secure_session();
+// Preview requests only read the session; do not block other modal requests.
+if (isset($_POST['generate_property_numbers_batch']) || isset($_POST['generate_par_ics_codes_batch'])) {
+    session_write_close();
+}
 require_once __DIR__ . '/../database/databaseConnection.php';
 require_once __DIR__ . '/../include/getuser_ipaddress.php';
 require_once __DIR__ . '/../include/generate_par_ics_number.php';
@@ -226,6 +230,15 @@ if(!function_exists('gso_generate_next_par_ics_number')){
         }
 
         return $candidate;
+    }
+}
+if(!function_exists('gso_next_par_ics_number_value')){
+    function gso_next_par_ics_number_value($current){
+        $current = strtoupper(trim((string)$current));
+        if (!preg_match('/^(.*?)(\d+)$/', $current, $matches)) {
+            throw new RuntimeException('Invalid PAR/ICS number sequence.');
+        }
+        return $matches[1] . str_pad((string)(((int)$matches[2]) + 1), strlen($matches[2]), '0', STR_PAD_LEFT);
     }
 }
 if(!function_exists('gso_current_role')){
@@ -1342,6 +1355,21 @@ if(!function_exists('gso_find_department_by_pk')){
         return $row;
     }
 }
+if(!function_exists('gso_employee_belongs_to_department')){
+    function gso_employee_belongs_to_department($conn, $employeeId, $departmentCode){
+        $employeeId = (int)$employeeId;
+        $departmentCode = trim((string)$departmentCode);
+        if ($employeeId <= 0 || $departmentCode === '') { return false; }
+        $stmt = mysqli_prepare($conn, 'SELECT 1 FROM employee WHERE emp_id = ? AND department_code = ? LIMIT 1');
+        if (!$stmt) { return false; }
+        mysqli_stmt_bind_param($stmt, 'is', $employeeId, $departmentCode);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        $matches = $result && mysqli_num_rows($result) === 1;
+        mysqli_stmt_close($stmt);
+        return $matches;
+    }
+}
 if(!function_exists('gso_resolve_history_department')){
     function gso_resolve_history_department($conn, $historyDeptId, $employeeDeptCode = ''){
         $historyDeptId = trim((string)$historyDeptId);
@@ -1727,6 +1755,9 @@ if (!function_exists('gso_new_purchase_group_modal_items')) {
                     'remarks' => (string)($row['remarks'] ?? ''),
                     'emp_id' => (string)($row['emp_id'] ?? ''),
                     'emp_name' => (string)($row['emp_name'] ?? ''),
+                    'dept_id' => (string)($row['dept_id'] ?? ''),
+                    'department_code' => (string)($row['department_code'] ?? ''),
+                    'department_name' => (string)($row['department_name'] ?? ''),
                     'item_quantity' => 0,
                     'existing_item_ids' => [],
                     'serial_numbers' => [],
@@ -6134,8 +6165,88 @@ if (!function_exists('gso_allocate_property_number')) {
     }
 }
 
+if (!function_exists('gso_allocate_property_number_block')) {
+    function gso_allocate_property_number_block($conn, $fundRaw, $candidate, $quantity, array $exclude = [], $maxAttempts = 20000) {
+        $candidate = strtoupper(trim((string)$candidate));
+        $quantity = max(1, min(10000, (int)$quantity));
+        $parts = explode('-', $candidate);
+        $sequenceIndex = count($parts) - 2;
+        $sequence = $sequenceIndex >= 0 ? (string)($parts[$sequenceIndex] ?? '') : '';
+        if ($candidate === '' || $sequenceIndex < 1 || !ctype_digit($sequence)) {
+            return ['ok' => false, 'error' => 'Invalid property-number sequence.'];
+        }
+
+        $patternParts = $parts;
+        $patternParts[$sequenceIndex] = '%';
+        $pattern = implode('-', $patternParts);
+        $existing = [];
+        $checks = [
+            ['table' => 'new_purchase', 'column' => 'property_number'],
+            ['table' => 'new_purchase_history', 'column' => 'par_number'],
+            ['table' => 'new_bundle_purchase', 'column' => 'property_number'],
+            ['table' => 'new_bundle_purchase', 'column' => 'bundle_with'],
+            ['table' => 'par_gen_fund', 'column' => 'par_number'],
+            ['table' => 'property_sef', 'column' => 'property_number'],
+            ['table' => 'trust_fund', 'column' => 'property_number'],
+            ['table' => 'donation', 'column' => 'property_number'],
+        ];
+        $selects = [];
+        $params = [];
+        foreach ($checks as $check) {
+            $selects[] = "SELECT UPPER(TRIM(COALESCE({$check['column']}, ''))) AS property_number FROM {$check['table']} WHERE UPPER(TRIM({$check['column']})) LIKE ?";
+            $params[] = $pattern;
+        }
+        $sql = 'SELECT property_number FROM (' . implode(' UNION ALL ', $selects) . ') AS property_number_matches';
+        $stmt = mysqli_prepare($conn, $sql);
+        if (!$stmt) {
+            return ['ok' => false, 'error' => 'Unable to prepare property-number block allocation.'];
+        }
+        $types = str_repeat('s', count($params));
+        gso_stmt_bind_params($stmt, $types, $params);
+        if (!mysqli_stmt_execute($stmt)) {
+            mysqli_stmt_close($stmt);
+            return ['ok' => false, 'error' => 'Unable to look up existing property numbers.'];
+        }
+        $result = mysqli_stmt_get_result($stmt);
+        while ($result && ($row = mysqli_fetch_assoc($result))) {
+            $value = strtoupper(trim((string)($row['property_number'] ?? '')));
+            if ($value !== '') { $existing[$value] = true; }
+        }
+        mysqli_stmt_close($stmt);
+
+        $reserved = [];
+        foreach ($exclude as $value) {
+            $value = strtoupper(trim((string)$value));
+            if ($value !== '') { $reserved[$value] = true; }
+        }
+
+        $width = strlen($sequence);
+        $start = (int)$sequence;
+        for ($attempt = 0; $attempt < $maxAttempts; $attempt++) {
+            $block = [];
+            $available = true;
+            for ($offset = 0; $offset < $quantity; $offset++) {
+                $candidateParts = $parts;
+                $candidateParts[$sequenceIndex] = str_pad((string)($start + $offset), $width, '0', STR_PAD_LEFT);
+                $propertyNumber = implode('-', $candidateParts);
+                if (isset($existing[$propertyNumber]) || isset($reserved[$propertyNumber])) {
+                    $start += $offset + 1;
+                    $available = false;
+                    break;
+                }
+                $block[] = $propertyNumber;
+            }
+            if ($available) {
+                return ['ok' => true, 'numbers' => $block];
+            }
+        }
+
+        return ['ok' => false, 'error' => 'Unable to allocate a contiguous property-number block.'];
+    }
+}
+
 if (!function_exists('gso_generate_one_property_number')) {
-    function gso_generate_one_property_number($conn, $category, $year, $accountCode, $dept, $fund, $exclude = []) {
+    function gso_generate_one_property_number($conn, $category, $year, $accountCode, $dept, $fund, $exclude = [], $quantity = 1) {
         $category = strtoupper(trim((string)$category));
         $year = trim((string)$year);
         $accountCode = strtoupper(trim((string)$accountCode));
@@ -6204,28 +6315,81 @@ if (!function_exists('gso_generate_one_property_number')) {
             }
         }
 
-        $excludeSet = [];
-        if (is_array($exclude)) {
-            foreach ($exclude as $x) {
-                $k = strtoupper(trim((string)$x));
-                if ($k !== '') { $excludeSet[$k] = true; }
-            }
-        }
-
-        $guard = 0;
-        while ($guard < 50000) {
-            $seqStr = str_pad((string)$seq, $seqLen, '0', STR_PAD_LEFT);
-            $candidate = $prefix . '-' . $sub . '-' . $seqStr . '-' . $deptCode;
-            $candKey = strtoupper($candidate);
-            if (!isset($excludeSet[$candKey]) && !gso_propnum_exists($conn, $table, $col, $candidate)) {
-                return ['ok' => true, 'property_number' => $candidate, 'table' => $table, 'col' => $col];
-            }
-            $seq++;
-            $guard++;
-        }
-
-        return ['ok' => false, 'error' => 'Unable to allocate a unique property number.'];
+        $candidate = $prefix . '-' . $sub . '-' . str_pad((string)$seq, $seqLen, '0', STR_PAD_LEFT) . '-' . $deptCode;
+        // Load occupied numbers once, then find the entire available block in memory.
+        $allocation = gso_allocate_property_number_block($conn, $fund, $candidate, $quantity, $exclude, 50000);
+        if (!$allocation['ok']) { return $allocation; }
+        return [
+            'ok' => true,
+            'property_number' => $allocation['numbers'][0],
+            'numbers' => $allocation['numbers'],
+            'table' => $table,
+            'col' => $col
+        ];
     }
+}
+
+if (isset($_POST['generate_property_numbers_batch'])) {
+    if (!isset($_SESSION['alogin'])) {
+        echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+        return false;
+    }
+
+    $year = trim((string)($_POST['year'] ?? ''));
+    $fund = trim((string)($_POST['fund'] ?? ''));
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if ($year === '' || $fund === '' || !is_array($rows) || count($rows) > 100) {
+        echo json_encode(['success' => false, 'error' => 'Invalid property-number request.']);
+        return false;
+    }
+
+    $numbers = [];
+    $exclude = [];
+    $totalQuantity = 0;
+    foreach ($rows as $rowIndex => $row) {
+        if (!is_array($row)) {
+            echo json_encode(['success' => false, 'error' => 'Invalid set data.']);
+            return false;
+        }
+        if (!empty($row['skip'])) {
+            $numbers[] = [];
+            continue;
+        }
+
+        $category = strtoupper(trim((string)($row['category'] ?? '')));
+        $accountCode = strtoupper(trim((string)($row['account_code'] ?? '')));
+        $departmentCode = trim((string)($row['dept'] ?? ''));
+        $quantity = max(1, min(10000, (int)($row['quantity'] ?? 1)));
+        $totalQuantity += $quantity;
+        if ($totalQuantity > 10000) {
+            echo json_encode(['success' => false, 'error' => 'A maximum of 10,000 property numbers can be previewed per submission.']);
+            return false;
+        }
+        $generated = gso_generate_one_property_number(
+            $conn,
+            $category,
+            $year,
+            $accountCode,
+            $departmentCode,
+            $fund,
+            $exclude,
+            $quantity
+        );
+        if (!isset($generated['ok']) || !$generated['ok']) {
+            echo json_encode([
+                'success' => false,
+                'error' => ($generated['error'] ?? 'Unable to generate property number.') . ' (Set ' . ($rowIndex + 1) . ')'
+            ]);
+            return false;
+        }
+
+        $setNumbers = $generated['numbers'];
+        $exclude = array_merge($exclude, $setNumbers);
+        $numbers[] = $setNumbers;
+    }
+
+    echo json_encode(['success' => true, 'numbers' => $numbers]);
+    return false;
 }
 
 if (isset($_POST['generate_property_number'])) {
@@ -8849,6 +9013,21 @@ if (isset($_POST['update_new_purchase_group'])) {
             }
             return $default;
         };
+        $fundDepartmentCache = [$departmentCode => $departmentRow];
+        $resolveFundDepartment = function ($itemKey) use ($conn, $getPostedMapValue, $departmentCode, &$fundDepartmentCache) {
+            $departmentCodeForSet = trim($getPostedMapValue('dept_id_multi', $itemKey, $departmentCode));
+            if ($departmentCodeForSet === '') {
+                throw new RuntimeException('Department is required for every set.');
+            }
+            if (!isset($fundDepartmentCache[$departmentCodeForSet])) {
+                $row = gso_find_department_by_code($conn, $departmentCodeForSet);
+                if (!$row) {
+                    throw new RuntimeException('Invalid department selected for one of the sets.');
+                }
+                $fundDepartmentCache[$departmentCodeForSet] = $row;
+            }
+            return $fundDepartmentCache[$departmentCodeForSet];
+        };
         $getPostedNestedMapValue = function ($fieldName, $itemKey, $copyIndex, $default = '') {
             $sourceMap = isset($_POST[$fieldName]) && is_array($_POST[$fieldName]) ? $_POST[$fieldName] : [];
             $row = null;
@@ -8876,7 +9055,7 @@ if (isset($_POST['update_new_purchase_group'])) {
         };
 
         $employeeCache = [];
-        $resolveEmployeeId = function ($itemKey) use ($conn, &$employeeCache, $getPostedMapValue, $departmentCode) {
+        $resolveEmployeeId = function ($itemKey, $employeeDepartmentCode) use ($conn, &$employeeCache, $getPostedMapValue) {
             $empValue = trim((string)$getPostedMapValue('emp_id', $itemKey, ''));
             if ($empValue === '') {
                 return '';
@@ -8894,12 +9073,12 @@ if (isset($_POST['update_new_purchase_group'])) {
                 $newPosition = 'N/A';
             }
 
-            $cacheKey = $departmentCode . '|' . $newName . '|' . $newPosition;
+            $cacheKey = $employeeDepartmentCode . '|' . $newName . '|' . $newPosition;
             if (isset($employeeCache[$cacheKey])) {
                 return $employeeCache[$cacheKey];
             }
 
-            $created = gso_create_employee_atomic($conn, $newName, $departmentCode, $newPosition, 1, null);
+            $created = gso_create_employee_atomic($conn, $newName, $employeeDepartmentCode, $newPosition, 1, null);
             if (!isset($created['ok']) || !$created['ok']) {
                 throw new RuntimeException($created['message'] ?? 'Error creating employee.');
             }
@@ -8936,6 +9115,10 @@ if (isset($_POST['update_new_purchase_group'])) {
                 if (!$currentItem) {
                     continue;
                 }
+                $setDepartment = $resolveFundDepartment($setKey);
+                $setDepartmentCode = trim((string)($setDepartment['department_code'] ?? ''));
+                $setDepartmentPk = (int)($setDepartment['dept_id'] ?? 0);
+                $setHistoryDepartment = $setDepartmentCode !== '' ? $setDepartmentCode : (string)$setDepartmentPk;
 
                 $existingIdsCsv = $getPostedMapValue('existing_item_ids', $setKey, '');
                 $existingIds = array_values(array_filter(array_map('intval', preg_split('/\s*,\s*/', $existingIdsCsv, -1, PREG_SPLIT_NO_EMPTY))));
@@ -8951,8 +9134,11 @@ if (isset($_POST['update_new_purchase_group'])) {
                     throw new RuntimeException('Changing set quantity is not supported for fund inventory records.');
                 }
 
-                $resolvedEmployeeId = $resolveEmployeeId($setKey);
+                $resolvedEmployeeId = $resolveEmployeeId($setKey, $setDepartmentCode);
                 $resolvedEmployeeInt = (int)$resolvedEmployeeId;
+                if ($resolvedEmployeeInt > 0 && !gso_employee_belongs_to_department($conn, $resolvedEmployeeInt, $setDepartmentCode)) {
+                    throw new RuntimeException('The selected end user does not belong to the department for one of the sets.');
+                }
                 $category = gso_clean_text_for_db($getPostedMapValue('category', $setKey, $currentItem['category'] ?? ''));
                 $unit = gso_clean_text_for_db($getPostedMapValue('unit', $setKey, $currentItem['unit'] ?? ''));
                 $itemName = gso_clean_inventory_text_for_db($getPostedMapValue('item', $setKey, $currentItem['item'] ?? ''));
@@ -9013,7 +9199,7 @@ if (isset($_POST['update_new_purchase_group'])) {
                         'sssiii',
                         $historyParNumber,
                         $category,
-                        $deptHistoryValue,
+                        $setHistoryDepartment,
                         $resolvedEmployeeInt,
                         $resolvedEmployeeInt,
                         $existingId
@@ -9118,6 +9304,7 @@ if (isset($_POST['update_new_purchase_group'])) {
     if ($referenceNumber === '') {
         $referenceNumber = generateReferenceNumber($conn, 'new_purchase_history', 'reference_number');
     }
+    $updateReferenceByAccountability = [];
 
     $existingItemIdMap = isset($_POST['existing_item_id']) && is_array($_POST['existing_item_id']) ? $_POST['existing_item_id'] : [];
     $existingItemIdsMap = isset($_POST['existing_item_ids']) && is_array($_POST['existing_item_ids']) ? $_POST['existing_item_ids'] : [];
@@ -9139,6 +9326,21 @@ if (isset($_POST['update_new_purchase_group'])) {
             return (string)$source[(string)$itemKey];
         }
         return $default;
+    };
+    $departmentCache = [$departmentCode => $departmentRow];
+    $resolveUpdateDepartment = function ($itemKey) use ($conn, $getPostedMapValue, $departmentCode, &$departmentCache) {
+        $departmentCodeForSet = trim($getPostedMapValue('dept_id_multi', $itemKey, $departmentCode));
+        if ($departmentCodeForSet === '') {
+            throw new RuntimeException('Department is required for every set.');
+        }
+        if (!isset($departmentCache[$departmentCodeForSet])) {
+            $row = gso_find_department_by_code($conn, $departmentCodeForSet);
+            if (!$row) {
+                throw new RuntimeException('Invalid department selected for one of the sets.');
+            }
+            $departmentCache[$departmentCodeForSet] = $row;
+        }
+        return $departmentCache[$departmentCodeForSet];
     };
     $getPostedNestedMapValue = function ($fieldName, $itemKey, $copyIndex, $default = '') {
         $source = isset($_POST[$fieldName]) && is_array($_POST[$fieldName]) ? $_POST[$fieldName] : [];
@@ -9170,7 +9372,7 @@ if (isset($_POST['update_new_purchase_group'])) {
         return in_array($category, ['PAR', 'ICS'], true) ? $category : '';
     };
     $employeeCreateCache = [];
-    $resolveNewPurchaseEmployeeId = function ($employeeRaw, $newEmployeeName, $newEmployeePosition) use ($conn, $departmentCode, &$employeeCreateCache) {
+    $resolveNewPurchaseEmployeeId = function ($employeeRaw, $newEmployeeName, $newEmployeePosition, $employeeDepartmentCode) use ($conn, &$employeeCreateCache) {
         $employeeRaw = trim((string)$employeeRaw);
         if (strtolower($employeeRaw) !== 'add_new_emp') {
             return $employeeRaw !== '' ? (int)$employeeRaw : 0;
@@ -9180,12 +9382,12 @@ if (isset($_POST['update_new_purchase_group'])) {
             throw new RuntimeException('New employee name and position are required for all add-new rows.');
         }
 
-        $cacheKey = $departmentCode . '|' . $newEmployeeName . '|' . $newEmployeePosition;
+        $cacheKey = $employeeDepartmentCode . '|' . $newEmployeeName . '|' . $newEmployeePosition;
         if (isset($employeeCreateCache[$cacheKey])) {
             return $employeeCreateCache[$cacheKey];
         }
 
-        $createdEmployee = gso_create_employee_atomic($conn, $newEmployeeName, $departmentCode, $newEmployeePosition, 1, null);
+        $createdEmployee = gso_create_employee_atomic($conn, $newEmployeeName, $employeeDepartmentCode, $newEmployeePosition, 1, null);
         if (!isset($createdEmployee['ok']) || !$createdEmployee['ok']) {
             throw new RuntimeException($createdEmployee['message'] ?? 'Unable to create employee for one of the sets.');
         }
@@ -9201,38 +9403,53 @@ if (isset($_POST['update_new_purchase_group'])) {
         $parts[$seqIndex] = str_pad((string)(((int)$seq) + 1), strlen($seq), '0', STR_PAD_LEFT);
         return implode('-', $parts);
     };
-    $generatedParIcsByCategory = [];
-    $currentParIcsByCategory = [];
+    $generatedParIcsByAccountability = [];
+    $currentParIcsByAccountability = [];
+    $claimedCurrentParIcsCodes = [];
+    $lastGeneratedParIcsByCategory = [];
     $selectedParIcsYearKey = gso_normalize_par_ics_year_key($year);
     foreach ($currentRows as $row) {
         $rowCategory = $normalizeCategory($row['category'] ?? '');
         $rowParIcs = strtoupper(trim((string)($row['par_ics_number'] ?? '')));
         $rowYearKey = gso_normalize_par_ics_year_key($row['date_aquired'] ?? $year);
-        if ($rowCategory !== '' && $rowParIcs !== '' && $rowYearKey === $selectedParIcsYearKey && !isset($currentParIcsByCategory[$rowCategory])) {
-            $currentParIcsByCategory[$rowCategory] = $rowParIcs;
+        $rowAccountabilityKey = $rowCategory . '|' . trim((string)($row['department_code'] ?? '')) . '|' . (string)(int)($row['emp_id'] ?? 0);
+        if (
+            $rowCategory !== ''
+            && $rowParIcs !== ''
+            && $rowYearKey === $selectedParIcsYearKey
+            && !isset($currentParIcsByAccountability[$rowAccountabilityKey])
+            && !isset($claimedCurrentParIcsCodes[$rowParIcs])
+        ) {
+            $currentParIcsByAccountability[$rowAccountabilityKey] = $rowParIcs;
+            $claimedCurrentParIcsCodes[$rowParIcs] = true;
         }
     }
-    $getParIcsForCategory = function ($rowCategory) use ($conn, &$generatedParIcsByCategory, $currentParIcsByCategory, $normalizeCategory, $year) {
+    $getParIcsForAccountability = function ($rowCategory, $departmentCodeForSet, $employeeId) use ($conn, &$generatedParIcsByAccountability, $currentParIcsByAccountability, &$lastGeneratedParIcsByCategory, $normalizeCategory, $year) {
         $rowCategory = $normalizeCategory($rowCategory);
         if ($rowCategory === '') {
             throw new RuntimeException('Each set must include a valid category.');
         }
-        if (isset($generatedParIcsByCategory[$rowCategory])) {
-            return $generatedParIcsByCategory[$rowCategory];
+        $key = $rowCategory . '|' . trim((string)$departmentCodeForSet) . '|' . (string)(int)$employeeId;
+        if (isset($generatedParIcsByAccountability[$key])) {
+            return $generatedParIcsByAccountability[$key];
         }
-        if (isset($currentParIcsByCategory[$rowCategory])) {
-            $generatedParIcsByCategory[$rowCategory] = $currentParIcsByCategory[$rowCategory];
-            return $generatedParIcsByCategory[$rowCategory];
+        if (isset($currentParIcsByAccountability[$key])) {
+            $generatedParIcsByAccountability[$key] = $currentParIcsByAccountability[$key];
+            return $generatedParIcsByAccountability[$key];
         }
-        $generatedParIcsByCategory[$rowCategory] = gso_generate_next_par_ics_number(
-            $conn,
-            $rowCategory,
-            $year,
-            gso_par_ics_source_tables(true)
-        );
-        return $generatedParIcsByCategory[$rowCategory];
+        if (isset($lastGeneratedParIcsByCategory[$rowCategory])) {
+            $code = gso_next_par_ics_number_value($lastGeneratedParIcsByCategory[$rowCategory]);
+            while (gso_par_ics_exists_in_tables($conn, $code, gso_par_ics_source_tables(true))) {
+                $code = gso_next_par_ics_number_value($code);
+            }
+        } else {
+            $code = gso_generate_next_par_ics_number($conn, $rowCategory, $year, gso_par_ics_source_tables(true));
+        }
+        $generatedParIcsByAccountability[$key] = $code;
+        $lastGeneratedParIcsByCategory[$rowCategory] = $code;
+        return $code;
     };
-    $generateAvailablePropertyNumber = function ($category, $accountCode, $existingId = 0, $oldPropertyNumber = '', array $exclude = [], $quantity = 1) use ($conn, $year, $departmentCode, $fund, $nextPropertyNumber) {
+    $generateAvailablePropertyNumber = function ($category, $accountCode, $departmentCodeForSet, $existingId = 0, $oldPropertyNumber = '', array $exclude = [], $quantity = 1) use ($conn, $year, $fund, $nextPropertyNumber) {
         $category = strtoupper(trim((string)$category));
         $accountCode = strtoupper(trim((string)$accountCode));
         $existingId = (int)$existingId;
@@ -9251,7 +9468,7 @@ if (isset($_POST['update_new_purchase_group'])) {
         }
 
         for ($attempt = 0; $attempt < 50; $attempt++) {
-            $generated = gso_generate_one_property_number($conn, $category, $year, $accountCode, $departmentCode, $fund, $excludeList);
+            $generated = gso_generate_one_property_number($conn, $category, $year, $accountCode, $departmentCodeForSet, $fund, $excludeList);
             if (!isset($generated['ok']) || !$generated['ok']) {
                 throw new RuntimeException($generated['error'] ?? 'Unable to generate property number.');
             }
@@ -9392,6 +9609,9 @@ if (isset($_POST['update_new_purchase_group'])) {
             $currentRow = ($existingId > 0 && isset($currentById[$existingId])) ? $currentById[$existingId] : null;
             $oldPropNum = strtoupper(trim((string)($currentRow['property_number'] ?? '')));
             $npidLink = $existingId > 0 ? ('NPID:' . $existingId) : '';
+            $setDepartment = $resolveUpdateDepartment($setKey);
+            $setDepartmentCode = trim((string)($setDepartment['department_code'] ?? ''));
+            $setDepartmentPk = (int)($setDepartment['dept_id'] ?? 0);
 
             $unit = gso_clean_inventory_text_for_db($getPostedMapValue('unit', $setKey));
             $item = gso_clean_inventory_text_for_db($getPostedMapValue('item', $setKey));
@@ -9414,8 +9634,6 @@ if (isset($_POST['update_new_purchase_group'])) {
             if ($accountCode === '' && !$propertyNumberOptionalFund && !$skipAccountAndProperty) {
                 throw new RuntimeException('Account code is required for each set.');
             }
-            $parIcsNumber = $getParIcsForCategory($category);
-
             $oldYear = trim((string)($currentRow['date_aquired'] ?? ''));
             if (preg_match('/^\d{4}/', $oldYear, $yearMatch)) {
                 $oldYear = $yearMatch[0];
@@ -9425,10 +9643,30 @@ if (isset($_POST['update_new_purchase_group'])) {
                 || strtoupper(trim((string)($currentRow['category'] ?? ''))) !== $category
                 || strtoupper(trim((string)($currentRow['fund'] ?? ''))) !== $fund
                 || $oldYear !== $year
-                || trim((string)($currentRow['department_code'] ?? '')) !== $departmentCode
+                || trim((string)($currentRow['department_code'] ?? '')) !== $setDepartmentCode
             );
 
-            $employeeId = $resolveNewPurchaseEmployeeId($employeeRaw, $newEmployeeName, $newEmployeePosition);
+            $employeeId = $resolveNewPurchaseEmployeeId($employeeRaw, $newEmployeeName, $newEmployeePosition, $setDepartmentCode);
+            if ($employeeId > 0 && !gso_employee_belongs_to_department($conn, $employeeId, $setDepartmentCode)) {
+                throw new RuntimeException('The selected end user does not belong to the department for one of the sets.');
+            }
+            $parIcsNumber = $getParIcsForAccountability($category, $setDepartmentCode, $employeeId);
+            $accountabilityKey = $category . '|' . $setDepartmentCode . '|' . $employeeId;
+            $existingReference = trim((string)($currentRow['reference_number'] ?? ''));
+            $accountabilityChanged = $currentRow && (
+                trim((string)($currentRow['department_code'] ?? '')) !== $setDepartmentCode
+                || (int)($currentRow['emp_id'] ?? 0) !== $employeeId
+                || strtoupper(trim((string)($currentRow['category'] ?? ''))) !== $category
+            );
+            if (!$accountabilityChanged && $existingReference !== '') {
+                $referenceNumberForSet = $existingReference;
+                $updateReferenceByAccountability[$accountabilityKey] = $existingReference;
+            } elseif (isset($updateReferenceByAccountability[$accountabilityKey])) {
+                $referenceNumberForSet = $updateReferenceByAccountability[$accountabilityKey];
+            } else {
+                $referenceNumberForSet = generateReferenceNumber($conn, 'new_purchase_history', 'reference_number');
+                $updateReferenceByAccountability[$accountabilityKey] = $referenceNumberForSet;
+            }
 
             $serial1Values = [];
             $serial2Values = [];
@@ -9442,7 +9680,7 @@ if (isset($_POST['update_new_purchase_group'])) {
                 $currentPropertyNumber = '';
             }
             if (!$propertyNumberOptionalFund && !$skipAccountAndProperty && $currentPropertyNumber === '') {
-                $currentPropertyNumber = $generateAvailablePropertyNumber($category, $accountCode, $existingId, $oldPropNum, [], $itemQuantity);
+                $currentPropertyNumber = $generateAvailablePropertyNumber($category, $accountCode, $setDepartmentCode, $existingId, $oldPropNum, [], $itemQuantity);
             }
 
             $firstPropertyForSet = '';
@@ -9459,7 +9697,7 @@ if (isset($_POST['update_new_purchase_group'])) {
                     while (gso_new_purchase_property_number_in_use($conn, $copyPropertyNumber, $checkId, $checkOld)) {
                         $nextCandidate = strtoupper(trim($nextPropertyNumber($copyPropertyNumber)));
                         if ($nextCandidate === '' || $nextCandidate === $copyPropertyNumber) {
-                            $copyPropertyNumber = $generateAvailablePropertyNumber($category, $accountCode, $checkId, $checkOld, [$copyPropertyNumber]);
+                            $copyPropertyNumber = $generateAvailablePropertyNumber($category, $accountCode, $setDepartmentCode, $checkId, $checkOld, [$copyPropertyNumber]);
                             break;
                         }
                         $copyPropertyNumber = $nextCandidate;
@@ -9531,14 +9769,14 @@ if (isset($_POST['update_new_purchase_group'])) {
                     }
 
                     if ($historyId > 0) {
-                        $historyUpdateStmt->bind_param('iiisssi', $employeeId, $employeeId, $departmentPk, $historyParNumber, $referenceNumber, $category, $historyId);
+                        $historyUpdateStmt->bind_param('iiisssi', $employeeId, $employeeId, $setDepartmentPk, $historyParNumber, $referenceNumberForSet, $category, $historyId);
                         if (!$historyUpdateStmt->execute()) {
                             throw new RuntimeException('Unable to update history for item #' . $copyExistingId . '.');
                         }
                     } else {
                         $historyCreatedAt = date('Y-m-d H:i:s');
                         $historyStatus = 1;
-                        $historyInsertStmt->bind_param('iississ', $employeeId, $departmentPk, $historyParNumber, $referenceNumber, $historyStatus, $category, $historyCreatedAt);
+                        $historyInsertStmt->bind_param('iississ', $employeeId, $setDepartmentPk, $historyParNumber, $referenceNumberForSet, $historyStatus, $category, $historyCreatedAt);
                         if (!$historyInsertStmt->execute()) {
                             throw new RuntimeException('Unable to create history for item #' . $copyExistingId . '.');
                         }
@@ -9587,7 +9825,7 @@ if (isset($_POST['update_new_purchase_group'])) {
                     $historyParNumber = $propertyNumberOptionalFund ? ('NPID:' . $newItemId) : $copyPropertyNumber;
                     $historyCreatedAt = $createdAt;
                     $historyStatus = 1;
-                    $historyInsertStmt->bind_param('iississ', $employeeId, $departmentPk, $historyParNumber, $referenceNumber, $historyStatus, $category, $historyCreatedAt);
+                    $historyInsertStmt->bind_param('iississ', $employeeId, $setDepartmentPk, $historyParNumber, $referenceNumberForSet, $historyStatus, $category, $historyCreatedAt);
                     if (!$historyInsertStmt->execute()) {
                         throw new RuntimeException('Unable to save history for a new set.');
                     }
@@ -9600,6 +9838,8 @@ if (isset($_POST['update_new_purchase_group'])) {
             $updatedParentItems[$setDisplayIndex] = [
                 'property_number' => $firstPropertyForSet,
                 'emp_id' => $employeeId,
+                'dept_id' => $setDepartmentPk,
+                'dept_code' => $setDepartmentCode,
                 'category' => $category,
                 'item_quantity' => $itemQuantity
             ];
@@ -9688,15 +9928,17 @@ if (isset($_POST['update_new_purchase_group'])) {
             if (!$propertyNumberOptionalFund && $bundlePropertyDb === null) {
                 throw new RuntimeException('Bundle property number is required.');
             }
-            $bundleParIcsNumber = $getParIcsForCategory($bundleCategory);
             $bundleEmpId = isset($parentInfo['emp_id']) ? (int)$parentInfo['emp_id'] : 0;
+            $bundleDeptId = isset($parentInfo['dept_id']) ? (int)$parentInfo['dept_id'] : $departmentPk;
+            $bundleDeptCode = isset($parentInfo['dept_code']) ? (string)$parentInfo['dept_code'] : $departmentCode;
+            $bundleParIcsNumber = $getParIcsForAccountability($bundleCategory, $bundleDeptCode, $bundleEmpId);
             $bundlePrimarySerialDb = $bundlePrimarySerial !== '' ? $bundlePrimarySerial : null;
             $bundleSecondarySerialDb = $bundleSecondarySerial !== '' ? $bundleSecondarySerial : null;
 
             if ($bundleHasUnitColumn) {
                 $bundleInsertStmt->bind_param(
                     'iissssssssss',
-                    $departmentPk,
+                    $bundleDeptId,
                     $bundleEmpId,
                     $bundlePropertyDb,
                     $bundleWithNumber,
@@ -9712,7 +9954,7 @@ if (isset($_POST['update_new_purchase_group'])) {
             } else {
                 $bundleInsertStmt->bind_param(
                     'iisssssssss',
-                    $departmentPk,
+                    $bundleDeptId,
                     $bundleEmpId,
                     $bundlePropertyDb,
                     $bundleWithNumber,
@@ -9961,7 +10203,16 @@ if (isset($_POST['save_item'])) {
     $supplier = empty($_POST['supplier']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['supplier'])) . "'";
     $po = $purchaseOrderRaw === '' ? 'NULL' : "'" . mysqli_real_escape_string($conn, $purchaseOrderRaw) . "'";
     $obr = empty($_POST['obr']) ? 'NULL' : "'" . mysqli_real_escape_string($conn,strtoupper($_POST['obr'])) . "'";
+    $deptMulti = (isset($_POST['dept_multi']) && is_array($_POST['dept_multi'])) ? $_POST['dept_multi'] : null;
     $deptCode = strtoupper(trim((string)($_POST['dept'] ?? '')));
+    if ($deptCode === '' && $deptMulti !== null) {
+        foreach ($deptMulti as $departmentValue) {
+            if (!is_array($departmentValue) && trim((string)$departmentValue) !== '') {
+                $deptCode = strtoupper(trim((string)$departmentValue));
+                break;
+            }
+        }
+    }
     if ($deptCode === '') {
         echo json_encode(['status' => 422, 'message' => 'Department is required.']);
         return false;
@@ -9987,6 +10238,35 @@ if (isset($_POST['save_item'])) {
     $parEmpMulti = (isset($_POST['parEmp_multi']) && is_array($_POST['parEmp_multi'])) ? $_POST['parEmp_multi'] : null;
     $parEmpMultiNewName = (isset($_POST['parEmp_multi_new_name']) && is_array($_POST['parEmp_multi_new_name'])) ? $_POST['parEmp_multi_new_name'] : [];
     $parEmpMultiNewPos  = (isset($_POST['parEmp_multi_new_position']) && is_array($_POST['parEmp_multi_new_position'])) ? $_POST['parEmp_multi_new_position'] : [];
+    $departmentCache = [];
+    $departmentCache[$deptCode] = [
+        'dept_id' => $deptIdInt,
+        'department_code' => $deptCode,
+    ];
+    $resolveDepartmentForSet = function ($setIndex) use ($conn, $deptMulti, $deptCode, &$departmentCache) {
+        $departmentCode = $deptCode;
+        if ($deptMulti !== null) {
+            $departmentCode = '';
+            $keys = [$setIndex, (string)$setIndex, $setIndex - 1, (string)($setIndex - 1)];
+            foreach ($keys as $key) {
+                if (isset($deptMulti[$key]) && !is_array($deptMulti[$key])) {
+                    $departmentCode = trim((string)$deptMulti[$key]);
+                    break;
+                }
+            }
+        }
+        if ($departmentCode === '') {
+            throw new RuntimeException('Department is required for set ' . $setIndex . '.');
+        }
+        if (!isset($departmentCache[$departmentCode])) {
+            $department = gso_find_department_by_code($conn, $departmentCode);
+            if (!$department) {
+                throw new RuntimeException('Invalid department selected for set ' . $setIndex . '.');
+            }
+            $departmentCache[$departmentCode] = $department;
+        }
+        return $departmentCache[$departmentCode];
+    };
     // Normalize property number: textarea may contain comma-separated preview; use the first value only
     $par_number_raw = isset($_POST['par_number']) ? trim($_POST['par_number']) : '';
     if ($par_number_raw !== '' && strpos($par_number_raw, ',') !== false) {
@@ -10038,25 +10318,39 @@ if (isset($_POST['save_item'])) {
         $propertyNumberOptionalFund = ($isTrustFund || $isDonation);
         $newFlowMainTable = $isDonation ? 'donation' : 'new_purchase';
         $newFlowHistoryTable = $isDonation ? 'donation_history' : 'new_purchase_history';
-        $referenceNumber = generateReferenceNumber($conn, $newFlowHistoryTable, 'reference_number');
+        $referenceNumber = '';
+        $referenceNumberByAccountability = [];
+        $getReferenceNumberForAccountability = function ($category, $departmentCode, $employeeId) use ($conn, $newFlowHistoryTable, &$referenceNumberByAccountability) {
+            $key = strtoupper(trim((string)$category)) . '|' . trim((string)$departmentCode) . '|' . (string)(int)$employeeId;
+            if (!isset($referenceNumberByAccountability[$key])) {
+                $referenceNumberByAccountability[$key] = generateReferenceNumber($conn, $newFlowHistoryTable, 'reference_number');
+            }
+            return $referenceNumberByAccountability[$key];
+        };
 
         // PAR/ICS number generation (single MAX lookup per request)
         $manualProvided = ($par_ics_input_raw !== '' && strtoupper($par_ics_input_raw) !== 'NULL');
-        $parIcsCodeByCategory = [];
-        $getParIcsForCategory = function($rowCategory) use (&$parIcsCodeByCategory, $conn, $year) {
+        $parIcsCodeByAccountability = [];
+        $lastParIcsCodeByCategory = [];
+        $getParIcsForAccountability = function($rowCategory, $departmentCodeForRow, $employeeIdForRow) use (&$parIcsCodeByAccountability, &$lastParIcsCodeByCategory, $conn, $year) {
             $rowCategory = strtoupper(trim((string)$rowCategory));
             if (!in_array($rowCategory, ['PAR', 'ICS'], true)) {
                 throw new RuntimeException('Invalid category for PAR/ICS number generation.');
             }
-            if (!isset($parIcsCodeByCategory[$rowCategory])) {
-                $parIcsCodeByCategory[$rowCategory] = gso_generate_next_par_ics_number(
-                    $conn,
-                    $rowCategory,
-                    $year,
-                    gso_par_ics_source_tables(true)
-                );
+            $key = $rowCategory . '|' . trim((string)$departmentCodeForRow) . '|' . (string)(int)$employeeIdForRow;
+            if (!isset($parIcsCodeByAccountability[$key])) {
+                if (isset($lastParIcsCodeByCategory[$rowCategory])) {
+                    $code = gso_next_par_ics_number_value($lastParIcsCodeByCategory[$rowCategory]);
+                    while (gso_par_ics_exists_in_tables($conn, $code, gso_par_ics_source_tables(true))) {
+                        $code = gso_next_par_ics_number_value($code);
+                    }
+                } else {
+                    $code = gso_generate_next_par_ics_number($conn, $rowCategory, $year, gso_par_ics_source_tables(true));
+                }
+                $parIcsCodeByAccountability[$key] = $code;
+                $lastParIcsCodeByCategory[$rowCategory] = $code;
             }
-            return $parIcsCodeByCategory[$rowCategory];
+            return $parIcsCodeByAccountability[$key];
         };
 
         $deptCode = strtoupper(trim((string)$dept));
@@ -10075,8 +10369,6 @@ if (isset($_POST['save_item'])) {
             echo json_encode(['status' => 422, 'message' => 'Invalid department selected.']);
             return false;
         }
-        $fundHistoryDeptValue = ($isTrustFund || $isDonation) ? $deptCode : $deptIdInt;
-
         $statusActive = 1;
         $createdAt = $today;
 
@@ -10135,6 +10427,8 @@ if (isset($_POST['save_item'])) {
 
         $parentPropertyNumbers = [];
         $parentEmpIds = [];
+        $parentDeptIds = [];
+        $parentDeptCodes = [];
         $parentSkipPropertyNumbers = [];
         $insertedCount = 0;
         $printRefs = ['PAR' => [], 'ICS' => []];
@@ -10155,6 +10449,9 @@ if (isset($_POST['save_item'])) {
         mysqli_begin_transaction($conn);
         try {
             for ($i=1; $i <= $quantity; $i++) {
+                $departmentForRow = $resolveDepartmentForSet($i);
+                $deptCodeForRow = trim((string)$departmentForRow['department_code']);
+                $deptIdForRow = (int)$departmentForRow['dept_id'];
                 // Per-row employee handling (same logic as existing)
                 $emp_for_row = $emp_id_final;
                 if ($parEmpMulti !== null) {
@@ -10195,7 +10492,7 @@ if (isset($_POST['save_item'])) {
                         if ($dupId !== null && $dupId !== '') {
                             $emp_for_row = $dupId;
                         } else {
-                            $createdRow = gso_create_employee_atomic($conn, $nm, $dept, $ps, $status, null);
+                            $createdRow = gso_create_employee_atomic($conn, $nm, $deptCodeForRow, $ps, $status, null);
                             if(!isset($createdRow['ok']) || !$createdRow['ok']){
                                 throw new Exception($createdRow['message'] ?? ('Error creating employee for row '.$i));
                             }
@@ -10208,6 +10505,9 @@ if (isset($_POST['save_item'])) {
 
                 if (!$noEndUser && ($emp_for_row === '' || $emp_for_row === null)) {
                     throw new Exception('End user is required.');
+                }
+                if (!$noEndUser && !gso_employee_belongs_to_department($conn, $emp_for_row, $deptCodeForRow)) {
+                    throw new Exception('The selected end user does not belong to the department for set ' . $i . '.');
                 }
 
                 $categoryForRow = $resolveRowCategory($itemCategoryRows, $i, $categoryInput);
@@ -10229,19 +10529,22 @@ if (isset($_POST['save_item'])) {
 
                 $parNumberForSet = strtoupper(trim($resolveRowInput($itemPropertyNumberRows, $i, ($i === 1 ? $par_number_raw : ''))));
                 if ($parNumberForSet === '' && !$skipPropertyNumberForRow) {
-                    throw new Exception('Property number is required for row ' . $i . '.');
+                    $generatedPropertyNumber = gso_generate_one_property_number(
+                        $conn,
+                        $categoryForRow,
+                        $year,
+                        $accountCodeForRow,
+                        $deptCodeForRow,
+                        $fundNorm,
+                        $reservedPropertyNumbers
+                    );
+                    if (!isset($generatedPropertyNumber['ok']) || !$generatedPropertyNumber['ok']) {
+                        throw new Exception($generatedPropertyNumber['error'] ?? ('Unable to generate a property number for row ' . $i . '.'));
+                    }
+                    $parNumberForSet = (string)$generatedPropertyNumber['property_number'];
                 }
                 if ($omitAccountPropertyForRow) {
                     $accountCodeForRow = null;
-                    $par_number = null;
-                } elseif ($skipPropertyNumberForRow) {
-                    $par_number = null;
-                } else {
-                    $allocation = gso_allocate_property_number($conn, $fundNorm, $parNumberForSet, $reservedPropertyNumbers);
-                    if (!isset($allocation['ok']) || !$allocation['ok']) {
-                        throw new Exception($allocation['error'] ?? ('Unable to allocate property number for row ' . $i . '.'));
-                    }
-                    $par_number = (string)$allocation['property_number'];
                 }
 
                 $itemForRow = $resolveRowUpper($itemAssetRows, $i, $assetInput);
@@ -10256,24 +10559,32 @@ if (isset($_POST['save_item'])) {
                     throw new Exception('Item Information is incomplete for row ' . $i . '.');
                 }
 
+                $allocatedPropertyNumbers = [];
+                if (!$skipPropertyNumberForRow) {
+                    $allocation = gso_allocate_property_number_block(
+                        $conn,
+                        $fundNorm,
+                        $parNumberForSet,
+                        $itemQuantityForRow,
+                        $reservedPropertyNumbers
+                    );
+                    if (!isset($allocation['ok']) || !$allocation['ok']) {
+                        throw new Exception($allocation['error'] ?? ('Unable to allocate property numbers for row ' . $i . '.'));
+                    }
+                    $allocatedPropertyNumbers = $allocation['numbers'];
+                    $reservedPropertyNumbers = array_merge($reservedPropertyNumbers, $allocatedPropertyNumbers);
+                }
+
                 $empForRowInt = $noEndUser ? null : (int)$emp_for_row;
+                $referenceNumberForRow = $getReferenceNumberForAccountability($categoryForRow, $deptCodeForRow, $empForRowInt);
+                if ($referenceNumber === '') { $referenceNumber = $referenceNumberForRow; }
                 $firstParNumberForSet = null;
 
                 for ($copyIndex = 1; $copyIndex <= $itemQuantityForRow; $copyIndex++) {
-                    if (!$skipPropertyNumberForRow && $copyIndex > 1) {
-                        $nextCandidate = gso_next_property_number_value($par_number);
-                        $allocation = gso_allocate_property_number($conn, $fundNorm, $nextCandidate, $reservedPropertyNumbers);
-                        if (!isset($allocation['ok']) || !$allocation['ok']) {
-                            throw new Exception($allocation['error'] ?? ('Unable to allocate property number for row ' . $i . ', copy ' . $copyIndex . '.'));
-                        }
-                        $par_number = (string)$allocation['property_number'];
-                    }
+                    $par_number = $skipPropertyNumberForRow ? null : ($allocatedPropertyNumbers[$copyIndex - 1] ?? null);
 
                     if ($firstParNumberForSet === null) {
                         $firstParNumberForSet = $par_number;
-                    }
-                    if (!$skipPropertyNumberForRow && $par_number !== null && $par_number !== '') {
-                        $reservedPropertyNumbers[] = $par_number;
                     }
 
                     if ($manualParIcsForRow) {
@@ -10284,7 +10595,7 @@ if (isset($_POST['save_item'])) {
                     } elseif ($manualProvided) {
                         $parIcsForRow = strtoupper($par_ics_input_raw);
                     } else {
-                        $parIcsForRow = $getParIcsForCategory($categoryForRow);
+                        $parIcsForRow = $getParIcsForAccountability($categoryForRow, $deptCodeForRow, $empForRowInt);
                     }
 
                     $fundForPurchase = strtoupper(trim((string)($_POST['fund'] ?? '')));
@@ -10375,9 +10686,9 @@ if (isset($_POST['save_item'])) {
                             'isississ',
                             $newPurchaseId,
                             $empForRowInt,
-                            $fundHistoryDeptValue,
+                            $deptCodeForRow,
                             $historyParNumber,
-                            $referenceNumber,
+                            $referenceNumberForRow,
                             $statusActive,
                             $categoryForRow,
                             $createdAt
@@ -10387,9 +10698,9 @@ if (isset($_POST['save_item'])) {
                             $stmtNewPurchaseHist,
                             'iississ',
                             $empForRowInt,
-                            $deptIdInt,
+                            $deptIdForRow,
                             $historyParNumber,
-                            $referenceNumber,
+                            $referenceNumberForRow,
                             $statusActive,
                             $categoryForRow,
                             $createdAt
@@ -10400,13 +10711,15 @@ if (isset($_POST['save_item'])) {
                     }
 
                     $insertedCount++;
-                    if (!in_array($referenceNumber, $printRefs[$categoryForRow], true)) {
-                        $printRefs[$categoryForRow][] = $referenceNumber;
+                    if (!in_array($referenceNumberForRow, $printRefs[$categoryForRow], true)) {
+                        $printRefs[$categoryForRow][] = $referenceNumberForRow;
                     }
                 }
 
                 $parentPropertyNumbers[$i] = $firstParNumberForSet;
                 $parentEmpIds[$i] = $empForRowInt;
+                $parentDeptIds[$i] = $deptIdForRow;
+                $parentDeptCodes[$i] = $deptCodeForRow;
                 $parentSkipPropertyNumbers[$i] = $skipPropertyNumberForRow;
             }
 
@@ -10460,15 +10773,17 @@ if (isset($_POST['save_item'])) {
                     // Bundle uses the same property number as its parent
                     $bPar = $bundleWithNumber;
 
+                    $empBundleInt = $noEndUser ? null : (isset($parentEmpIds[$parentIdx]) ? (int)$parentEmpIds[$parentIdx] : (int)$emp_id_final);
+                    $deptBundleInt = isset($parentDeptIds[$parentIdx]) ? (int)$parentDeptIds[$parentIdx] : $deptIdInt;
+                    $deptBundleCode = isset($parentDeptCodes[$parentIdx]) ? (string)$parentDeptCodes[$parentIdx] : $deptCode;
+
                     // Generate PAR/ICS number per bundle item
                     if ($manualProvided) {
                         $parIcsForBundle = strtoupper($par_ics_input_raw);
                     } else {
-                        $parIcsForBundle = $getParIcsForCategory($bCat);
+                        $parIcsForBundle = $getParIcsForAccountability($bCat, $deptBundleCode, $empBundleInt);
                     }
                     // (No inventory-table inserts for NEW condition)
-
-                    $empBundleInt = $noEndUser ? null : (isset($parentEmpIds[$parentIdx]) ? (int)$parentEmpIds[$parentIdx] : (int)$emp_id_final);
                     $serial1ForPurchase = ($bS1 === '') ? null : $bS1;
                     $serial2ForPurchase = ($bS2 === '') ? null : $bS2;
 
@@ -10477,7 +10792,7 @@ if (isset($_POST['save_item'])) {
                         mysqli_stmt_bind_param(
                             $stmtNewBundlePurchase,
                             'iissssssssss',
-                            $deptIdInt,
+                            $deptBundleInt,
                             $empBundleInt,
                             $bPar,
                             $bundleWithNumber,
@@ -10494,7 +10809,7 @@ if (isset($_POST['save_item'])) {
                         mysqli_stmt_bind_param(
                             $stmtNewBundlePurchase,
                             'iisssssssss',
-                            $deptIdInt,
+                            $deptBundleInt,
                             $empBundleInt,
                             $bPar,
                             $bundleWithNumber,
@@ -10572,21 +10887,27 @@ if (isset($_POST['save_item'])) {
 
     // PAR/ICS generator optimization:
     // The old generateParIcsNumber() scans MAX() each call; for bulk adds this becomes very slow.
-    $parIcsCodeByCategory = [];
-    $getParIcsForCategory = function($rowCategory) use (&$parIcsCodeByCategory, $conn, $year) {
+    $parIcsCodeByAccountability = [];
+    $lastParIcsCodeByCategory = [];
+    $getParIcsForAccountability = function($rowCategory, $departmentCodeForRow, $employeeIdForRow) use (&$parIcsCodeByAccountability, &$lastParIcsCodeByCategory, $conn, $year) {
         $rowCategory = strtoupper(trim((string)$rowCategory));
         if (!in_array($rowCategory, ['PAR', 'ICS'], true)) {
             throw new RuntimeException('Invalid category for PAR/ICS number generation.');
         }
-        if (!isset($parIcsCodeByCategory[$rowCategory])) {
-            $parIcsCodeByCategory[$rowCategory] = gso_generate_next_par_ics_number(
-                $conn,
-                $rowCategory,
-                $year,
-                gso_par_ics_source_tables(true)
-            );
+        $key = $rowCategory . '|' . trim((string)$departmentCodeForRow) . '|' . (string)(int)$employeeIdForRow;
+        if (!isset($parIcsCodeByAccountability[$key])) {
+            if (isset($lastParIcsCodeByCategory[$rowCategory])) {
+                $code = gso_next_par_ics_number_value($lastParIcsCodeByCategory[$rowCategory]);
+                while (gso_par_ics_exists_in_tables($conn, $code, gso_par_ics_source_tables(true))) {
+                    $code = gso_next_par_ics_number_value($code);
+                }
+            } else {
+                $code = gso_generate_next_par_ics_number($conn, $rowCategory, $year, gso_par_ics_source_tables(true));
+            }
+            $parIcsCodeByAccountability[$key] = $code;
+            $lastParIcsCodeByCategory[$rowCategory] = $code;
         }
-        return $parIcsCodeByCategory[$rowCategory];
+        return $parIcsCodeByAccountability[$key];
     };
 
     // Build and execute inserts per quantity using batching + transaction
@@ -10619,21 +10940,31 @@ if (isset($_POST['save_item'])) {
     };
     $nextTrustFundId = $isTrustFund ? $nextManualFundId('trust_fund', 'trust_fund_history') : null;
     $nextDonationId = $isDonation ? $nextManualFundId('donation', 'donation_history') : null;
-    $referenceNumberByCategory = [];
+    $referenceNumberByAccountability = [];
     $printRefs = ['PAR' => [], 'ICS' => []];
     $reservedPropertyNumbers = [];
-    $getReferenceNumberForCategory = function($rowCategory) use ($conn, &$referenceNumberByCategory) {
+    $getReferenceNumberForAccountability = function($rowCategory, $departmentCode, $employeeId) use ($conn, &$referenceNumberByAccountability) {
         $rowCategory = strtoupper(trim((string)$rowCategory));
         if (!in_array($rowCategory, ['PAR', 'ICS'], true)) {
             throw new RuntimeException('Invalid category for reference number generation.');
         }
-        if (!isset($referenceNumberByCategory[$rowCategory])) {
-            $referenceNumberByCategory[$rowCategory] = generateReferenceNumber($conn, 'general_fund_property_history', 'reference_number');
+        $key = $rowCategory . '|' . trim((string)$departmentCode) . '|' . (string)(int)$employeeId;
+        if (!isset($referenceNumberByAccountability[$key])) {
+            $referenceNumberByAccountability[$key] = generateReferenceNumber($conn, 'general_fund_property_history', 'reference_number');
         }
-        return $referenceNumberByCategory[$rowCategory];
+        return $referenceNumberByAccountability[$key];
     };
     $insertedCount = 0;
     for ($i=1; $i <= $quantity; $i++) {
+        try {
+            $departmentForRow = $resolveDepartmentForSet($i);
+        } catch (Throwable $e) {
+            mysqli_rollback($conn);
+            echo json_encode(['status' => 422, 'message' => $e->getMessage()]);
+            return false;
+        }
+        $deptCodeForRow = trim((string)$departmentForRow['department_code']);
+        $deptIdForRow = (int)$departmentForRow['dept_id'];
         // per-row employee: handle add_new_emp with inline name/position
         $emp_for_row = $emp_id_final;
         if ($parEmpMulti !== null) {
@@ -10674,7 +11005,6 @@ if (isset($_POST['save_item'])) {
                 if ($nm !== '') {
                     $nmEsc = mysqli_real_escape_string($conn, $nm);
                     $psEsc = mysqli_real_escape_string($conn, $ps);
-                    $deptEsc = mysqli_real_escape_string($conn, $dept);
                     // If name exists, reuse existing emp_id instead of inventing a new id
                     $dupId = null;
                     $dupRes = mysqli_query($conn, "SELECT emp_id FROM employee WHERE UPPER(emp_name)='{$nmEsc}' LIMIT 1");
@@ -10685,7 +11015,7 @@ if (isset($_POST['save_item'])) {
                     if ($dupId !== null && $dupId !== '') {
                         $emp_for_row = $dupId;
                     } else {
-                        $createdRow = gso_create_employee_atomic($conn, $nm, $dept, $ps, $status, null);
+                        $createdRow = gso_create_employee_atomic($conn, $nm, $deptCodeForRow, $ps, $status, null);
                         if(!isset($createdRow['ok']) || !$createdRow['ok']){
                             echo json_encode(['status'=>500,'message'=>$createdRow['message'] ?? ('Error creating employee for row '.$i)]);
                             return false;
@@ -10700,6 +11030,11 @@ if (isset($_POST['save_item'])) {
 
         if ($emp_for_row === '' || $emp_for_row === null) {
             echo json_encode(['status'=>422,'message'=>'End user is required.']);
+            return false;
+        }
+        if (!gso_employee_belongs_to_department($conn, $emp_for_row, $deptCodeForRow)) {
+            mysqli_rollback($conn);
+            echo json_encode(['status'=>422,'message'=>'The selected end user does not belong to the department for set '.$i.'.']);
             return false;
         }
 
@@ -10726,22 +11061,22 @@ if (isset($_POST['save_item'])) {
 
         $parNumberForSet = strtoupper(trim($resolveRowInput($itemPropertyNumberRows, $i, ($i === 1 ? $par_number_raw : ''))));
         if (!$skipPropertyNumberForRow && $parNumberForSet === '') {
-            mysqli_rollback($conn);
-            echo json_encode(['status'=>422,'message'=>'Property number is required for row '.$i.'.']);
-            return false;
-        }
-        if ($skipPropertyNumberForRow) {
-            $par_number = null;
-        } else {
-            $allocation = gso_allocate_property_number($conn, $fundUpper, $parNumberForSet, $reservedPropertyNumbers);
-            if (!isset($allocation['ok']) || !$allocation['ok']) {
+            $generatedPropertyNumber = gso_generate_one_property_number(
+                $conn,
+                $categoryForRow,
+                $year,
+                $accountCodeForRow,
+                $deptCodeForRow,
+                $fundUpper,
+                $reservedPropertyNumbers
+            );
+            if (!isset($generatedPropertyNumber['ok']) || !$generatedPropertyNumber['ok']) {
                 mysqli_rollback($conn);
-                echo json_encode(['status'=>422,'message'=>$allocation['error'] ?? ('Unable to allocate property number for row '.$i.'.')]);
+                echo json_encode(['status'=>422,'message'=>$generatedPropertyNumber['error'] ?? ('Unable to generate a property number for row '.$i.'.')]);
                 return false;
             }
-            $par_number = (string)$allocation['property_number'];
+            $parNumberForSet = (string)$generatedPropertyNumber['property_number'];
         }
-
         $itemForRow = $resolveRowUpper($itemAssetRows, $i, $assetInput);
         $brandForRow = $resolveRowUpper($itemBrandRows, $i, $brandInput);
         $descriptionForRow = $resolveRowUpper($itemDescriptionRows, $i, $descriptionInput);
@@ -10756,6 +11091,24 @@ if (isset($_POST['save_item'])) {
             return false;
         }
 
+        $allocatedPropertyNumbers = [];
+        if (!$skipPropertyNumberForRow) {
+            $allocation = gso_allocate_property_number_block(
+                $conn,
+                $fundUpper,
+                $parNumberForSet,
+                $itemQuantityForRow,
+                $reservedPropertyNumbers
+            );
+            if (!isset($allocation['ok']) || !$allocation['ok']) {
+                mysqli_rollback($conn);
+                echo json_encode(['status'=>422,'message'=>$allocation['error'] ?? ('Unable to allocate property numbers for row '.$i.'.')]);
+                return false;
+            }
+            $allocatedPropertyNumbers = $allocation['numbers'];
+            $reservedPropertyNumbers = array_merge($reservedPropertyNumbers, $allocatedPropertyNumbers);
+        }
+
         $itemSql = mysqli_real_escape_string($conn, $itemForRow);
         $brandSql = mysqli_real_escape_string($conn, $brandForRow);
         $descriptionSql = mysqli_real_escape_string($conn, $descriptionForRow);
@@ -10764,19 +11117,7 @@ if (isset($_POST['save_item'])) {
         $remarksSql = ($remarksForRow === null) ? 'NULL' : "'" . mysqli_real_escape_string($conn, $remarksForRow) . "'";
 
         for ($copyIndex = 1; $copyIndex <= $itemQuantityForRow; $copyIndex++) {
-            if (!$skipPropertyNumberForRow && $copyIndex > 1) {
-                $nextCandidate = gso_next_property_number_value($par_number);
-                $allocation = gso_allocate_property_number($conn, $fundUpper, $nextCandidate, $reservedPropertyNumbers);
-                if (!isset($allocation['ok']) || !$allocation['ok']) {
-                    mysqli_rollback($conn);
-                    echo json_encode(['status'=>422,'message'=>$allocation['error'] ?? ('Unable to allocate property number for row '.$i.', copy '.$copyIndex.'.')]);
-                    return false;
-                }
-                $par_number = (string)$allocation['property_number'];
-            }
-            if (!$skipPropertyNumberForRow && $par_number !== null && $par_number !== '') {
-                $reservedPropertyNumbers[] = $par_number;
-            }
+            $par_number = $skipPropertyNumberForRow ? null : ($allocatedPropertyNumbers[$copyIndex - 1] ?? null);
 
             if ($manualParIcsForRow) {
                 if ($manualParIcsValueForRow === '') {
@@ -10788,10 +11129,10 @@ if (isset($_POST['save_item'])) {
             } elseif ($manualProvided) {
                 $parIcsForRow = strtoupper($par_ics_input_raw);
             } else {
-                $parIcsForRow = $getParIcsForCategory($categoryForRow);
+                $parIcsForRow = $getParIcsForAccountability($categoryForRow, $deptCodeForRow, $emp_for_row);
             }
             $par_ics_sql = ($parIcsForRow === '' ? 'NULL' : "'" . mysqli_real_escape_string($conn, $parIcsForRow) . "'");
-            $referenceNumberForRow = $getReferenceNumberForCategory($categoryForRow);
+            $referenceNumberForRow = $getReferenceNumberForAccountability($categoryForRow, $deptCodeForRow, $emp_for_row);
             $serial1ForCopy = $resolveSerialValue($serialArr, $i, $copyIndex);
             $serial2ForCopy = $resolveSerialValue($serial2Arr, $i, $copyIndex);
             if ($serial1ForCopy === null && $copyIndex === 1 && $snid1SingleValue !== null && $snid1SingleValue !== '') { $serial1ForCopy = $snid1SingleValue; }
@@ -10804,30 +11145,30 @@ if (isset($_POST['save_item'])) {
                 $multi .= "INSERT INTO par_gen_fund(category,item,model,description,serial_number,serial_number_2,par_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,".$parNumberSql.",$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
                 if ($skipPropertyNumberForRow) {
                     $multi .= "SET @gso_add_item_gf_id = LAST_INSERT_ID();";
-                    $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$deptIdInt."',CONCAT('NPID:', @gso_add_item_gf_id),'".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                    $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$deptIdForRow."',CONCAT('NPID:', @gso_add_item_gf_id),'".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
                 } else {
-                    $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$deptIdInt."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                    $multi .= "INSERT INTO general_fund_property_history(emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$deptIdForRow."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
                 }
             } elseif ($isSEF) {
                 $multi .= "INSERT INTO property_sef(category,item,model,description,serial_number,serial_number_2,property_number,unit,unit_value,date_aquired,account_code,fund,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks) VALUES('".$categoryForRow."','".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,".$parNumberSql.",$unitSql,'".$unitValueForRow."','".$year."','".$accountCodeSql."','".mysqli_real_escape_string($conn,$fund)."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql);";
                 if ($skipPropertyNumberForRow) {
                     $multi .= "SET @gso_add_item_sef_id = LAST_INSERT_ID();";
-                    $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$dept."',CONCAT('NPID:', @gso_add_item_sef_id),'".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                    $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".mysqli_real_escape_string($conn, $deptCodeForRow)."',CONCAT('NPID:', @gso_add_item_sef_id),'".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
                 } else {
-                    $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".$dept."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                    $multi .= "INSERT INTO sef_property_history(emp_id,sch_id,property_number,reference_number,status,category,created_at) VALUES('".$emp_for_row."','".mysqli_real_escape_string($conn, $deptCodeForRow)."','".$par_number."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
                 }
             } elseif ($isTrustFund) {
                 $fundRecordId = $nextTrustFundId;
                 $nextTrustFundId--;
                 $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
                 $multi .= "INSERT INTO trust_fund(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','TRUST FUND','".$categoryForRow."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
-                $multi .= "INSERT INTO trust_fund_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                $multi .= "INSERT INTO trust_fund_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".mysqli_real_escape_string($conn, $deptCodeForRow)."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
             } else {
                 $fundRecordId = $nextDonationId;
                 $nextDonationId--;
                 $historyParNumber = mysqli_real_escape_string($conn, 'NPID:' . $fundRecordId);
                 $multi .= "INSERT INTO donation(id,fund,category,unit,item,model,description,serial_number,serial_number_2,property_number,unit_value,date_aquired,account_code,supplier,par_ics_number,purchase_order,purchase_request,obr_number,jev_number,remarks,created_at) VALUES('".$fundRecordId."','DONATION','".$categoryForRow."',$unitSql,'".$itemSql."','".$brandSql."','".$descriptionSql."',$s1,$s2,NULL,'".$unitValueForRow."','".$year."','".$accountCodeSql."',$supplier,$par_ics_sql,$po,$pr,$obr,$jev,$remarksSql,'".$today."');";
-                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".$dept."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
+                $multi .= "INSERT INTO donation_history(id,emp_id,dept_id,par_number,reference_number,status,category,created_at) VALUES('".$fundRecordId."','".$emp_for_row."','".mysqli_real_escape_string($conn, $deptCodeForRow)."','".$historyParNumber."','".mysqli_real_escape_string($conn, $referenceNumberForRow)."','".$status."','".$categoryForRow."','".$today."');";
             }
 
             if (!in_array($referenceNumberForRow, $printRefs[$categoryForRow], true)) {
@@ -14938,7 +15279,60 @@ if (isset($_POST['validate_employee_name'])) {
     return false;
 }
 
-// Generate a PAR/ICS number on demand (used by Add Item modal when 'auto generate' is checked)
+// Generate PAR/ICS previews for accountability groups in one request.
+if (isset($_POST['generate_par_ics_codes_batch'])) {
+    header('Content-Type: application/json');
+    if (empty($_SESSION['alogin'])) {
+        echo json_encode(['status' => 401, 'error' => 'Unauthorized.']);
+        return false;
+    }
+
+    $yearAcquired = trim((string)($_POST['year'] ?? ''));
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows) || count($rows) > 100) {
+        echo json_encode(['status' => 422, 'error' => 'Invalid PAR/ICS preview request.']);
+        return false;
+    }
+
+    try {
+        $codes = [];
+        $codeByGroup = [];
+        $lastCodeByCategory = [];
+        $sourceTables = gso_par_ics_source_tables(true);
+        foreach ($rows as $rowIndex => $row) {
+            if (!is_array($row) || !empty($row['skip'])) {
+                $codes[] = '';
+                continue;
+            }
+            $category = strtoupper(trim((string)($row['category'] ?? '')));
+            $group = trim((string)($row['group'] ?? ''));
+            if (!in_array($category, ['PAR', 'ICS'], true) || $group === '') {
+                $codes[] = '';
+                continue;
+            }
+            $groupKey = $category . '|' . $group;
+            if (!isset($codeByGroup[$groupKey])) {
+                if (isset($lastCodeByCategory[$category])) {
+                    $code = gso_next_par_ics_number_value($lastCodeByCategory[$category]);
+                    while (gso_par_ics_exists_in_tables($conn, $code, $sourceTables)) {
+                        $code = gso_next_par_ics_number_value($code);
+                    }
+                } else {
+                    $code = gso_generate_next_par_ics_number($conn, $category, $yearAcquired, $sourceTables);
+                }
+                $codeByGroup[$groupKey] = $code;
+                $lastCodeByCategory[$category] = $code;
+            }
+            $codes[] = $codeByGroup[$groupKey];
+        }
+        echo json_encode(['status' => 200, 'codes' => $codes]);
+    } catch (Throwable $e) {
+        echo json_encode(['status' => 500, 'error' => 'Failed to generate PAR/ICS No.']);
+    }
+    return false;
+}
+
+// Generate a PAR/ICS number on demand (used by legacy forms).
 if (isset($_POST['generate_par_ics_code'])) {
     header('Content-Type: application/json');
     $category = isset($_POST['category']) ? trim($_POST['category']) : '';

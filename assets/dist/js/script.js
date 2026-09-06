@@ -3616,6 +3616,9 @@ $(function(){
       useMultipleEndUsers: false
     };
     var npDetailPropertyRequestId = 0;
+    var npDetailPropertyRequest = null;
+    var npDetailDepartmentRequestId = 0;
+    var npDetailDepartmentRequest = null;
     var npDetailTempIndex = 0;
     var npDetailBundleParIcsCache = {};
     var npDetailGroupCache = {};
@@ -4293,60 +4296,82 @@ $(function(){
       if (!npDetailState.items.length) { return; }
 
       var selectedYear = npDetailGetYear($('#edit_np_year').val());
-      var codeByCategory = {};
-      $.each(npDetailState.items, function (_, item) {
-        var category = String(item.category || '').trim().toUpperCase();
-        var code = String(item.par_ics_number || '').trim().toUpperCase();
-        var originalYear = npDetailGetYear(item.original_year || item.year || '');
-        if (category && code && originalYear === selectedYear && !codeByCategory[category]) {
-          codeByCategory[category] = code;
+      var claimedCodes = {};
+      var preservedByGroup = {};
+      var cards = $('#editNpItemRows .item-set-card').toArray();
+      var requestRows = [];
+      var itemIds = [];
+
+      cards.forEach(function (card) {
+        var $card = $(card);
+        var itemId = String($card.data('itemId') || '');
+        var item = npDetailFindItem(itemId);
+        if (!item) { return; }
+        var category = String($card.find('.edit-np-item-category').val() || '').trim().toUpperCase();
+        var department = String(item.dept || npDetailCurrentDeptCode()).trim();
+        var employee = String(item.emp_id || '').trim();
+        if (employee.toLowerCase() === 'add_new_emp') {
+          var $employeeRow = $('#editNpItemRows .edit-np-set-accountability[data-item-id="' + itemId + '"]');
+          var employeeName = npDetailState.useMultipleEndUsers
+            ? String($employeeRow.find('.edit-np-emp-new-name').val() || '').trim().toUpperCase()
+            : String($('#edit_np_new_emp').val() || '').trim().toUpperCase();
+          employee += '|' + employeeName;
+        }
+        var group = department && employee ? department + '|' + employee : '';
+        var groupKey = category + '|' + group;
+        var originalCode = String(item.original_par_ics_number || '').trim().toUpperCase();
+        var accountabilityUnchanged = category === String(item.original_category || '').trim().toUpperCase()
+          && department === String(item.original_dept || '').trim()
+          && String(item.emp_id || '').trim() === String(item.original_emp_id || '').trim()
+          && npDetailGetYear(item.original_year || '') === selectedYear;
+        if (accountabilityUnchanged && originalCode && !claimedCodes[originalCode]) {
+          preservedByGroup[groupKey] = originalCode;
+          claimedCodes[originalCode] = true;
         }
       });
 
-      var pendingCategories = [];
-      $('#editNpItemRows .item-set-card').each(function () {
-        var $card = $(this);
+      cards.forEach(function (card) {
+        var $card = $(card);
         var itemId = String($card.data('itemId') || '');
         var category = String($card.find('.edit-np-item-category').val() || '').trim().toUpperCase();
         var item = npDetailFindItem(itemId);
         if (item) {
           item.category = category;
         }
-
-        if (!category) {
-          npDetailSetParIcs(itemId, '');
-        } else if (codeByCategory[category]) {
-          npDetailSetParIcs(itemId, codeByCategory[category]);
-        } else if ($.inArray(category, pendingCategories) === -1) {
-          pendingCategories.push(category);
+        var department = String((item && item.dept) || npDetailCurrentDeptCode()).trim();
+        var employee = String((item && item.emp_id) || '').trim();
+        if (employee.toLowerCase() === 'add_new_emp') {
+          var $employeeRow = $('#editNpItemRows .edit-np-set-accountability[data-item-id="' + itemId + '"]');
+          var employeeName = npDetailState.useMultipleEndUsers
+            ? String($employeeRow.find('.edit-np-emp-new-name').val() || '').trim().toUpperCase()
+            : String($('#edit_np_new_emp').val() || '').trim().toUpperCase();
+          employee += '|' + employeeName;
         }
+        var group = department && employee ? department + '|' + employee : '';
+        var preservedCode = preservedByGroup[category + '|' + group] || '';
+        itemIds.push(itemId);
+        requestRows.push({ category: category, group: group, skip: preservedCode ? 1 : 0 });
+        npDetailSetParIcs(itemId, preservedCode);
       });
 
-      $.each(pendingCategories, function (_, category) {
-        $.ajax({
-          url: '../auth/auth.php',
-          type: 'POST',
-          cache: false,
-          dataType: 'json',
-          data: {
-            generate_par_ics_code: 1,
-            category: category,
-            condition: 'NEW',
-            year: selectedYear
-          },
-          success: function (resp) {
-            var code = (resp && Number(resp.status) === 200 && resp.code) ? String(resp.code).trim().toUpperCase() : '';
-            if (!code) { return; }
-            codeByCategory[category] = code;
-            $('#editNpItemRows .item-set-card').each(function () {
-              var $card = $(this);
-              var itemId = String($card.data('itemId') || '');
-              if (String($card.find('.edit-np-item-category').val() || '').trim().toUpperCase() === category) {
-                npDetailSetParIcs(itemId, code);
-              }
-            });
-          }
-        });
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        cache: false,
+        dataType: 'json',
+        data: {
+          generate_par_ics_codes_batch: 1,
+          year: selectedYear,
+          rows: JSON.stringify(requestRows)
+        },
+        success: function (resp) {
+          var codes = resp && Number(resp.status) === 200 && Array.isArray(resp.codes) ? resp.codes : [];
+          $.each(itemIds, function (index, itemId) {
+            if (!requestRows[index].skip) {
+              npDetailSetParIcs(itemId, String(codes[index] || '').trim().toUpperCase());
+            }
+          });
+        }
       });
     }
 
@@ -4395,6 +4420,61 @@ $(function(){
       return $wrap.html();
     }
 
+    function npDetailDepartmentOptionsHtml(selectedValue, selectedLabel) {
+      var selectedText = String(selectedValue || '').trim();
+      var labelText = String(selectedLabel || selectedText).trim();
+      var $wrap = $('<select>' + String($('#edit_np_dept').html() || '<option value="">-SELECT-</option>') + '</select>');
+      if (selectedText && !$wrap.find('option').filter(function () {
+        return String(this.value || '').trim() === selectedText;
+      }).length) {
+        $('<option>', { value: selectedText, text: labelText || selectedText }).insertAfter($wrap.find('option:first'));
+      }
+      $wrap.find('option').prop('selected', false).removeAttr('selected');
+      $wrap.find('option').filter(function () {
+        return String(this.value || '').trim() === selectedText;
+      }).prop('selected', true).attr('selected', 'selected');
+      return $wrap.html();
+    }
+
+    function npDetailEmployeeOptionsForDeptHtml(deptCode, selectedValue, selectedLabel) {
+      var previousOptions = npDetailState.employeeOptionsHtml;
+      npDetailState.employeeOptionsHtml = npDetailEmployeeOptionsCache[String(deptCode || '').trim()]
+        || '<option value="">-SELECT-</option><option value="add_new_emp"> + ADD NEW EMPLOYEE </option>';
+      var html = npDetailEmployeeOptionsHtml(selectedValue, selectedLabel);
+      npDetailState.employeeOptionsHtml = previousOptions;
+      return html;
+    }
+
+    function npDetailLoadEmployeesForSetRow($row, selectedEmployee) {
+      var $department = $row.find('.edit-np-dept-select');
+      var $employee = $row.find('.edit-np-emp-select');
+      var deptCode = String($department.val() || '').trim();
+      var employeeValue = String(selectedEmployee !== undefined ? selectedEmployee : ($employee.val() || '')).trim();
+      if (!deptCode) {
+        $employee.html('<option value="">SELECT A DEPARTMENT FIRST</option>').prop('disabled', true);
+        return;
+      }
+      if (npDetailEmployeeOptionsCache[deptCode]) {
+        $employee.html(npDetailEmployeeOptionsForDeptHtml(deptCode, employeeValue, employeeValue)).prop('disabled', false);
+        npDetailToggleNewEmployeeRow($employee);
+        return;
+      }
+      $employee.html('<option value="">LOADING...</option>').prop('disabled', true);
+      $.ajax({
+        url: '../auth/auth.php',
+        type: 'POST',
+        data: { departmentid: deptCode },
+        success: function (html) {
+          npDetailEmployeeOptionsCache[deptCode] = String(html || '<option value="">-SELECT-</option>');
+          $employee.html(npDetailEmployeeOptionsForDeptHtml(deptCode, employeeValue, employeeValue)).prop('disabled', false);
+          npDetailToggleNewEmployeeRow($employee);
+        },
+        error: function () {
+          $employee.html('<option value="">Unable to load employees</option>').prop('disabled', false);
+        }
+      });
+    }
+
     function npDetailGetPrimaryEmployee() {
       if (!npDetailState.items.length) {
         return { value: '', label: '' };
@@ -4433,57 +4513,56 @@ $(function(){
       });
     }
 
+    function npDetailCancelDepartmentRequest() {
+      npDetailDepartmentRequestId++;
+      if (npDetailDepartmentRequest && npDetailDepartmentRequest.readyState !== 4) {
+        npDetailDepartmentRequest.abort();
+      }
+      npDetailDepartmentRequest = null;
+    }
+
     function npDetailLoadDepartmentsForFund(fund, selectedDept, done) {
-      fund = String(fund || '').trim();
-      selectedDept = String(selectedDept || '').trim();
+      npDetailCancelDepartmentRequest();
+      var requestId = npDetailDepartmentRequestId;
+      var cacheKey = npDetailNormalizeFund(fund);
       var $deptSelect = $('#edit_np_dept');
       var $deptInput = $('#editNpDeptSearch');
-      var cacheKey = fund.toUpperCase();
-
       $deptSelect.html('<option value="">-SELECT-</option>').val('');
-      $deptInput.val('');
+      $deptInput.val('').attr('placeholder', 'Loading departments...');
       npDetailPopulateDeptDatalist();
 
-      if (!fund) {
-        if (typeof done === 'function') { done(false); }
-        return;
-      }
-
-      if (npDetailDepartmentOptionsCache[cacheKey]) {
-        $deptSelect.html(npDetailDepartmentOptionsCache[cacheKey]);
-        if (selectedDept) {
-          $deptSelect.val(selectedDept);
-        }
+      function populate(optionsHtml, loaded) {
+        if (requestId !== npDetailDepartmentRequestId) { return; }
+        $deptSelect.html(optionsHtml || '<option value="">-SELECT-</option>');
+        $deptSelect.val(String(selectedDept || '').trim());
+        $deptInput.attr('placeholder', loaded
+          ? 'Type to search department'
+          : 'Unable to load departments. Select the fund again.');
         npDetailPopulateDeptDatalist();
         npDetailSyncDeptInput();
-        if (typeof done === 'function') { done(true); }
+        if (typeof done === 'function') { done(loaded); }
+      }
+
+      if (!cacheKey) {
+        populate('', true);
+        return;
+      }
+      if (npDetailDepartmentOptionsCache[cacheKey]) {
+        populate(npDetailDepartmentOptionsCache[cacheKey], true);
         return;
       }
 
-      $.ajax({
+      npDetailDepartmentRequest = $.ajax({
         url: '../auth/auth.php',
         type: 'POST',
-        data: { fund_for_departments: fund },
+        data: { fund_for_departments: cacheKey },
         success: function (html) {
-          var optionsHtml = html || '<option value="">-SELECT-</option>';
-          npDetailDepartmentOptionsCache[cacheKey] = optionsHtml;
-          $deptSelect.html(optionsHtml);
-          if (selectedDept) {
-            $deptSelect.find('option').each(function () {
-              if (String(this.value || '').trim() === selectedDept) {
-                $deptSelect.val(selectedDept);
-                return false;
-              }
-            });
-          }
-          npDetailPopulateDeptDatalist();
-          npDetailSyncDeptInput();
-          if (typeof done === 'function') { done(true); }
+          if (requestId !== npDetailDepartmentRequestId) { return; }
+          npDetailDepartmentOptionsCache[cacheKey] = html || '<option value="">-SELECT-</option>';
+          populate(npDetailDepartmentOptionsCache[cacheKey], true);
         },
-        error: function () {
-          $deptSelect.html('<option value="">-SELECT-</option>');
-          npDetailPopulateDeptDatalist();
-          if (typeof done === 'function') { done(false); }
+        error: function (xhr, status) {
+          if (status !== 'abort') { populate('', false); }
         }
       });
     }
@@ -4520,6 +4599,10 @@ $(function(){
     function npDetailResetDepartmentAndEmployeeSelection() {
       $('#edit_np_dept').val('');
       $('#editNpDeptSearch').val('');
+      $.each(npDetailState.items, function (_, item) {
+        item.dept = '';
+        item.department_code = '';
+      });
       $('#editNpMultipleEndUserCheckBox').prop('checked', false);
       npDetailState.useMultipleEndUsers = false;
       npDetailState.employeeOptionsHtml = '<option value="">SELECT A DEPARTMENT FIRST</option>';
@@ -4529,15 +4612,16 @@ $(function(){
 
     function npDetailRenderEndUserRows() {
       var $single = $('#edit_np_emp_single');
-      var $multiWrap = $('#editNpEndUserRows');
+      var $setSections = $('#editNpItemRows .edit-np-set-accountability');
       var $multiToggle = $('#editNpMultipleEndUserCheckBox');
       var $newEmpSection = $('#edit_np_add_new_employee');
       var useMultiple = npDetailState.items.length > 1 && npDetailState.useMultipleEndUsers;
 
       if (!npDetailState.items.length) {
-        $single.hide().removeAttr('name').prop('disabled', true);
-        $multiWrap.hide().empty();
+        $single.hide().removeAttr('name').prop('disabled', true).attr('aria-disabled', 'true');
+        $setSections.hide().empty();
         $multiToggle.prop('checked', false).prop('disabled', true);
+        $('#editNpDeptSearch, #edit_np_dept').prop('disabled', true).attr('aria-disabled', 'true');
         $newEmpSection.hide();
         return;
       }
@@ -4550,12 +4634,14 @@ $(function(){
         var singleLabel = primaryEmployee.label;
 
         $multiToggle.prop('checked', false).prop('disabled', npDetailState.items.length <= 1);
-        $multiWrap.hide().empty();
+        $('#editNpDeptSearch, #edit_np_dept').prop('disabled', false).attr('aria-disabled', 'false');
+        $setSections.stop(true, true).hide().empty();
         $single
           .html(npDetailEmployeeOptionsHtml(singleValue, singleLabel))
           .attr('name', npDetailState.items.length === 1 ? ('emp_id[' + singleItemKey + ']') : '')
           .attr('data-item-id', npDetailState.items.length === 1 ? singleItemKey : '')
           .prop('disabled', false)
+          .attr('aria-disabled', 'false')
           .show();
 
         $('#edit_np_new_emp')
@@ -4568,52 +4654,54 @@ $(function(){
           .val('');
 
         if (String($single.val() || '').toLowerCase() === 'add_new_emp') {
-          $newEmpSection.show();
+          $newEmpSection.stop(true, true).slideDown(180);
         } else {
-          $newEmpSection.hide();
+          $newEmpSection.stop(true, true).slideUp(180);
         }
         return;
       }
 
       $multiToggle.prop('checked', true).prop('disabled', false);
-      $single.hide().removeAttr('name').prop('disabled', true);
-      $newEmpSection.hide();
-
-      var html = '<table class="table table-sm table-bordered mb-0">'
-        + '<thead class="bg-light">'
-        + '<tr>'
-        + '<th style="width:90px;">Set</th>'
-        + '<th>End User</th>'
-        + '<th>New Employee</th>'
-        + '<th>Position</th>'
-        + '</tr>'
-        + '</thead><tbody>';
+      $('#editNpDeptSearch, #edit_np_dept').prop('disabled', true).attr('aria-disabled', 'true');
+      $single.removeAttr('name').prop('disabled', true).attr('aria-disabled', 'true').show();
+      $newEmpSection.stop(true, true).hide();
+      $('#edit_np_new_emp, #edit_np_position').prop('disabled', true).prop('required', false);
 
       $.each(npDetailState.items, function (_, item) {
         var itemKey = String(item.key || '');
+        var deptValue = String(item.dept || item.department_code || '').trim();
         var empValue = String(item.emp_id || '').trim();
-        html += ''
-          + '<tr data-item-id="' + npDetailEsc(itemKey) + '">'
-          + '  <td class="align-middle font-weight-bold">Set ' + npDetailEsc(item.set_no) + '</td>'
-          + '  <td>'
-          + '    <select class="form-control edit-np-emp-select" name="emp_id[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '">'
-          +        npDetailEmployeeOptionsHtml(empValue, item.emp_name || empValue)
+        var $section = $('#editNpItemRows .edit-np-set-accountability[data-item-id="' + itemKey + '"]');
+        var html = ''
+          + '<div class="form-row mb-0">'
+          + '  <div class="form-group col-md-6 mb-0">'
+          + '    <label>Department</label>'
+          + '    <select class="form-control edit-np-dept-select" name="dept_id_multi[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" required>'
+          +        npDetailDepartmentOptionsHtml(deptValue, item.department_name || deptValue)
           + '    </select>'
-          + '  </td>'
-          + '  <td>'
+          + '  </div>'
+          + '  <div class="form-group col-md-6 mb-0">'
+          + '    <label>End User</label>'
+          + '    <select class="form-control edit-np-emp-select" name="emp_id[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" required>'
+          +        npDetailEmployeeOptionsForDeptHtml(deptValue, empValue, item.emp_name || empValue)
+          + '    </select>'
+          + '  </div>'
+          + '</div>'
+          + '<div class="form-row mt-3 edit-np-new-employee-fields" style="display:none;">'
+          + '  <div class="form-group col-md-6 mb-0">'
+          + '    <label>New Employee</label>'
           + '    <input type="text" class="form-control text-uppercase edit-np-emp-new-name" name="emp_new_name[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" placeholder="Enter new employee name" disabled>'
-          + '  </td>'
-          + '  <td>'
+          + '  </div>'
+          + '  <div class="form-group col-md-6 mb-0">'
+          + '    <label>Position</label>'
           + '    <input type="text" class="form-control text-uppercase edit-np-emp-new-position" name="emp_new_position[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" placeholder="Enter position" disabled>'
-          + '  </td>'
-          + '</tr>';
+          + '  </div>'
+          + '</div>';
+        $section.html(html).stop(true, true).slideDown(180);
+        npDetailLoadEmployeesForSetRow($section, empValue);
       });
 
-      html += '</tbody></table>';
-      $multiWrap.html(html).show();
-      $multiWrap.find('select.edit-np-emp-select').each(function () {
-        npDetailToggleNewEmployeeRow($(this));
-      });
+      $('#editNpDeptSearch, #edit_np_dept, #edit_np_emp_single, #edit_np_new_emp, #edit_np_position').val('');
     }
 
     function npDetailRenderItemRows(options) {
@@ -4641,6 +4729,7 @@ $(function(){
           + '    <strong>Set ' + npDetailEsc(item.set_no) + '</strong>'
           + '    <button type="button" class="btn btn-sm btn-outline-danger edit-np-remove-set" data-item-id="' + npDetailEsc(itemKey) + '"' + (npDetailState.items.length === 1 ? ' style="visibility:hidden;"' : '') + '><i class="fas fa-trash"></i></button>'
           + '  </div>'
+          + '  <div class="border rounded p-3 mb-3 edit-np-set-accountability" data-item-id="' + npDetailEsc(itemKey) + '" style="display:none; background-color:#fff;"></div>'
           + '  <div class="form-row">'
           + '    <div class="form-group col-md-2">'
           + '      <label>Quantity</label>'
@@ -4768,10 +4857,12 @@ $(function(){
       if (item) {
         item.property_number = firstValue;
         item.property_number_preview = previewValue;
+        item.property_numbers = npDetailPropertyCopies(firstValue, quantity);
       }
 
       $hidden.val(firstValue);
-      $preview.val(displayValue);
+      $preview.val(firstValue ? displayValue : '').attr('placeholder', message || displayValue);
+      $card.data('propertyStatus', type || 'info');
       npDetailSnapshotBundleRows();
       npDetailRenderBundleRows();
     }
@@ -4819,7 +4910,9 @@ $(function(){
       var fund = npDetailNormalizeFund($('#edit_np_fund').val());
       var category = String($card.find('.edit-np-item-category').val() || '').trim().toUpperCase();
       var year = npDetailGetYear($('#edit_np_year').val());
-      var dept = npDetailCurrentDeptCode();
+      var dept = npDetailState.useMultipleEndUsers
+        ? String($card.find('.edit-np-dept-select').val() || '').trim()
+        : npDetailCurrentDeptCode();
       var accountCode = String($card.find('.edit-np-account-code').val() || '').trim();
       var originalYear = npDetailGetYear(item.original_year || item.year || '');
       var originalFund = npDetailNormalizeFund(item.original_fund || item.fund || '');
@@ -4830,7 +4923,8 @@ $(function(){
         && category === originalCategory
         && year === originalYear
         && dept === originalDept
-        && accountCode === originalAccount;
+        && accountCode === originalAccount
+        && npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val()) === npDetailNormalizeItemQuantity(item.original_item_quantity);
       var savedPropertyNumber = String(item.original_property_number || item.property_number || '').trim();
       var excludedNumbers = npDetailCollectReservedPropertyNumbers(itemId);
 
@@ -4853,20 +4947,26 @@ $(function(){
         return;
       }
 
-      if (unchanged) {
+      if (unchanged && savedPropertyNumber) {
         npDetailSetProperty(itemId, savedPropertyNumber, savedPropertyNumber ? 'Generated from account code.' : 'No property number.', 'info');
         if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
         return;
       }
 
       if (!fund || !category || !year || !dept || !accountCode) {
-        npDetailSetProperty(itemId, savedPropertyNumber, 'Select fund, category, year, department, and account code to generate a property number.', 'error');
-        if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
+        var missing = [];
+        if (!fund) { missing.push('fund'); }
+        if (!category) { missing.push('category'); }
+        if (!year) { missing.push('year'); }
+        if (!dept) { missing.push('department'); }
+        if (!accountCode) { missing.push('account code'); }
+        npDetailSetProperty(itemId, '', 'Select ' + missing.join(', ') + ' to generate a property number.', 'error');
+        if (typeof onDone === 'function') { onDone(''); }
         return;
       }
 
-      npDetailSetProperty(itemId, 'Generating...', 'Checking available property number...', 'info');
-      $.ajax({
+      npDetailSetProperty(itemId, '', 'Generating property number...', 'loading');
+      npDetailPropertyRequest = $.ajax({
         url: '../auth/auth.php',
         type: 'POST',
         cache: false,
@@ -4890,18 +4990,31 @@ $(function(){
             if (typeof onDone === 'function') { onDone(resp.data.property_number); }
             return;
           }
-          npDetailSetProperty(itemId, savedPropertyNumber, (resp && resp.message) ? resp.message : 'Unable to generate an available property number.', 'error');
-          if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
+          npDetailSetProperty(itemId, '', (resp && resp.message) ? resp.message : 'Unable to generate an available property number.', 'error');
+          if (typeof onDone === 'function') { onDone(''); }
         },
-        error: function () {
-          if (requestId !== npDetailPropertyRequestId) { return; }
-          npDetailSetProperty(itemId, savedPropertyNumber, 'Unable to check property number availability.', 'error');
-          if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
+        error: function (xhr, status) {
+          if (requestId !== npDetailPropertyRequestId || status === 'abort') { return; }
+          npDetailSetProperty(itemId, '', 'Unable to generate property number. Check your connection and try again.', 'error');
+          if (typeof onDone === 'function') { onDone(''); }
         }
       });
     }
 
+    function npDetailCancelPropertyRequest() {
+      npDetailPropertyRequestId++;
+      if (npDetailPropertyRequest && npDetailPropertyRequest.readyState !== 4) {
+        npDetailPropertyRequest.abort();
+      }
+      npDetailPropertyRequest = null;
+    }
+
     function npDetailRefreshProperty(itemId, extraExclude, onDone, requestIdOverride) {
+      // Restart the allocation queue so changing one set cannot strand another.
+      if (!requestIdOverride) {
+        npDetailRefreshAllProperties();
+        return;
+      }
       var item = npDetailFindItem(itemId);
       var $card = $('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"]');
       if (!item || !$card.length) {
@@ -4909,14 +5022,18 @@ $(function(){
         return;
       }
 
-      var requestId = requestIdOverride || (++npDetailPropertyRequestId);
+      var requestId = requestIdOverride;
       npDetailRequestPropertyNumber(itemId, item, $card, extraExclude, requestId, onDone);
     }
 
     function npDetailRefreshAllProperties() {
+      npDetailCancelPropertyRequest();
       var cards = $('#editNpItemRows .item-set-card').toArray();
       var reserved = [];
-      var batchRequestId = ++npDetailPropertyRequestId;
+      var batchRequestId = npDetailPropertyRequestId;
+      cards.forEach(function (card) {
+        npDetailSetProperty($(card).data('itemId'), '', 'Generating property number...', 'loading');
+      });
 
       function reserveCopies(firstValue, $card) {
         var value = String(firstValue || '').trim();
@@ -4983,11 +5100,16 @@ $(function(){
     function npDetailToggleNewEmployeeRow($select) {
       var itemId = String($select.data('itemId') || '');
       var isAddNew = String($select.val() || '').toLowerCase() === 'add_new_emp';
-      var $name = $('.edit-np-emp-new-name[data-item-id="' + itemId + '"]');
-      var $position = $('.edit-np-emp-new-position[data-item-id="' + itemId + '"]');
+      var $section = $select.closest('.edit-np-set-accountability');
+      var $fields = $section.find('.edit-np-new-employee-fields');
+      var $name = $section.find('.edit-np-emp-new-name[data-item-id="' + itemId + '"]');
+      var $position = $section.find('.edit-np-emp-new-position[data-item-id="' + itemId + '"]');
       $name.prop('disabled', !isAddNew).prop('required', isAddNew);
       $position.prop('disabled', !isAddNew).prop('required', isAddNew);
-      if (!isAddNew) {
+      if (isAddNew) {
+        $fields.stop(true, true).slideDown(180);
+      } else {
+        $fields.stop(true, true).slideUp(180);
         $name.val('');
         $position.val('');
       }
@@ -5041,6 +5163,7 @@ $(function(){
     }
 
     function npDetailFillModal(data, options) {
+      npDetailCancelPropertyRequest();
       var opts = options || {};
       var group = data && data.group ? data.group : {};
       var items = data && data.items ? data.items : [];
@@ -5051,7 +5174,7 @@ $(function(){
         var originalYear = npDetailGetYear(group.year || '');
         var originalFund = npDetailNormalizeFund(group.fund || '');
         var originalCategory = String(item.category || group.category || '').trim().toUpperCase();
-        var originalDept = String(group.department_code || '').trim();
+        var originalDept = String(item.department_code || group.department_code || '').trim();
         var key = String(item.id || ('tmp_' + (++npDetailTempIndex)));
         var itemQuantity = npDetailNormalizeItemQuantity(item.item_quantity || 1);
         var propertyNumber = String(item.property_number || '');
@@ -5073,12 +5196,17 @@ $(function(){
           existing_item_ids: existingItemIds,
           property_number_preview: String(item.property_number_preview || propertyNumbers.join(', ') || npDetailPropertyCopies(propertyNumber, itemQuantity).join(', ')),
           par_ics_number: String(item.par_ics_number || ''),
+          original_item_quantity: itemQuantity,
           original_property_number: String(item.property_number || ''),
           original_account_code: String(item.account_code || ''),
           original_year: originalYear,
           original_fund: originalFund,
           original_category: originalCategory,
           original_dept: originalDept,
+          original_emp_id: String(item.emp_id || ''),
+          original_par_ics_number: String(item.par_ics_number || ''),
+          department_code: originalDept,
+          department_name: String(item.department_name || group.department_name || ''),
           year: originalYear,
           fund: originalFund,
           category: originalCategory,
@@ -5088,6 +5216,12 @@ $(function(){
         item.add_serial = npDetailHasSerialValues(item);
         return item;
       });
+      var accountabilityGroups = {};
+      $.each(npDetailState.items, function (_, item) {
+        accountabilityGroups[String(item.dept || '') + '|' + String(item.emp_id || '')] = true;
+      });
+      npDetailState.useMultipleEndUsers = npDetailState.items.length > 1 && Object.keys(accountabilityGroups).length > 1;
+      $('#editNpMultipleEndUserCheckBox').prop('checked', npDetailState.useMultipleEndUsers);
       npDetailState.bundles = $.map(bundles, function (bundle) {
         return npDetailNormalizeBundle($.extend({}, bundle, {
           key: String(bundle.id || ('bundle_' + (++npDetailTempIndex))),
@@ -5117,6 +5251,7 @@ $(function(){
       }
       npDetailLoadDepartmentsForFund(group.fund || '', group.department_code || '', function () {
         npDetailLoadEmployees(String($('#edit_np_dept').val() || '').trim(), function () {
+          npDetailRenderEndUserRows();
           if (!opts.skipDerivedRefresh || npDetailShouldRefreshDerivedValues()) {
             npDetailRefreshParIcsNumbers();
             npDetailRefreshAllProperties();
@@ -5161,6 +5296,8 @@ $(function(){
         original_fund: npDetailNormalizeFund($('#edit_np_fund').val()),
         original_category: '',
         original_dept: String($('#edit_np_dept').val() || '').trim(),
+        original_emp_id: '',
+        original_par_ics_number: '',
         year: npDetailGetYear($('#edit_np_year').val()),
         fund: npDetailNormalizeFund($('#edit_np_fund').val()),
         category: '',
@@ -5225,23 +5362,17 @@ $(function(){
 
       var opened = 0;
       if (categories.PAR) {
-        if (parRefs.length) {
-          $.each(parRefs, function (_, ref) {
-            window.open('printpar.php?refnumber=' + encodeURIComponent(String(ref || '').trim()), '_blank');
-            opened++;
-          });
-        } else if (referenceNumber) {
-          window.open('printpar.php?refnumber=' + encodeURIComponent(referenceNumber), '_blank');
+        var parUrl = buildAddItemParPrintUrl(parRefs.length ? parRefs : referenceNumber);
+        if (parUrl) {
+          window.open(parUrl, '_blank');
           opened++;
         }
       }
       if (categories.ICS) {
-        if (icsRefs.length) {
-          var icsUrl = buildIcsPrintUrl(icsRefs);
-          if (icsUrl) {
-            window.open(icsUrl, '_blank');
-            opened++;
-          }
+        var icsUrl = buildAddItemIcsPrintUrl(icsRefs);
+        if (icsUrl) {
+          window.open(icsUrl, '_blank');
+          opened++;
         }
       }
 
@@ -5358,7 +5489,6 @@ $(function(){
           $('#editNpDetailModal').modal('show');
         } else {
           $('#editNpItemRows').html('<div class="text-center text-muted py-4">Loading details...</div>');
-          $('#editNpEndUserRows').html('<tr><td colspan="4" class="text-center text-muted">Loading details...</td></tr>');
           $('#editNpDetailModal').modal('show');
         }
 
@@ -5420,10 +5550,18 @@ $(function(){
     $(document)
       .off('change.editNpDeptSelect', '#edit_np_dept')
       .on('change.editNpDeptSelect', '#edit_np_dept', function () {
+        var departmentCode = String($(this).val() || '').trim();
         npDetailSyncDeptInput();
-        npDetailResetEmployeeSelection();
-        npDetailLoadEmployees(String($(this).val() || '').trim(), function () {
-          npDetailRefreshAllProperties();
+        if (!npDetailState.useMultipleEndUsers) {
+          $.each(npDetailState.items, function (_, item) {
+            item.dept = departmentCode;
+            item.department_code = departmentCode;
+          });
+          npDetailResetEmployeeSelection();
+        }
+        npDetailRefreshAllProperties();
+        npDetailLoadEmployees(departmentCode, function () {
+          npDetailRefreshParIcsNumbers();
         });
       });
 
@@ -5431,12 +5569,54 @@ $(function(){
       .off('change.editNpMultipleEndUsers', '#editNpMultipleEndUserCheckBox')
       .on('change.editNpMultipleEndUsers', '#editNpMultipleEndUserCheckBox', function () {
         npDetailState.useMultipleEndUsers = $(this).is(':checked') && npDetailState.items.length > 1;
+        if (!npDetailState.useMultipleEndUsers) {
+          var firstItem = npDetailState.items[0] || {};
+          var sharedDepartment = String(firstItem.dept || firstItem.department_code || '').trim();
+          var sharedEmployee = npDetailGetPrimaryEmployee();
+          if (sharedDepartment && !$('#edit_np_dept option').filter(function () {
+            return String(this.value || '').trim() === sharedDepartment;
+          }).length) {
+            $('<option>', {
+              value: sharedDepartment,
+              text: firstItem.department_name || sharedDepartment
+            }).appendTo('#edit_np_dept');
+          }
+          $('#edit_np_dept').val(sharedDepartment);
+          npDetailSyncDeptInput();
+          $.each(npDetailState.items, function (_, item) {
+            item.dept = sharedDepartment;
+            item.department_code = sharedDepartment;
+            item.emp_id = sharedEmployee.value;
+            item.emp_name = sharedEmployee.label;
+          });
+        }
         npDetailRenderEndUserRows();
+        npDetailRefreshParIcsNumbers();
+        npDetailRefreshAllProperties();
       });
 
     $(document)
-      .off('change.editNpEmployeeSelect', '#editNpEndUserRows .edit-np-emp-select, #edit_np_emp_single')
-      .on('change.editNpEmployeeSelect', '#editNpEndUserRows .edit-np-emp-select, #edit_np_emp_single', function () {
+      .off('change.editNpDepartmentRow', '#editNpItemRows .edit-np-dept-select')
+      .on('change.editNpDepartmentRow', '#editNpItemRows .edit-np-dept-select', function () {
+        var $field = $(this);
+        var itemId = String($field.data('itemId') || '');
+        var item = npDetailFindItem(itemId);
+        if (item) {
+          item.dept = String($field.val() || '').trim();
+          item.department_code = item.dept;
+          item.emp_id = '';
+          item.emp_name = '';
+        }
+        var $row = $field.closest('.edit-np-set-accountability');
+        $row.find('.edit-np-emp-new-name, .edit-np-emp-new-position').val('');
+        npDetailLoadEmployeesForSetRow($row, '');
+        npDetailRefreshParIcsNumbers();
+        npDetailRefreshAllProperties();
+      });
+
+    $(document)
+      .off('change.editNpEmployeeSelect', '#editNpItemRows .edit-np-emp-select, #edit_np_emp_single')
+      .on('change.editNpEmployeeSelect', '#editNpItemRows .edit-np-emp-select, #edit_np_emp_single', function () {
         var $field = $(this);
         var selectedValue = String($field.val() || '').trim();
         var selectedLabel = $field.find('option:selected').text().trim();
@@ -5466,13 +5646,20 @@ $(function(){
           $('#edit_np_new_emp').prop('disabled', !isAddNew);
           $('#edit_np_position').prop('disabled', !isAddNew);
           if (isAddNew) {
-            $('#edit_np_add_new_employee').show();
+            $('#edit_np_add_new_employee').stop(true, true).slideDown(180);
           } else {
-            $('#edit_np_add_new_employee').hide();
+            $('#edit_np_add_new_employee').stop(true, true).slideUp(180);
             $('#edit_np_new_emp').val('');
             $('#edit_np_position').val('');
           }
         }
+        npDetailRefreshParIcsNumbers();
+      });
+
+    $(document)
+      .off('input.editNpEmployeeName', '#edit_np_new_emp, #editNpItemRows .edit-np-emp-new-name')
+      .on('input.editNpEmployeeName', '#edit_np_new_emp, #editNpItemRows .edit-np-emp-new-name', function () {
+        npDetailRefreshParIcsNumbers();
       });
 
     $(document)
@@ -5705,9 +5892,11 @@ $(function(){
       .off('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_year')
       .on('change.editNpPropertyDeps', '#edit_np_fund, #edit_np_year', function () {
         if ($(this).is('#edit_np_fund')) {
+          var previousDepartment = npDetailCurrentDeptCode();
           npDetailResetDepartmentAndEmployeeSelection();
-          npDetailLoadDepartmentsForFund($(this).val(), '', function () {
-            npDetailRefreshAllProperties();
+          npDetailRefreshAllProperties();
+          npDetailLoadDepartmentsForFund($(this).val(), previousDepartment, function () {
+            $('#edit_np_dept').trigger('change');
           });
         }
         $('#editNpItemRows .item-set-card').each(function () {
@@ -5739,6 +5928,14 @@ $(function(){
       .on('submit.editNpDetailForm', '#editNpDetailForm', function (e) {
         e.preventDefault();
 
+        if ($('#editNpItemRows .item-set-card').filter(function () {
+          return ['loading', 'error'].indexOf($(this).data('propertyStatus')) !== -1;
+        }).length) {
+          var message = 'Please wait for property numbers to finish generating and resolve any messages shown before saving.';
+          Swal ? Swal.fire({ icon: 'warning', title: 'Property number required', text: message }) : alert(message);
+          return;
+        }
+
         if (!npDetailValidateUnitValues()) {
           Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'Please review the unit value rules for each set.' }) : alert('Please review the unit value rules for each set.');
           return;
@@ -5748,14 +5945,16 @@ $(function(){
           return;
         }
 
-        var deptCode = npDetailFindDeptCodeByName($('#editNpDeptSearch').val()) || npDetailCurrentDeptCode();
+        var useMultipleEndUsers = npDetailState.items.length > 1 && npDetailState.useMultipleEndUsers;
+        var deptCode = useMultipleEndUsers
+          ? String($('#editNpItemRows .edit-np-dept-select').first().val() || '').trim()
+          : (npDetailFindDeptCodeByName($('#editNpDeptSearch').val()) || npDetailCurrentDeptCode());
         if (!deptCode) {
-          Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'Please select a valid department from the list.' }) : alert('Please select a valid department from the list.');
+          Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'Please select a valid department.' }) : alert('Please select a valid department.');
           return;
         }
         $('#edit_np_dept').val(deptCode);
 
-        var useMultipleEndUsers = npDetailState.items.length > 1 && npDetailState.useMultipleEndUsers;
         var singleEmployeeValue = String($('#edit_np_emp_single').val() || '').trim();
 
         if (!useMultipleEndUsers && npDetailState.items.length > 1) {
@@ -5769,11 +5968,22 @@ $(function(){
           }
         }
 
+        var missingDepartmentRows = [];
+        var missingEndUserRows = [];
         var missingEmployeeRows = [];
         if (useMultipleEndUsers) {
-          $('#editNpEndUserRows .edit-np-emp-select').each(function () {
+          $('#editNpItemRows .edit-np-dept-select').each(function () {
+            if (!String($(this).val() || '').trim()) {
+              var itemId = $(this).data('itemId');
+              missingDepartmentRows.push(($('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"] strong').text() || ('Set ' + itemId)));
+            }
+          });
+          $('#editNpItemRows .edit-np-emp-select').each(function () {
             var itemId = $(this).data('itemId');
-            if (String($(this).val() || '').toLowerCase() === 'add_new_emp') {
+            var employeeValue = String($(this).val() || '').trim();
+            if (!employeeValue) {
+              missingEndUserRows.push(($('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"] strong').text() || ('Set ' + itemId)));
+            } else if (employeeValue.toLowerCase() === 'add_new_emp') {
               var name = $('.edit-np-emp-new-name[data-item-id="' + itemId + '"]').val();
               var position = $('.edit-np-emp-new-position[data-item-id="' + itemId + '"]').val();
               if (!String(name || '').trim() || !String(position || '').trim()) {
@@ -5781,6 +5991,14 @@ $(function(){
               }
             }
           });
+        }
+        if (missingDepartmentRows.length) {
+          Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'Department is required for: ' + missingDepartmentRows.join(', ') + '.' }) : alert('Department is required for every set.');
+          return;
+        }
+        if (missingEndUserRows.length) {
+          Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'End user is required for: ' + missingEndUserRows.join(', ') + '.' }) : alert('End user is required for every set.');
+          return;
         }
         if (missingEmployeeRows.length) {
           Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'New employee name and position are required for: ' + missingEmployeeRows.join(', ') + '.' }) : alert('New employee name and position are required.');
@@ -5912,6 +6130,8 @@ $(function(){
     $('#editNpDetailModal')
       .off('hidden.bs.modal.editNpDetail')
       .on('hidden.bs.modal.editNpDetail', function () {
+        npDetailCancelPropertyRequest();
+        npDetailCancelDepartmentRequest();
         npDetailState.group = null;
         npDetailState.items = [];
         npDetailState.bundles = [];
@@ -5921,7 +6141,6 @@ $(function(){
         $('#editNpDetailForm')[0].reset();
         $('#editNpItemRows').html('<div class="text-center text-muted py-4">Select a purchase to view details.</div>');
         $('#editNpBundleRows').html('<div class="text-center text-muted py-4">No bundle equipment found.</div>');
-        $('#editNpEndUserRows').html('<tr><td colspan="4" class="text-center text-muted">Select a purchase to view details.</td></tr>');
         $('#edit_np_set_count').val(0);
         $('#edit_np_fund').prop('disabled', false);
         $('#edit_np_set_count').prop('readonly', false);
@@ -6297,6 +6516,10 @@ $(function(){
       .off('click.npEditBtn', '.np-edit-btn')
       .on('click.npEditBtn', '.np-edit-btn', function () {
         if ($(this).closest('#addItemNewPurchaseTable').length) {
+          return;
+        }
+        if (missingDepartmentRows.length) {
+          Swal ? Swal.fire({ icon: 'warning', title: 'Validation error', text: 'Department is required for: ' + missingDepartmentRows.join(', ') + '.' }) : alert('Department is required.');
           return;
         }
         if (!$(this).attr('data-item')) {
@@ -6997,6 +7220,9 @@ $(function(){
         $("#employee").html(data);
         $("#parEmp").html(data);
         $("#employee_id").html(data);
+        if ($('#multipleEndUserCheckBox').is(':checked')) {
+          $('#deptSearch, #dept, #parEmp').prop('disabled', true).attr('aria-disabled', 'true');
+        }
 
         // Keep Select2 (if enabled) in sync after options refresh
         try {
@@ -8896,13 +9122,16 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   var MAX_ITEM_SETS = 100;
   var QUANTITY_RENDER_DELAY_MS = 120;
 
-  var empOptionsAll = '';
+  var employeeOptionsByDept = {};
+  var employeeRequestsByDept = {};
   var itemSetByRow = {};
   var endUserByRow = {};
+  var perSetAssignmentsInitialized = false;
 
   var reqFundDepts = null;
-  var debFundDepts = null;
   var debPropNum = null;
+  var propertyNumberRequest = null;
+  var propertyNumberRevision = 0;
   var debParIcsNum = null;
   var debQuantityRender = null;
   var lastRenderedSetCount = 1;
@@ -9045,6 +9274,9 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   function withSelectedOption(optionsHtml, selectedValue){
     var $wrap = $('<select>' + optionsHtml + '</select>');
     $wrap.val(String(selectedValue || ''));
+    $wrap.find('option').each(function(){
+      this.defaultSelected = this.value === String(selectedValue || '');
+    });
     return $wrap.html();
   }
 
@@ -9096,7 +9328,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         asset: String($row.find('.js-item-asset').val() || ''),
         accountCode: String($row.find('.js-item-account-code').val() || ''),
         noAccountProperty: $row.find('.js-item-no-account-property').is(':checked'),
-        skipPropertyNumber: $row.find('.js-item-skip-property-number').is(':checked'),
+        skipPropertyNumber: getManualSkipPropertyNumber($row),
         manualParIcs: $row.find('.js-item-manual-par-ics').is(':checked'),
         parIcsManual: String($row.find('.js-item-par-ics').val() || ''),
         brand: String($row.find('.js-item-brand').val() || ''),
@@ -9114,22 +9346,28 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   }
 
   function snapshotEndUserInputsIntoCache(){
-    $('#endUserRows select.parEmpRow').each(function(){
+    $('#itemSetRows select.parDeptRow').each(function(){
       var idxKey = toRowKey($(this).data('row'));
       if(!idxKey) return;
-      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { emp: '', newName: '', newPos: '' };
+      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { dept: '', emp: '', newName: '', newPos: '' };
+      endUserByRow[idxKey].dept = String($(this).val() || '');
+    });
+    $('#itemSetRows select.parEmpRow').each(function(){
+      var idxKey = toRowKey($(this).data('row'));
+      if(!idxKey) return;
+      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { dept: '', emp: '', newName: '', newPos: '' };
       endUserByRow[idxKey].emp = String($(this).val() || '');
     });
-    $('#endUserRows input.parEmpNewName').each(function(){
+    $('#itemSetRows input.parEmpNewName').each(function(){
       var idxKey = toRowKey($(this).data('row'));
       if(!idxKey) return;
-      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { emp: '', newName: '', newPos: '' };
+      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { dept: '', emp: '', newName: '', newPos: '' };
       endUserByRow[idxKey].newName = String($(this).val() || '');
     });
-    $('#endUserRows input.parEmpNewPos').each(function(){
+    $('#itemSetRows input.parEmpNewPos').each(function(){
       var idxKey = toRowKey($(this).data('row'));
       if(!idxKey) return;
-      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { emp: '', newName: '', newPos: '' };
+      if(!endUserByRow[idxKey]) endUserByRow[idxKey] = { dept: '', emp: '', newName: '', newPos: '' };
       endUserByRow[idxKey].newPos = String($(this).val() || '');
     });
   }
@@ -9195,6 +9433,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
   function buildItemSetCardHtml(setIndex){
     var state = getItemSetState(setIndex);
+    var accountability = endUserByRow[toRowKey(setIndex)] || {};
+    var defaultDepartment = String(accountability.dept || $('#dept').val() || '');
     var removeHidden = (getSetCount() === 1) ? ' style="visibility:hidden;"' : '';
     return ''
       + '<div class="border rounded p-3 item-set-card" data-set-index="' + setIndex + '">'
@@ -9203,6 +9443,28 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       + '    <button type="button" class="btn btn-sm btn-outline-danger btnRemoveItemSet" data-set-index="' + setIndex + '" title="Remove set"' + removeHidden + '>'
       + '      <i class="fas fa-trash"></i>'
       + '    </button>'
+      + '  </div>'
+      + '  <div class="border rounded p-3 mb-3 js-set-accountability" style="display:none; background-color:#fff;">'
+      + '    <div class="form-row mb-0">'
+      + '      <div class="form-group col-md-6 mb-0">'
+      + '        <label>Department</label>'
+      + '        <select name="dept_multi[' + setIndex + ']" class="form-control parDeptRow" data-row="' + setIndex + '" disabled>' + getDepartmentOptionsHtml(defaultDepartment) + '</select>'
+      + '      </div>'
+      + '      <div class="form-group col-md-6 mb-0">'
+      + '        <label>End User</label>'
+      + '        <select name="parEmp_multi[' + setIndex + ']" class="form-control parEmpRow" data-row="' + setIndex + '" disabled><option value="">SELECT A DEPARTMENT FIRST</option></select>'
+      + '      </div>'
+      + '    </div>'
+      + '    <div class="form-row mt-3 js-set-new-employee-fields" style="display:none;">'
+      + '      <div class="form-group col-md-6 mb-0">'
+      + '        <label>New Employee</label>'
+      + '        <input type="text" class="form-control text-uppercase parEmpNewName" name="parEmp_multi_new_name[' + setIndex + ']" data-row="' + setIndex + '" placeholder="Enter new employee name" value="' + esc(accountability.newName || '') + '" disabled>'
+      + '      </div>'
+      + '      <div class="form-group col-md-6 mb-0">'
+      + '        <label>Position</label>'
+      + '        <input type="text" class="form-control text-uppercase parEmpNewPos" name="parEmp_multi_new_position[' + setIndex + ']" data-row="' + setIndex + '" placeholder="Enter position" value="' + esc(accountability.newPos || '') + '" disabled>'
+      + '      </div>'
+      + '    </div>'
       + '  </div>'
       + '  <div class="form-row">'
       + '    <div class="form-group col-md-2">'
@@ -9365,6 +9627,13 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       || $row.find('.js-item-skip-property-number').is(':checked');
   }
 
+  function getManualSkipPropertyNumber($row){
+    var $checkbox = $row.find('.js-item-skip-property-number');
+    return $checkbox.prop('disabled')
+      ? $checkbox.data('manualSkip') === true
+      : $checkbox.is(':checked');
+  }
+
   function applySkipPropertyNumberState($row){
     var $cb = $row.find('.js-item-skip-property-number');
     var $wrap = $row.find('.js-item-skip-property-number-wrap');
@@ -9374,11 +9643,9 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     if (!$cb.length || !$wrap.length || !$propertyPreview.length || !$propertyValue.length) { return; }
 
     $wrap.show();
-    if (forceSkip) {
-      $cb.prop('checked', true).prop('disabled', true);
-    } else {
-      $cb.prop('disabled', false);
-    }
+    var manualSkip = getManualSkipPropertyNumber($row);
+    $cb.data('manualSkip', manualSkip);
+    $cb.prop('checked', forceSkip || manualSkip).prop('disabled', forceSkip);
 
     if (shouldSkipPropertyNumber($row)) {
       $propertyPreview.val('').attr('placeholder', 'No property number');
@@ -9456,33 +9723,12 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $row.find('.js-item-total').val(formatMoneyValue(unit * qty));
   }
 
-  function nextPropertyNumber(num){
-    var parts = String(num || '').split('-');
-    if(parts.length < 4) return num;
-    var idx = parts.length - 2;
-    var seq = parts[idx];
-    var pad = seq.length;
-    parts[idx] = String((parseInt(seq, 10) || 0) + 1).padStart(pad, '0');
-    return parts.join('-');
-  }
-
-  function propertyNumberCopies(first, qty){
-    var copies = [];
-    var current = String(first || '').trim();
-    var count = Math.max(1, parseInt(qty, 10) || 1);
-    for (var step = 0; step < count; step++) {
-      if (current) { copies.push(current); }
-      current = nextPropertyNumber(current);
-    }
-    return copies;
-  }
-
   function propertyNumberDisplay(value){
     var text = String(value || '').trim();
     return text ? text : 'no property number';
   }
 
-  function applyPropertyNumberPreview(list){
+  function applyPropertyNumberPreview(list, messages){
     var previewList = Array.isArray(list) ? list : [];
     var allNumbers = [];
     previewList.forEach(function(rowNumbers){
@@ -9494,8 +9740,10 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $('#itemSetRows .item-set-card').each(function(index){
       var rowNumbers = previewList[index] || [];
       var numbers = Array.isArray(rowNumbers) ? rowNumbers : (rowNumbers ? [rowNumbers] : []);
-      var displayValue = propertyNumberDisplay(numbers.join(', '));
-      $(this).find('.js-item-property-number').attr('rows', 3).val(displayValue);
+      var displayValue = numbers.length ? numbers.join(', ') : ((messages && messages[index]) || propertyNumberDisplay(''));
+      $(this).find('.js-item-property-number')
+        .attr({ rows: 3, placeholder: displayValue })
+        .val(numbers.length ? displayValue : '');
       $(this).find('.js-item-property-number-value').val(numbers.length ? numbers[0] : '');
     });
     if (window.GSO && window.GSO.AddItemBundle && typeof window.GSO.AddItemBundle.refreshBundlePropertyNumbers === 'function') {
@@ -9507,6 +9755,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     var opts = options || {};
     if (!opts.skipSnapshot) {
       snapshotItemSetInputsIntoCache();
+      snapshotEndUserInputsIntoCache();
     }
     var count = getSetCount();
     var $rows = $('#itemSetRows');
@@ -9561,41 +9810,62 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $('#deptDatalist').empty();
     $('#multipleEndUserCheckBox, #endUserNoneCheckBox').prop('checked', false);
     endUserByRow = {};
-    $('#endUserRows').hide().empty();
+    perSetAssignmentsInitialized = false;
     $('#parEmp').html('<option value="">-SELECT-</option>').prop('disabled', true);
-    empOptionsAll = '';
+    employeeOptionsByDept = {};
+    employeeRequestsByDept = {};
     $('#add_new_employee').hide();
     $('#new_emp, #position').prop('required', false).val('');
     $('#additem-name-validation-msg').hide().text('');
     applyPropertyNumberPreview([]);
   }
 
-  function loadEmployeesForDept(deptCode, cb){
+  function loadEmployeeOptionsForDept(deptCode, cb){
+    deptCode = String(deptCode || '').trim();
     if(!deptCode){
-      $('#parEmp').html('<option value="">SELECT A DEPARTMENT FIRST</option>');
-      empOptionsAll = '';
-      if(typeof cb==='function') cb();
+      if(typeof cb==='function') cb('<option value="">SELECT A DEPARTMENT FIRST</option>');
       return;
     }
-    $.ajax({
+    if (employeeOptionsByDept[deptCode]) {
+      if(typeof cb==='function') cb(employeeOptionsByDept[deptCode]);
+      return;
+    }
+    if (employeeRequestsByDept[deptCode]) {
+      employeeRequestsByDept[deptCode].done(function(html){
+        if(typeof cb==='function') cb(String(html || ''));
+      }).fail(function(){
+        if(typeof cb==='function') cb('<option value="">Unable to load employees</option>');
+      });
+      return;
+    }
+    employeeRequestsByDept[deptCode] = $.ajax({
       url: '../auth/auth.php',
       method: 'POST',
-      data: { departmentid: deptCode },
-      success: function(html){
-        $('#parEmp').html(html);
-        empOptionsAll = String(html||'');
-        if ($('#multipleEndUserCheckBox').is(':checked')) {
-          renderEndUserRows();
-        }
-        if(typeof cb==='function') cb();
-      },
-      error: function(){ if(typeof cb==='function') cb(); }
+      data: { departmentid: deptCode }
+    }).done(function(html){
+      employeeOptionsByDept[deptCode] = String(html || '');
+      if(typeof cb==='function') cb(employeeOptionsByDept[deptCode]);
+    }).fail(function(){
+      if(typeof cb==='function') cb('<option value="">Unable to load employees</option>');
+    }).always(function(){
+      delete employeeRequestsByDept[deptCode];
+    });
+  }
+
+  function loadEmployeesForDept(deptCode, cb){
+    loadEmployeeOptionsForDept(deptCode, function(html){
+      $('#parEmp').html(html);
+      if ($('#multipleEndUserCheckBox').is(':checked')) {
+        $('#parEmp').prop('disabled', true).prop('required', false).attr('aria-disabled', 'true');
+      }
+      if(typeof cb==='function') cb();
     });
   }
 
   function populateDeptFromOptions(optionsHtml){
     var $select = $('#dept');
     $select.html(optionsHtml);
+    $('#deptSearch').attr('placeholder', 'Type to search department');
     var $datalist = $('#deptDatalist');
     $datalist.empty();
     $select.find('option').each(function(){
@@ -9618,7 +9888,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     if (nextCount === lastRenderedSetCount) { return; }
     lastRenderedSetCount = nextCount;
     renderItemSetRows();
-    renderEndUserRows();
+    renderEndUserRows({ skipSnapshot: true });
     updateTotalAmount();
     scheduleUpdateParIcsNumber();
     scheduleUpdatePropertyNumber();
@@ -9630,12 +9900,6 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   function scheduleQuantityChange(){
     clearTimeout(debQuantityRender);
     debQuantityRender = setTimeout(applyQuantityChange, QUANTITY_RENDER_DELAY_MS);
-  }
-
-  function getEmployeeOptionsHtml() {
-    var html = (empOptionsAll && empOptionsAll.trim()) ? empOptionsAll : String($('#parEmp').html() || '');
-    if (!html || !html.trim()) html = '<option value="">-SELECT-</option>';
-    return html;
   }
 
   function isAddNewEmpValue(v){
@@ -9652,6 +9916,38 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
   function hasPurchaseOrderValue(){
     return String($('#po').val() || '').trim() !== '';
+  }
+
+  function getDepartmentOptionsHtml(selected){
+    return withSelectedOption(String($('#dept').html() || '<option value="">-SELECT-</option>'), selected);
+  }
+
+  function getSetDepartment(setIndex){
+    if (!$('#multipleEndUserCheckBox').is(':checked')) {
+      return String($('#dept').val() || '').trim();
+    }
+    var key = toRowKey(setIndex);
+    var selected = String($('#itemSetRows select.parDeptRow[data-row="' + setIndex + '"]').val() || '').trim();
+    if (selected) { return selected; }
+    var cached = key && endUserByRow[key] ? String(endUserByRow[key].dept || '').trim() : '';
+    return cached || String($('#dept').val() || '').trim();
+  }
+
+  function getSetAccountabilityKey(setIndex){
+    var department = getSetDepartment(setIndex);
+    var employee = '';
+    if (!isNoEndUserSelected()) {
+      employee = $('#multipleEndUserCheckBox').is(':checked')
+        ? String($('#itemSetRows select.parEmpRow[data-row="' + setIndex + '"]').val() || '').trim()
+        : String($('#parEmp').val() || '').trim();
+      if (isAddNewEmpValue(employee)) {
+        var employeeName = $('#multipleEndUserCheckBox').is(':checked')
+          ? String($('#itemSetRows input.parEmpNewName[data-row="' + setIndex + '"]').val() || '').trim().toUpperCase()
+          : String($('#new_emp').val() || '').trim().toUpperCase();
+        employee += '|' + employeeName;
+      }
+    }
+    return department && (employee || isNoEndUserSelected()) ? department + '|' + employee : '';
   }
 
   function isValidNewPurchaseOrderValue(){
@@ -9757,7 +10053,6 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     if (isNoEndUserSelected()) {
       $('#multipleEndUserCheckBox').prop('checked', false);
       $('#parEmp').val('').prop('required', false).prop('disabled', true).show();
-      $('#endUserRows').hide().empty();
       hideAddNewEmployeeSection();
     }
   }
@@ -9766,71 +10061,123 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     var $sel = $row.find('select.parEmpRow');
     var $nm  = $row.find('input.parEmpNewName');
     var $ps  = $row.find('input.parEmpNewPos');
+    var $fields = $row.find('.js-set-new-employee-fields');
     var on = isAddNewEmpValue($sel.val());
-    $nm.prop('disabled', !on).prop('required', on);
-    $ps.prop('disabled', !on).prop('required', on);
-    if(!on){ $nm.val(''); $ps.val(''); }
+    if (on) {
+      $nm.prop('disabled', false).prop('required', true);
+      $ps.prop('disabled', false).prop('required', true);
+      $fields.stop(true, true).slideDown(180);
+      return;
+    }
+    $nm.prop('required', false);
+    $ps.prop('required', false);
+    $fields.stop(true, true).slideUp(180, function(){
+      $nm.prop('disabled', true).val('');
+      $ps.prop('disabled', true).val('');
+      snapshotEndUserInputsIntoCache();
+    });
   }
 
-  function renderEndUserRows() {
-    snapshotEndUserInputsIntoCache();
+  function loadEmployeesForSetRow($row, selectedEmployee){
+    if (!$row || !$row.length) { return; }
+    var $dept = $row.find('select.parDeptRow');
+    var $emp = $row.find('select.parEmpRow');
+    var deptCode = String($dept.val() || '').trim();
+    var employeeValue = String(selectedEmployee !== undefined ? selectedEmployee : ($emp.val() || '')).trim();
+
+    $emp.prop('disabled', true).html('<option value="">LOADING...</option>');
+    loadEmployeeOptionsForDept(deptCode, function(html){
+      $emp.html(html).prop('disabled', !deptCode);
+      if (employeeValue && $emp.find('option[value="' + employeeValue.replace(/"/g, '\\"') + '"]').length) {
+        $emp.val(employeeValue);
+      }
+      syncMultiEndUserRowState($row);
+      snapshotEndUserInputsIntoCache();
+      scheduleUpdateParIcsNumber();
+      scheduleUpdatePropertyNumber();
+    });
+  }
+
+  function renderEndUserRows(options) {
+    var opts = options || {};
+    if (!opts.skipSnapshot) { snapshotEndUserInputsIntoCache(); }
     syncNoEndUserState();
-    if (isNoEndUserSelected()) { return; }
+    var noEndUser = isNoEndUserSelected();
     var isMulti = $('#multipleEndUserCheckBox').is(':checked');
-    var setCount = getSetCount();
-
     var $single = $('#parEmp');
-    var $singleWrap = $single.closest('.form-group');
     var $addNewSingle = $('#add_new_employee');
-    var $wrap = $('#endUserRows');
+    var hasDepartmentOptions = $('#dept option').filter(function(){ return String(this.value || '').trim() !== ''; }).length > 0;
 
-    if (!isMulti) {
-      $wrap.hide().empty();
-      $single.prop('disabled', false).prop('required', true).show();
-      $singleWrap.removeClass('mb-0');
+    $('#deptSearch')
+      .prop('disabled', isMulti || !hasDepartmentOptions)
+      .attr('aria-disabled', (isMulti || !hasDepartmentOptions) ? 'true' : 'false');
+    $('#dept')
+      .prop('disabled', isMulti)
+      .attr('aria-disabled', isMulti ? 'true' : 'false');
+
+    if (noEndUser) {
+      $('#itemSetRows .js-set-accountability').hide();
+      $('#itemSetRows .parDeptRow, #itemSetRows .parEmpRow, #itemSetRows .parEmpNewName, #itemSetRows .parEmpNewPos')
+        .prop('disabled', true).prop('required', false);
       return;
     }
 
-    $single.prop('required', false).prop('disabled', true).hide().val('');
+    if (!isMulti) {
+      $('#itemSetRows .js-set-accountability').hide();
+      $('#itemSetRows .parDeptRow, #itemSetRows .parEmpRow, #itemSetRows .parEmpNewName, #itemSetRows .parEmpNewPos')
+        .prop('disabled', true).prop('required', false);
+      var disableSingle = !$('#dept').val();
+      $single
+        .prop('disabled', disableSingle)
+        .prop('required', true)
+        .attr('aria-disabled', disableSingle ? 'true' : 'false')
+        .show();
+      toggleAddNewEmpSectionAddItem();
+      return;
+    }
+
+    var defaultDepartment = String($('#dept').val() || '').trim();
+    var defaultEmployee = String($single.val() || '').trim();
+    var defaultNewName = String($('#new_emp').val() || '').trim();
+    var defaultNewPosition = String($('#position').val() || '').trim();
+
+    $single.prop('required', false).prop('disabled', true).attr('aria-disabled', 'true').show();
     if ($addNewSingle.is(':visible')) {
       $addNewSingle.hide();
-      $('#new_emp,#position').prop('required', false).val('');
+      $('#new_emp,#position').prop('required', false).prop('disabled', true);
       $('#additem-name-validation-msg').hide().text('');
     }
 
-    var opts = getEmployeeOptionsHtml();
-    var showIndex = setCount > 1;
-    var html = '<table class="table table-bordered mb-2">'
-      + '<thead class="bg-light" style="position:sticky; top:0; z-index:1">'
-      + '<tr>'
-      + (showIndex ? '<th style="width:90px">Set</th>' : '')
-      + '<th style="min-width:220px">End User</th>'
-      + '<th style="min-width:220px">New Employee</th>'
-      + '<th style="min-width:200px">Position</th>'
-      + '</tr>'
-      + '</thead><tbody>';
+    $('#itemSetRows .item-set-card').each(function(){
+      var $card = $(this);
+      var setIndex = parseInt($card.data('setIndex'), 10) || 1;
+      var rowKey = toRowKey(setIndex);
+      var saved = rowKey && endUserByRow[rowKey] ? endUserByRow[rowKey] : {};
+      var department = String(saved.dept || defaultDepartment);
+      var employee = String(saved.emp || defaultEmployee);
 
-    for (var i = 1; i <= setCount; i++) {
-      html += '<tr>'
-        + (showIndex ? '<td>' + getSetLabel(i) + '</td>' : '')
-        + '<td><select name="parEmp_multi[' + i + ']" class="form-control parEmpRow" data-row="' + i + '" required>' + opts + '</select></td>'
-        + '<td><input type="text" class="form-control text-uppercase parEmpNewName" name="parEmp_multi_new_name[' + i + ']" data-row="' + i + '" placeholder="Enter new employee name" disabled></td>'
-        + '<td><input type="text" class="form-control text-uppercase parEmpNewPos" name="parEmp_multi_new_position[' + i + ']" data-row="' + i + '" placeholder="Enter position" disabled></td>'
-        + '</tr>';
-    }
-    html += '</tbody></table>';
+      if (rowKey && !endUserByRow[rowKey]) {
+        endUserByRow[rowKey] = {
+          dept: department,
+          emp: employee,
+          newName: defaultNewName,
+          newPos: defaultNewPosition
+        };
+        saved = endUserByRow[rowKey];
+      }
 
-    $wrap.html(html).show();
+      $card.find('.js-set-accountability').show();
+      $card.find('.parDeptRow')
+        .html(getDepartmentOptionsHtml(department))
+        .val(department)
+        .prop('disabled', false)
+        .prop('required', true);
+      $card.find('.parEmpNewName').val(saved.newName || defaultNewName);
+      $card.find('.parEmpNewPos').val(saved.newPos || defaultNewPosition);
+      loadEmployeesForSetRow($card, employee);
+    });
 
-    for (var j = 1; j <= setCount; j++) {
-      var k = toRowKey(j);
-      if (!k || !endUserByRow[k]) continue;
-      $wrap.find('select.parEmpRow[data-row="' + j + '"]').val(endUserByRow[k].emp || '');
-      $wrap.find('input.parEmpNewName[data-row="' + j + '"]').val(endUserByRow[k].newName || '');
-      $wrap.find('input.parEmpNewPos[data-row="' + j + '"]').val(endUserByRow[k].newPos || '');
-    }
-
-    $wrap.find('tbody tr').each(function(){ syncMultiEndUserRowState($(this)); });
+    $('#deptSearch, #dept, #parEmp, #new_emp, #position').val('');
   }
 
   function validateUnitValue() {
@@ -9933,91 +10280,86 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     }
   }
 
+  function cancelPropertyNumberRequest(){
+    clearTimeout(debPropNum);
+    propertyNumberRevision++;
+    if (propertyNumberRequest && propertyNumberRequest.readyState !== 4) {
+      propertyNumberRequest.abort();
+    }
+    propertyNumberRequest = null;
+  }
+
   function updatePropertyNumber() {
+    cancelPropertyNumberRequest();
+    var requestId = propertyNumberRevision;
+    snapshotEndUserInputsIntoCache();
     var year = $('#year').val();
-    var dept = $('#dept').val();
     var fund = $('#fund').val();
-    var rows = $('#itemSetRows .item-set-card').toArray();
-
-    if (propertyNumberOptionalFund()) {
-      applyPropertyNumberPreview([]);
-      return;
-    }
-
-    if (!(year && dept && fund) || !rows.length) {
-      applyPropertyNumberPreview([]);
-      return;
-    }
-
-    var list = [];
-    var exclude = [];
-    var reqId = Date.now() + Math.random();
-    updatePropertyNumber.lastReqId = reqId;
-
-    function rememberCopies(first, qty){
-      exclude = exclude.concat(propertyNumberCopies(first, qty));
-    }
-
-    function generateRow(index){
-      if (reqId !== updatePropertyNumber.lastReqId) { return; }
-      if (index >= rows.length) {
-        applyPropertyNumberPreview(list);
-        return;
-      }
-
-      var $row = $(rows[index]);
-      if (shouldSkipPropertyNumber($row)) {
-        list[index] = [];
-        generateRow(index + 1);
-        return;
-      }
+    var messages = [];
+    var readyRows = 0;
+    var requestRows = $('#itemSetRows .item-set-card').toArray().map(function(row, index){
+      var $row = $(row);
+      var setIndex = parseInt($row.data('setIndex'), 10) || (index + 1);
+      var skip = shouldSkipPropertyNumber($row);
       var category = String($row.find('.js-item-category').val() || '').trim().toUpperCase();
-      if (!category) {
-        list[index] = [];
-        generateRow(index + 1);
-        return;
-      }
       var accountCode = String($row.find('.js-item-account-code').val() || '').trim();
-      if (!accountCode) {
-        list[index] = '';
-        generateRow(index + 1);
-        return;
-      }
+      var dept = getSetDepartment(setIndex);
+      var missing = [];
+      if (!fund) { missing.push('fund'); }
+      if (!year) { missing.push('year'); }
+      if (!category) { missing.push('category'); }
+      if (!accountCode) { missing.push('account code'); }
+      if (!dept) { missing.push('department'); }
+      messages[index] = skip ? 'No property number' : (missing.length
+        ? 'Select ' + missing.join(', ') + ' to generate a property number.'
+        : 'Generating property number...');
+      var ready = !skip && !missing.length;
+      if (ready) { readyRows++; }
+      return {
+        category: category,
+        account_code: accountCode,
+        dept: dept,
+        quantity: Math.max(1, parseInt($row.find('.js-item-quantity').val(), 10) || 1),
+        skip: ready ? 0 : 1
+      };
+    });
 
-      $.ajax({
-        url: '../auth/auth.php',
-        method: 'POST',
-        data: {
-          generate_property_number: 1,
-          category: category,
-          year: year,
-          account_code: accountCode,
-          dept: dept,
-          fund: fund,
-          exclude: exclude
-        },
-        dataType: 'json',
-        success: function(res) {
-          if (reqId !== updatePropertyNumber.lastReqId) { return; }
-          var first = (res && res.success) ? String(res.pr_number || '').trim() : '';
-          if (first) {
-            var itemQty = Math.max(1, parseInt($row.find('.js-item-quantity').val(), 10) || 1);
-            list[index] = propertyNumberCopies(first, itemQty);
-            rememberCopies(first, itemQty);
-          } else {
-            list[index] = [];
-          }
-          generateRow(index + 1);
-        },
-        error: function(){
-          if (reqId !== updatePropertyNumber.lastReqId) { return; }
-          list[index] = '';
-          generateRow(index + 1);
-        }
+    applyPropertyNumberPreview([], messages);
+    if (!readyRows) { return; }
+
+    function showError(message){
+      var errors = messages.map(function(status, index){
+        return requestRows[index].skip ? status : message;
       });
+      applyPropertyNumberPreview([], errors);
     }
 
-    generateRow(0);
+    propertyNumberRequest = $.ajax({
+      url: '../auth/auth.php',
+      method: 'POST',
+      dataType: 'json',
+      timeout: 15000,
+      data: {
+        generate_property_numbers_batch: 1,
+        year: year,
+        fund: fund,
+        rows: JSON.stringify(requestRows)
+      },
+      success: function(res){
+        if (requestId !== propertyNumberRevision) { return; }
+        if (res && res.success && Array.isArray(res.numbers)) {
+          applyPropertyNumberPreview(res.numbers, messages);
+        } else {
+          showError((res && res.error) || 'Unable to generate property number. Please try again.');
+        }
+      },
+      error: function(xhr, status){
+        if (requestId !== propertyNumberRevision || status === 'abort') { return; }
+        showError(status === 'timeout'
+          ? 'Property number request timed out. Change the quantity or reopen the modal to retry.'
+          : 'Unable to generate property number. Please check your connection and try again.');
+      }
+    });
   }
 
   function updateParIcsNumbers() {
@@ -10031,69 +10373,46 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     var reqId = Date.now() + Math.random();
     updateParIcsNumbers.lastReqId = reqId;
     var list = [];
-    var codeByCategory = {};
-
-    function generateRow(index){
-      if (reqId !== updateParIcsNumbers.lastReqId) { return; }
-      if (index >= rows.length) {
-        applyParIcsPreview(list);
-        return;
-      }
-
-      var $row = $(rows[index]);
-      if ($row.find('.js-item-manual-par-ics').is(':checked')) {
-        list[index] = String($row.find('.js-item-par-ics').val() || '').trim().toUpperCase();
-        generateRow(index + 1);
-        return;
-      }
-      var category = String($row.find('.js-item-category').val() || '').trim().toUpperCase();
-      if (!category) {
-        list[index] = '';
-        generateRow(index + 1);
-        return;
-      }
-
-      if (codeByCategory[category]) {
-        list[index] = codeByCategory[category];
-        generateRow(index + 1);
-        return;
-      }
-
-      $.ajax({
-        url: '../auth/auth.php',
-        method: 'POST',
-        dataType: 'json',
-        data: {
-          generate_par_ics_code: 1,
-          category: category,
-          condition: String($('#condition').val() || '').trim().toUpperCase(),
-          year: selectedYear
-        },
-        success: function(res){
-          if (reqId !== updateParIcsNumbers.lastReqId) { return; }
-          var code = (res && res.status === 200 && res.code) ? String(res.code).trim().toUpperCase() : '';
-          if (code) {
-            codeByCategory[category] = code;
-            list[index] = code;
-          } else {
-            list[index] = '';
-          }
-          generateRow(index + 1);
-        },
-        error: function(){
-          if (reqId !== updateParIcsNumbers.lastReqId) { return; }
-          list[index] = '';
-          generateRow(index + 1);
-        }
+    var requestRows = [];
+    rows.forEach(function(row, index){
+      var $row = $(row);
+      var isManual = $row.find('.js-item-manual-par-ics').is(':checked');
+      list[index] = isManual ? String($row.find('.js-item-par-ics').val() || '').trim().toUpperCase() : '';
+      requestRows.push({
+        category: String($row.find('.js-item-category').val() || '').trim().toUpperCase(),
+        group: getSetAccountabilityKey(index + 1),
+        skip: isManual ? 1 : 0
       });
-    }
+    });
 
-    generateRow(0);
+    $.ajax({
+      url: '../auth/auth.php',
+      method: 'POST',
+      dataType: 'json',
+      data: {
+        generate_par_ics_codes_batch: 1,
+        year: selectedYear,
+        rows: JSON.stringify(requestRows)
+      },
+      success: function(res){
+        if (reqId !== updateParIcsNumbers.lastReqId) { return; }
+        var codes = res && Number(res.status) === 200 && Array.isArray(res.codes) ? res.codes : [];
+        requestRows.forEach(function(row, index){
+          if (!row.skip) { list[index] = String(codes[index] || '').trim().toUpperCase(); }
+        });
+        applyParIcsPreview(list);
+      },
+      error: function(){
+        if (reqId !== updateParIcsNumbers.lastReqId) { return; }
+        applyParIcsPreview(list);
+      }
+    });
   }
 
   function scheduleUpdatePropertyNumber(){
-    clearTimeout(debPropNum);
-    debPropNum = setTimeout(function(){ updatePropertyNumber(); }, 300);
+    cancelPropertyNumberRequest();
+    // Coalesce rapid input/change events before starting database work.
+    debPropNum = setTimeout(updatePropertyNumber, 150);
   }
 
   function scheduleUpdateParIcsNumber(){
@@ -10116,6 +10435,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   }
 
   function validateDeptExactOnSubmit(){
+    if ($('#multipleEndUserCheckBox').is(':checked')) { return true; }
     var $deptInput = $('#deptSearch');
     var $deptSelect = $('#dept');
     if(!$deptInput.length || !$deptSelect.length){ return true; }
@@ -10175,11 +10495,16 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
   }
 
   function updateParEmpStateAddItem() {
-    if ($('#multipleEndUserCheckBox').is(':checked')) { return; }
+    if ($('#multipleEndUserCheckBox').is(':checked')) {
+      $('#deptSearch, #dept, #parEmp').prop('disabled', true).attr('aria-disabled', 'true');
+      $('#parEmp').prop('required', false);
+      return;
+    }
 
     var hasDept = !!String($('#dept').val() || '').trim();
     var $emp = $('#parEmp');
     if (!$emp.length) { return; }
+    $('#deptSearch, #dept, #parEmp').removeAttr('aria-disabled');
 
     if (isNoEndUserSelected()) {
       $emp.val('').prop('disabled', true).prop('required', false).show();
@@ -10228,7 +10553,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         $('#quantity').val(currentCount - 1);
         lastRenderedSetCount = currentCount - 1;
         renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
-        renderEndUserRows();
+        renderEndUserRows({ skipSnapshot: true });
         scheduleUpdateParIcsNumber();
         scheduleUpdatePropertyNumber();
       });
@@ -10276,8 +10601,10 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $('#addItemModal')
       .off('hidden.bs.modal.gsoAddItemPageBrand')
       .on('hidden.bs.modal.gsoAddItemPageBrand', function(){
+        cancelPropertyNumberRequest();
         itemSetByRow = {};
         endUserByRow = {};
+        perSetAssignmentsInitialized = false;
         $('#quantity').val(1);
         lastRenderedSetCount = 1;
         renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
@@ -10287,37 +10614,44 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .on('shown.bs.modal.gsoAddItemPageBrand', function(){
         lastRenderedSetCount = getSetCount();
         renderItemSetRows();
+        scheduleUpdatePropertyNumber();
       });
 
     $(document)
       .off('change.gsoAddItemPageFund', '#fund')
       .on('change.gsoAddItemPageFund', '#fund', function(){
         var fund = String($(this).val() || '').trim();
+        var previousDepartment = String($('#dept').val() || '');
+        if (reqFundDepts && reqFundDepts.readyState !== 4) { reqFundDepts.abort(); }
         snapshotItemSetInputsIntoCache();
         lastRenderedSetCount = getSetCount();
         renderItemSetRows({ skipSnapshot: true, forceRebuild: true });
-        scheduleUpdateParIcsNumber();
         resetDepartmentAndEmployeeFields();
+        renderEndUserRows({ skipSnapshot: true });
+        scheduleUpdatePropertyNumber();
+        scheduleUpdateParIcsNumber();
         syncPurchaseOrderRequirement();
         syncAddItemSubmitButton();
-        if(!fund){ return; }
+        if (!fund) { return; }
 
-        if (reqFundDepts && reqFundDepts.readyState !== 4) {
-          try { reqFundDepts.abort(); } catch(e){}
-        }
-        clearTimeout(debFundDepts);
-        debFundDepts = setTimeout(function(){
-          reqFundDepts = $.ajax({
-            url: '../auth/auth.php',
-            method: 'POST',
-            data: { fund_for_departments: fund },
-            success: function(html){
-              populateDeptFromOptions(html);
-              $('#deptSearch').prop('disabled', false).focus();
-            },
-            error: function(){ console.error('Failed to load departments for fund ' + fund); }
-          });
-        }, 350);
+        reqFundDepts = $.ajax({
+          url: '../auth/auth.php',
+          method: 'POST',
+          data: { fund_for_departments: fund },
+          success: function(html){
+            if (fund !== String($('#fund').val() || '').trim()) { return; }
+            populateDeptFromOptions(html);
+            // Keep the department only when it is also valid for the new fund.
+            $('#dept').val(previousDepartment);
+            renderEndUserRows({ skipSnapshot: true });
+            $('#dept').trigger('change');
+            scheduleUpdatePropertyNumber();
+          },
+          error: function(xhr, status){
+            if (status === 'abort' || fund !== String($('#fund').val() || '').trim()) { return; }
+            $('#deptSearch').attr('placeholder', 'Unable to load departments. Select the fund again.');
+          }
+        });
       });
 
     $(document)
@@ -10348,8 +10682,33 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $(document)
       .off('change.gsoAddItemPageMulti', '#multipleEndUserCheckBox')
       .on('change.gsoAddItemPageMulti', '#multipleEndUserCheckBox', function(){
-        if ($(this).is(':checked')) { $('#endUserNoneCheckBox').prop('checked', false); }
-        renderEndUserRows();
+        var activating = $(this).is(':checked');
+        var seededDefaults = false;
+        if (activating) {
+          $('#endUserNoneCheckBox').prop('checked', false);
+          if (!perSetAssignmentsInitialized) {
+            var defaultDepartment = String($('#dept').val() || '').trim();
+            var defaultEmployee = String($('#parEmp').val() || '').trim();
+            var defaultName = String($('#new_emp').val() || '').trim();
+            var defaultPosition = String($('#position').val() || '').trim();
+            endUserByRow = {};
+            $('#itemSetRows .item-set-card').each(function(){
+              var rowKey = toRowKey($(this).data('setIndex'));
+              if (!rowKey) { return; }
+              endUserByRow[rowKey] = {
+                dept: defaultDepartment,
+                emp: defaultEmployee,
+                newName: defaultName,
+                newPos: defaultPosition
+              };
+            });
+            perSetAssignmentsInitialized = true;
+            seededDefaults = true;
+          }
+        }
+        renderEndUserRows({ skipSnapshot: seededDefaults });
+        scheduleUpdateParIcsNumber();
+        scheduleUpdatePropertyNumber();
       });
     $(document)
       .off('change.gsoAddItemPageNoEndUser', '#endUserNoneCheckBox')
@@ -10358,12 +10717,37 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         syncNoEndUserState();
         renderEndUserRows();
         updateParEmpStateAddItem();
+        scheduleUpdateParIcsNumber();
       });
     $(document)
-      .off('change.gsoAddItemPageMultiRow', '#endUserRows select.parEmpRow')
-      .on('change.gsoAddItemPageMultiRow', '#endUserRows select.parEmpRow', function(){
+      .off('change.gsoAddItemPageMultiRow', '#itemSetRows select.parEmpRow')
+      .on('change.gsoAddItemPageMultiRow', '#itemSetRows select.parEmpRow', function(){
         snapshotEndUserInputsIntoCache();
-        syncMultiEndUserRowState($(this).closest('tr'));
+        syncMultiEndUserRowState($(this).closest('.item-set-card'));
+        scheduleUpdateParIcsNumber();
+      });
+    $(document)
+      .off('change.gsoAddItemPageMultiDept', '#itemSetRows select.parDeptRow')
+      .on('change.gsoAddItemPageMultiDept', '#itemSetRows select.parDeptRow', function(){
+        var $row = $(this).closest('.item-set-card');
+        var rowKey = toRowKey($(this).data('row'));
+        if (rowKey) {
+          if (!endUserByRow[rowKey]) endUserByRow[rowKey] = { dept: '', emp: '', newName: '', newPos: '' };
+          endUserByRow[rowKey].dept = String($(this).val() || '');
+          endUserByRow[rowKey].emp = '';
+          endUserByRow[rowKey].newName = '';
+          endUserByRow[rowKey].newPos = '';
+        }
+        $row.find('input.parEmpNewName, input.parEmpNewPos').val('');
+        loadEmployeesForSetRow($row, '');
+        scheduleUpdateParIcsNumber();
+        scheduleUpdatePropertyNumber();
+      });
+    $(document)
+      .off('input.gsoAddItemPageMultiEmployeeName', '#itemSetRows input.parEmpNewName')
+      .on('input.gsoAddItemPageMultiEmployeeName', '#itemSetRows input.parEmpNewName', function(){
+        snapshotEndUserInputsIntoCache();
+        scheduleUpdateParIcsNumber();
       });
 
     var debParEmp;
@@ -10371,7 +10755,10 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .off('change.gsoAddItemPageParEmp', '#parEmp')
       .on('change.gsoAddItemPageParEmp', '#parEmp', function(){
         clearTimeout(debParEmp);
-        debParEmp = setTimeout(function(){ toggleAddNewEmpSectionAddItem(); }, 200);
+        debParEmp = setTimeout(function(){
+          toggleAddNewEmpSectionAddItem();
+          scheduleUpdateParIcsNumber();
+        }, 200);
       });
     $(document)
       .off('change.gsoAddItemPageDeptEmp', '#dept')
@@ -10380,6 +10767,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         updateParEmpStateAddItem();
         loadEmployeesForDept(deptCode);
         toggleAddNewEmpSectionAddItem();
+        scheduleUpdateParIcsNumber();
+        scheduleUpdatePropertyNumber();
       });
 
     var addItemNameDebounce;
@@ -10390,6 +10779,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         var $msg = $('#additem-name-validation-msg');
         var $btn = $('#addItemSubmitBtn');
         clearTimeout(addItemNameDebounce);
+        scheduleUpdateParIcsNumber();
 
         if(!name){
           $msg.hide().text('');
@@ -10448,8 +10838,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       .off('input.gsoAddItemPageCache change.gsoAddItemPageCache', '#itemSetRows input, #itemSetRows textarea, #itemSetRows select')
       .on('input.gsoAddItemPageCache change.gsoAddItemPageCache', '#itemSetRows input, #itemSetRows textarea, #itemSetRows select', snapshotItemSetInputsIntoCache);
     $(document)
-      .off('input.gsoAddItemPageCache2 change.gsoAddItemPageCache2', '#endUserRows input.parEmpNewName, #endUserRows input.parEmpNewPos')
-      .on('input.gsoAddItemPageCache2 change.gsoAddItemPageCache2', '#endUserRows input.parEmpNewName, #endUserRows input.parEmpNewPos', snapshotEndUserInputsIntoCache);
+      .off('input.gsoAddItemPageCache2 change.gsoAddItemPageCache2', '#itemSetRows input.parEmpNewName, #itemSetRows input.parEmpNewPos')
+      .on('input.gsoAddItemPageCache2 change.gsoAddItemPageCache2', '#itemSetRows input.parEmpNewName, #itemSetRows input.parEmpNewPos', snapshotEndUserInputsIntoCache);
 
     $(document)
       .off('change.gsoAddItemPageNoAmount', '.js-item-no-amount')
@@ -10744,34 +11134,57 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     updatePropertyNumber: updatePropertyNumber,
     syncYearAcquiredWithCondition: syncYearAcquiredWithCondition,
     syncAddItemSubmitButton: syncAddItemSubmitButton,
-    getSetLabel: getSetLabel
+    getSetLabel: getSetLabel,
+    getSetDepartment: getSetDepartment,
+    shouldSkipPropertyNumber: shouldSkipPropertyNumber
   };
 })();
 
 //par general fund
 function collectAddItemPrintCategories() {
-  var hasPar = false;
-  var hasIcs = false;
-  $('#itemSetRows .js-item-category').each(function(){
-    var value = String($(this).val() || '').trim().toUpperCase();
-    if (value === 'PAR') { hasPar = true; }
-    if (value === 'ICS') { hasIcs = true; }
+  var state = { hasPar: false, hasIcs: false };
+  $('#itemSetRows .item-set-card').each(function(){
+    var category = String($(this).find('.js-item-category').val() || '').trim().toUpperCase();
+    if (category === 'PAR') { state.hasPar = true; }
+    if (category === 'ICS') { state.hasIcs = true; }
   });
-  return { hasPar: hasPar, hasIcs: hasIcs };
+  return state;
 }
 
 function openAddItemPrintWindows(categories) {
-  var printWins = { par: null, ics: null };
+  var printWins = { par: [], ics: [] };
   var state = categories || collectAddItemPrintCategories();
-
+  var openWindow = function(){
+    try { return [window.open('', '_blank')]; } catch(e) { return [null]; }
+  };
   if (state.hasPar) {
-    try { printWins.par = window.open('', '_blank'); } catch(e) { printWins.par = null; }
+    printWins.par = openWindow();
   }
   if (state.hasIcs) {
-    try { printWins.ics = window.open('', '_blank'); } catch(e) { printWins.ics = null; }
+    printWins.ics = openWindow();
   }
-
   return printWins;
+}
+
+function closeAddItemPrintWindows(printWins) {
+  ['par', 'ics'].forEach(function(type){
+    var windows = printWins && Array.isArray(printWins[type]) ? printWins[type] : [];
+    windows.forEach(function(win){
+      if (win && !win.closed) { try { win.close(); } catch(e) {} }
+    });
+  });
+}
+
+function routeAddItemPrintWindows(printWins, type, urls) {
+  var windows = printWins && Array.isArray(printWins[type]) ? printWins[type] : [];
+  urls.forEach(function(url, index){
+    var win = windows[index] || null;
+    if (win && !win.closed) { win.location = url; }
+    else { window.open(url, '_blank'); }
+  });
+  windows.slice(urls.length).forEach(function(win){
+    if (win && !win.closed) { try { win.close(); } catch(e) {} }
+  });
 }
 
 function buildAddItemIcsPrintUrl(refs) {
@@ -10789,6 +11202,19 @@ function buildAddItemIcsPrintUrl(refs) {
   }
 
   return 'inventory_custodian_slip.php?refs=' + refList.map(encodeURIComponent).join(',');
+}
+
+function buildAddItemParPrintUrl(refs) {
+  var refList = $.map($.isArray(refs) ? refs : [refs], function (ref) {
+    ref = String(ref || '').trim();
+    return ref ? [ref] : [];
+  });
+
+  if (!refList.length) { return ''; }
+  if (refList.length === 1) {
+    return 'printpar.php?refnumber=' + encodeURIComponent(refList[0]);
+  }
+  return 'printpar.php?refs=' + refList.map(encodeURIComponent).join(',');
 }
 
 $(document).on('submit','#addItem',function(e){//to save p.a.r general fund information
@@ -10879,8 +11305,8 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
   $btn.data('submitting', true);
   $btn.prop('disabled', true).html('<i class="fas fa-circle-notch fa-spin"></i>&nbsp;Saving...');
 
-  var printWins = $form.data('printWindows') || { par: null, ics: null };
-  if(shouldPrintAfterSave && !printWins.par && !printWins.ics){
+  var printWins = $form.data('printWindows') || { par: [], ics: [] };
+  if(shouldPrintAfterSave && (!printWins.par || !printWins.par.length) && (!printWins.ics || !printWins.ics.length)){
     printWins = openAddItemPrintWindows(collectAddItemPrintCategories());
   }
   $form.removeData('printWindows');
@@ -10891,9 +11317,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
   var tokenField = document.getElementById('add_item_submission_token');
   if(tokenField){ fd.append('submission_token', tokenField.value); }
 
-  // Multi end-user: explicitly append dynamic row values to FormData.
-  // This guards against cases where the dynamic table is not inside the form DOM
-  // (or is re-rendered) at the moment FormData is constructed.
+  // Per-set accountability: explicitly sync the dynamic controls into FormData.
   var isMultiEndUser = $('#multipleEndUserCheckBox').is(':checked');
   var isNoEndUser = formCondition === 'NEW' && $('#endUserNoneCheckBox').is(':checked');
   if(isNoEndUser){
@@ -10905,26 +11329,45 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     : function(idx){ return 'Set ' + idx; };
   if(isMultiEndUser && !isNoEndUser){
     var missingSets = [];
+    var missingDepartmentSets = [];
     var missingNewEmpSets = [];
-    $('#endUserRows select.parEmpRow').each(function(){
+    var firstSetDepartment = '';
+    $('#itemSetRows select.parEmpRow').each(function(){
       var idx = $(this).data('row');
       if(idx === undefined || idx === null || idx === ''){ return; }
+      var dept = ($('#itemSetRows select.parDeptRow[data-row="'+idx+'"]').val() || '').toString().trim();
       var val = ($(this).val() || '').toString().trim();
+      if(!dept){ missingDepartmentSets.push(getSetLabel(idx)); }
       if(!val){ missingSets.push(getSetLabel(idx)); }
+      if(!firstSetDepartment && dept){ firstSetDepartment = dept; }
+      fd.set('dept_multi['+idx+']', dept);
       fd.append('parEmp_multi['+idx+']', val);
 
       // Per-row add new employee + position
       if((val || '').toString().toLowerCase() === 'add_new_emp'){
-        var nm = ($('#endUserRows input.parEmpNewName[data-row="'+idx+'"]').val() || '').toString().trim();
-        var ps = ($('#endUserRows input.parEmpNewPos[data-row="'+idx+'"]').val() || '').toString().trim();
+        var nm = ($('#itemSetRows input.parEmpNewName[data-row="'+idx+'"]').val() || '').toString().trim();
+        var ps = ($('#itemSetRows input.parEmpNewPos[data-row="'+idx+'"]').val() || '').toString().trim();
         if(!nm || !ps){ missingNewEmpSets.push(getSetLabel(idx)); }
         fd.append('parEmp_multi_new_name['+idx+']', nm);
         fd.append('parEmp_multi_new_position['+idx+']', ps);
       }
     });
+    if(firstSetDepartment){ fd.set('dept', firstSetDepartment); }
+    if(missingDepartmentSets.length){
+      Swal.fire({ icon:'warning', title:'Validation error', text:'Department is required for set(s): ' + missingDepartmentSets.join(', ') + '.' });
+      closeAddItemPrintWindows(printWins);
+      $form.removeData('printPreference');
+      $btn.data('submitting', false);
+      $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
+      if (window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.syncAddItemSubmitButton === 'function') {
+        window.GSO.AddItemPage.syncAddItemSubmitButton();
+      }
+      return;
+    }
     if(missingSets.length){
       Swal.fire({ icon:'warning', title:'Validation error', text:'End user is required for set(s): ' + missingSets.join(', ') + '.' });
       // Restore button state and allow user to fix inputs without reload
+      closeAddItemPrintWindows(printWins);
       $form.removeData('printPreference');
       $btn.data('submitting', false);
       $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
@@ -10935,6 +11378,7 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     }
     if(missingNewEmpSets.length){
       Swal.fire({ icon:'warning', title:'Validation error', text:'New employee name and position are required for set(s): ' + missingNewEmpSets.join(', ') + '.' });
+      closeAddItemPrintWindows(printWins);
       $form.removeData('printPreference');
       $btn.data('submitting', false);
       $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
@@ -10954,7 +11398,9 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
     var idx = String(setIndex || '').trim();
     if (!idx) { return false; }
     var $parentRow = $('#itemSetRows .item-set-card[data-set-index="' + idx + '"]');
-    return shouldSkipPropertyNumber($parentRow);
+    return window.GSO && window.GSO.AddItemPage && typeof window.GSO.AddItemPage.shouldSkipPropertyNumber === 'function'
+      ? window.GSO.AddItemPage.shouldSkipPropertyNumber($parentRow)
+      : false;
   }
   if(bundleRows.length){
     fd.delete('bundle_parent_index[]');
@@ -11016,12 +11462,12 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
         bundleMissing.push('Bundle ' + groupLabel);
       }
     });
-
     if(bundleMissing.length){
       var bundleMessage = isPropertyNumberOptionalFund
         ? 'Bundle equipment requires Bundle Set, Category, Unit, Asset Class, and generated unit rows for: '
         : 'Bundle equipment requires Bundle Set, Category, Unit, Asset Class, and Property Number for: ';
       Swal.fire({ icon:'warning', title:'Validation error', text: bundleMessage + bundleMissing.join(', ') + '.' });
+      closeAddItemPrintWindows(printWins);
       $form.removeData('printPreference');
       $btn.data('submitting', false);
       $btn.html('<i class="fa-solid fa-pen-to-square"></i>&nbsp;<span class="btn-text">Save</span>');
@@ -11061,34 +11507,15 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
               if (fallbackRef && fallbackCategory === 'ICS') { icsRefs = [fallbackRef]; }
             }
 
-            if (parRefs.length) {
-              var parUrl = 'printpar.php?refnumber=' + encodeURIComponent(parRefs[0]);
-              if (printWins.par && !printWins.par.closed) {
-                printWins.par.location = parUrl;
-              } else {
-                window.open(parUrl, '_blank');
-              }
-            } else if (printWins.par && !printWins.par.closed) {
-              printWins.par.close();
-            }
-
-            if (icsRefs.length) {
-              var icsUrl = buildAddItemIcsPrintUrl(icsRefs);
-              if (icsUrl && printWins.ics && !printWins.ics.closed) {
-                printWins.ics.location = icsUrl;
-              } else if (icsUrl) {
-                window.open(icsUrl, '_blank');
-              }
-            } else if (printWins.ics && !printWins.ics.closed) {
-              printWins.ics.close();
-            }
+            var parPrintUrl = buildAddItemParPrintUrl(parRefs);
+            var icsPrintUrl = buildAddItemIcsPrintUrl(icsRefs);
+            routeAddItemPrintWindows(printWins, 'par', parPrintUrl ? [parPrintUrl] : []);
+            routeAddItemPrintWindows(printWins, 'ics', icsPrintUrl ? [icsPrintUrl] : []);
           } else {
-            if(printWins.par && !printWins.par.closed) { printWins.par.close(); }
-            if(printWins.ics && !printWins.ics.closed) { printWins.ics.close(); }
+            closeAddItemPrintWindows(printWins);
           }
         } catch(e) {
-          if(printWins.par && !printWins.par.closed){ try { printWins.par.close(); } catch(_){} }
-          if(printWins.ics && !printWins.ics.closed){ try { printWins.ics.close(); } catch(_){} }
+          closeAddItemPrintWindows(printWins);
         }
 
         Swal.fire({

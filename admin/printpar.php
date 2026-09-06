@@ -8,9 +8,14 @@ $refnumber = isset($_GET['refnumber']) ? trim((string)$_GET['refnumber']) : '';
 if ($refnumber === '' && isset($_GET['reference_number'])) {
   $refnumber = trim((string)$_GET['reference_number']);
 }
-if ($refnumber === '') {
+$refsRaw = isset($_GET['refs']) ? trim((string)$_GET['refs']) : '';
+$referenceNumbers = $refsRaw !== ''
+  ? array_values(array_unique(array_filter(array_map('trim', explode(',', $refsRaw)))))
+  : ($refnumber !== '' ? [$refnumber] : []);
+if (count($referenceNumbers) === 0) {
   die('Missing reference number.');
 }
+$referencePlaceholders = implode(',', array_fill(0, count($referenceNumbers), '?'));
 
 // Optional: filter to specific property numbers only (re-print selected items)
 $parsRaw = isset($_GET['pars']) ? trim((string)$_GET['pars']) : '';
@@ -132,7 +137,9 @@ function gso_repair_blank_new_purchase_history_links(mysqli $conn, string $refer
   }
 }
 
-gso_repair_blank_new_purchase_history_links($conn, $refnumber, 'PAR');
+foreach ($referenceNumbers as $referenceNumber) {
+  gso_repair_blank_new_purchase_history_links($conn, $referenceNumber, 'PAR');
+}
 
 // NEW purchases (preferred): new_purchase_history + new_purchase
 $sqlNew = "
@@ -181,7 +188,7 @@ $sqlNew = "
       )
     )
   )
-  WHERE h.reference_number = ?
+  WHERE h.reference_number IN ($referencePlaceholders)
     AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
 " . $parsInNew . "
@@ -189,7 +196,9 @@ $sqlNew = "
 ";
 
 if ($stmt = $conn->prepare($sqlNew)) {
-  $stmt->bind_param('s' . str_repeat('s', count($pars)), $refnumber, ...$pars);
+  $types = str_repeat('s', count($referenceNumbers) + count($pars));
+  $params = array_merge($referenceNumbers, $pars);
+  $stmt->bind_param($types, ...$params);
   $stmt->execute();
   $res = $stmt->get_result();
   while ($row = $res->fetch_assoc()) {
@@ -246,7 +255,7 @@ $sqlGf = "
       )
     )
   )
-  WHERE h.reference_number = ?
+  WHERE h.reference_number IN ($referencePlaceholders)
     AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
 " . $parsInGf . "
@@ -254,7 +263,9 @@ $sqlGf = "
 ";
 
 if (count($items) === 0 && ($stmt = $conn->prepare($sqlGf))) {
-  $stmt->bind_param('s' . str_repeat('s', count($pars)), $refnumber, ...$pars);
+  $types = str_repeat('s', count($referenceNumbers) + count($pars));
+  $params = array_merge($referenceNumbers, $pars);
+  $stmt->bind_param($types, ...$params);
   $stmt->execute();
   $res = $stmt->get_result();
   while ($row = $res->fetch_assoc()) {
@@ -311,7 +322,7 @@ $sqlSef = "
       )
     )
   )
-  WHERE h.reference_number = ?
+  WHERE h.reference_number IN ($referencePlaceholders)
     AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
 " . $parsInSef . "
@@ -319,7 +330,9 @@ $sqlSef = "
 ";
 
 if (count($items) === 0 && ($stmt = $conn->prepare($sqlSef))) {
-  $stmt->bind_param('s' . str_repeat('s', count($pars)), $refnumber, ...$pars);
+  $types = str_repeat('s', count($referenceNumbers) + count($pars));
+  $params = array_merge($referenceNumbers, $pars);
+  $stmt->bind_param($types, ...$params);
   $stmt->execute();
   $res = $stmt->get_result();
   while ($row = $res->fetch_assoc()) {
@@ -341,7 +354,9 @@ if (count($items) === 0 && ($stmt = $conn->prepare($sqlSef))) {
   $stmt->close();
 }
 
-function gso_printpar_append_fund_rows(mysqli $conn, array &$items, array &$meta, string $table, string $historyTable, string $unitSelect, string $refnumber, array $pars): void {
+function gso_printpar_append_fund_rows(mysqli $conn, array &$items, array &$meta, string $table, string $historyTable, string $unitSelect, array $referenceNumbers, array $pars): void {
+  if (count($referenceNumbers) === 0) { return; }
+  $referencePlaceholders = implode(',', array_fill(0, count($referenceNumbers), '?'));
   $parsFilter = count($pars) ? ' AND COALESCE(NULLIF(f.property_number, \'\'), h.par_number, \'\') IN (' . implode(',', array_fill(0, count($pars), '?')) . ')' : '';
   $sql = "
     SELECT
@@ -377,7 +392,7 @@ function gso_printpar_append_fund_rows(mysqli $conn, array &$items, array &$meta
         )
       )
     )
-    WHERE h.reference_number = ?
+    WHERE h.reference_number IN ($referencePlaceholders)
       AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
       AND h.status = 1
       {$parsFilter}
@@ -386,7 +401,9 @@ function gso_printpar_append_fund_rows(mysqli $conn, array &$items, array &$meta
 
   $stmt = $conn->prepare($sql);
   if (!$stmt) { return; }
-  $stmt->bind_param('s' . str_repeat('s', count($pars)), $refnumber, ...$pars);
+  $types = str_repeat('s', count($referenceNumbers) + count($pars));
+  $params = array_merge($referenceNumbers, $pars);
+  $stmt->bind_param($types, ...$params);
   $stmt->execute();
   $res = $stmt->get_result();
   while ($row = $res->fetch_assoc()) {
@@ -409,11 +426,11 @@ function gso_printpar_append_fund_rows(mysqli $conn, array &$items, array &$meta
 }
 
 if (count($items) === 0) {
-  gso_printpar_append_fund_rows($conn, $items, $meta, 'trust_fund', 'trust_fund_history', $trustFundUnitSelect, $refnumber, $pars);
+  gso_printpar_append_fund_rows($conn, $items, $meta, 'trust_fund', 'trust_fund_history', $trustFundUnitSelect, $referenceNumbers, $pars);
 }
 
 if (count($items) === 0) {
-  gso_printpar_append_fund_rows($conn, $items, $meta, 'donation', 'donation_history', $donationUnitSelect, $refnumber, $pars);
+  gso_printpar_append_fund_rows($conn, $items, $meta, 'donation', 'donation_history', $donationUnitSelect, $referenceNumbers, $pars);
 }
 
 if (count($items) === 0) {

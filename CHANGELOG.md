@@ -2,7 +2,7 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.1.0) - August 29, 2026
+## Unreleased (planned v1.1.0) - September 6, 2026
 
 ### Added
 - Added PAIR to the Unit dropdown in the Add/Edit Item modal
@@ -45,3 +45,4 @@ This file is generated from git history by `php tools/release.php`.
 - Fix existing PAR/ICS No. to remains unchanged during transfers
 - Fixed the sidebar hover transition on change-log.php
 - Fixed the units issue in the printing of par
+- Bug fixes and system improvements -multi-department support added in add-item -multi-department support added in printpar -multi-department support added in edit-item -multiple bug fixes

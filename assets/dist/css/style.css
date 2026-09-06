@@ -907,6 +907,17 @@
   }
 }
 
+/* Display edit item sets newest first while preserving their form field order. */
+#editNpDetailModal #editNpItemRows {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 1rem;
+}
+
+#editNpDetailModal #editNpItemRows > .item-set-card {
+  margin-top: 0;
+}
+
 @keyframes gsoCountPulse {
   0% {
     transform: translateY(0);

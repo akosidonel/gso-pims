@@ -63,6 +63,17 @@ if(!isset($_SESSION['alogin'])){
       margin-top: 1rem;
     }
 
+    /* Show the newest set first while preserving set numbers and form field order. */
+    #itemSetRows {
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 1rem;
+    }
+
+    #itemSetRows > .item-set-card {
+      margin-top: 0;
+    }
+
     #addItemModal .modal-content > form#addItem {
       display: flex;
       flex-direction: column;
@@ -250,7 +261,13 @@ if(!isset($_SESSION['alogin'])){
               <div class="card-body">
                 <div class="form-row">
                   <div class="form-group col-md-12">
-                    <label class="col-form-label">Department</label>
+                    <div class="d-flex align-items-center mb-2">
+                      <label class="col-form-label mb-0 mr-4">Department</label>
+                      <div class="form-check form-check-inline mb-0 text-muted">
+                        <input type="checkbox" class="form-check-input" id="multipleEndUserCheckBox" name="multipleEndUserCheckBox">
+                        <label class="form-check-label" for="multipleEndUserCheckBox">assign department/end user per set</label>
+                      </div>
+                    </div>
                     <input type="text" id="deptSearch" class="form-control" list="deptDatalist" placeholder="Type to search department" autocomplete="off" disabled>
                     <datalist id="deptDatalist"></datalist>
                     <select name="dept" id="dept" class="form-control" required style="display:none;">
@@ -271,16 +288,13 @@ if(!isset($_SESSION['alogin'])){
                 <div class="form-row">
                   <div class="form-group col-md-12 mb-0">
                     <label>End User <span class="text-muted">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-                      <input type="checkbox" class="form-check-input" id="multipleEndUserCheckBox" name="multipleEndUserCheckBox">
-                      <label class="form-check-label" for="multipleEndUserCheckBox">add multiple enduser</label>
-                      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
                       <input type="checkbox" class="form-check-input" id="endUserNoneCheckBox" name="endUserNoneCheckBox" value="1" disabled>
                       <label class="form-check-label" for="endUserNoneCheckBox">none</label>
                     </span></label>
                     <select name="parEmp" id="parEmp" class="form-control" autocomplete="off" required>
                       <option value="">-SELECT-</option>
                     </select>
-                    <div id="endUserRows" style="display:none; max-height:260px; overflow-y:auto;"></div>
+                    <small class="form-text text-muted">These are the defaults. Enable per-set assignment to activate Department and End User fields inside each Set card.</small>
                   </div>
                 </div>
                 <div id="add_new_employee" style="display:none;">
@@ -705,7 +719,10 @@ if(!isset($_SESSION['alogin'])){
                   <div class="card-body">
                     <div class="form-row">
                       <div class="form-group col-md-12">
-                        <label class="col-form-label">Department</label>
+                        <label class="col-form-label">Department <span class="text-muted">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                          <input type="checkbox" class="form-check-input" id="editNpMultipleEndUserCheckBox">
+                          <label class="form-check-label" for="editNpMultipleEndUserCheckBox">assign department/end user per set</label>
+                        </span></label>
                         <input type="text" id="editNpDeptSearch" class="form-control" list="editNpDeptDatalist" placeholder="Type to search department" autocomplete="off">
                         <datalist id="editNpDeptDatalist"></datalist>
                         <select name="dept_id" id="edit_np_dept" class="form-control" required style="display:none;">
@@ -725,14 +742,10 @@ if(!isset($_SESSION['alogin'])){
                     </div>
                     <div class="form-row mb-0">
                       <div class="form-group col-md-12 mb-0">
-                        <label>End User <span class="text-muted">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-                          <input type="checkbox" class="form-check-input" id="editNpMultipleEndUserCheckBox">
-                          <label class="form-check-label" for="editNpMultipleEndUserCheckBox">add multiple enduser</label>
-                        </span></label>
+                        <label>End User</label>
                         <select id="edit_np_emp_single" class="form-control" autocomplete="off" style="display:none;">
                           <option value="">-SELECT-</option>
                         </select>
-                        <div id="editNpEndUserRows" style="display:none; max-height:260px; overflow-y:auto;"></div>
                       </div>
                     </div>
                     <div id="edit_np_add_new_employee" style="display:none;">
