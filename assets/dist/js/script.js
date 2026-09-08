@@ -3617,6 +3617,7 @@ $(function(){
     };
     var npDetailPropertyRequestId = 0;
     var npDetailPropertyRequest = null;
+    var npDetailParIcsRequestId = 0;
     var npDetailDepartmentRequestId = 0;
     var npDetailDepartmentRequest = null;
     var npDetailTempIndex = 0;
@@ -4293,6 +4294,7 @@ $(function(){
     }
 
     function npDetailRefreshParIcsNumbers() {
+      var requestId = ++npDetailParIcsRequestId;
       if (!npDetailState.items.length) { return; }
 
       var selectedYear = npDetailGetYear($('#edit_np_year').val());
@@ -4365,6 +4367,7 @@ $(function(){
           rows: JSON.stringify(requestRows)
         },
         success: function (resp) {
+          if (requestId !== npDetailParIcsRequestId) { return; }
           var codes = resp && Number(resp.status) === 200 && Array.isArray(resp.codes) ? resp.codes : [];
           $.each(itemIds, function (index, itemId) {
             if (!requestRows[index].skip) {
@@ -5164,6 +5167,7 @@ $(function(){
 
     function npDetailFillModal(data, options) {
       npDetailCancelPropertyRequest();
+      npDetailParIcsRequestId++;
       var opts = options || {};
       var group = data && data.group ? data.group : {};
       var items = data && data.items ? data.items : [];
@@ -5269,6 +5273,9 @@ $(function(){
 
     function npDetailCreateBlankItem() {
       var key = 'tmp_' + (++npDetailTempIndex);
+      var employee = npDetailState.useMultipleEndUsers
+        ? { value: '', label: '' }
+        : npDetailGetPrimaryEmployee();
       return {
         key: key,
         id: 0,
@@ -5287,8 +5294,8 @@ $(function(){
         unit_value: '0.00',
         account_code: '',
         remarks: '',
-        emp_id: '',
-        emp_name: '',
+        emp_id: employee.value,
+        emp_name: employee.label,
         item_quantity: 1,
         original_property_number: '',
         original_account_code: '',
@@ -6131,6 +6138,7 @@ $(function(){
       .off('hidden.bs.modal.editNpDetail')
       .on('hidden.bs.modal.editNpDetail', function () {
         npDetailCancelPropertyRequest();
+        npDetailParIcsRequestId++;
         npDetailCancelDepartmentRequest();
         npDetailState.group = null;
         npDetailState.items = [];
