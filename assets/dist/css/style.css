@@ -56,6 +56,38 @@
   overflow: hidden;
 }
 
+/* Keep long item forms responsive while scrolling and changing fields. */
+#addItemModal .modal-body,
+#editNpDetailModal .modal-body {
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  isolation: isolate;
+}
+
+#addItemModal .item-set-card,
+#editNpDetailModal .item-set-card {
+  contain: layout style;
+}
+
+#addItemModal .form-control,
+#editNpDetailModal .form-control {
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #addItemModal.fade .modal-dialog,
+  #editNpDetailModal.fade .modal-dialog {
+    transition: transform 180ms ease-out;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #addItemModal .form-control,
+  #editNpDetailModal .form-control {
+    transition: none;
+  }
+}
+
 /* Keep the vehicle form inside the scrollable modal viewport. */
 #motorVehicleModal .modal-content > #motorVehicleForm {
   display: flex;

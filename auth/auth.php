@@ -1,8 +1,8 @@
 <?php
 require_once __DIR__ . '/../config/session_bootstrap.php';
 gso_start_secure_session();
-// Preview requests only read the session; do not block other modal requests.
-if (isset($_POST['generate_property_numbers_batch']) || isset($_POST['generate_par_ics_codes_batch'])) {
+// Read-only metrics and previews must not block other requests from this session.
+if (defined('GSO_DASHBOARD_METRICS_REQUEST') || isset($_POST['generate_property_numbers_batch']) || isset($_POST['generate_par_ics_codes_batch'])) {
     session_write_close();
 }
 require_once __DIR__ . '/../database/databaseConnection.php';
@@ -1163,6 +1163,188 @@ if(!function_exists('gso_fetch_administrator_by_id')){
         return $row;
     }
 }
+// Fetch each existing copy's latest history in batches instead of one read per copy.
+function gso_prefetch_purchase_history_ids(mysqli $conn, array $rows): array {
+    $ids = [];
+    foreach ($rows as $row) {
+        $property = strtoupper(trim((string)($row['property_number'] ?? '')));
+        if ($property !== '') { $ids[$property] = 0; }
+        $ids['NPID:' . (int)$row['id']] = 0;
+    }
+    foreach (array_chunk(array_keys($ids), 500) as $keys) {
+        $placeholders = implode(',', array_fill(0, count($keys), '?'));
+        $stmt = $conn->prepare("SELECT par_number, MAX(id) AS id FROM new_purchase_history WHERE status = 1 AND par_number IN ($placeholders) GROUP BY par_number");
+        if (!$stmt) { throw new RuntimeException('Unable to prepare history lookup.'); }
+        try {
+            gso_stmt_bind_params($stmt, str_repeat('s', count($keys)), $keys);
+            if (!$stmt->execute()) { throw new RuntimeException('Unable to load item histories.'); }
+            $result = $stmt->get_result();
+            while ($row = $result->fetch_assoc()) {
+                $ids[strtoupper(trim($row['par_number']))] = (int)$row['id'];
+            }
+            $result->free();
+        } finally {
+            $stmt->close();
+        }
+    }
+    return $ids;
+}
+
+// Maintenance only; never run table changes during an ordinary save.
+function gso_ensure_purchase_save_indexes(mysqli $conn): array {
+    $targets = ['new_purchase' => ['purchase_order'], 'new_bundle_purchase' => ['property_number', 'bundle_with']];
+    $added = [];
+    foreach ($targets as $table => $columns) {
+        $result = $conn->query("SHOW INDEX FROM `$table`");
+        if (!$result) { throw new RuntimeException("Unable to inspect $table indexes."); }
+        $leading = [];
+        while ($row = $result->fetch_assoc()) {
+            if ((int)$row['Seq_in_index'] === 1) { $leading[$row['Column_name']] = true; }
+        }
+        $result->free();
+        foreach ($columns as $column) {
+            if (isset($leading[$column])) { continue; }
+            if (!$conn->query("ALTER TABLE `$table` ADD INDEX `idx_save_$column` (`$column`)")) {
+                throw new RuntimeException("Unable to index $table.$column.");
+            }
+            $added[] = "$table.$column";
+        }
+    }
+    return $added;
+}
+
+// Read-only diagnostics, called explicitly by the CLI profiler.
+function gso_profile_save_database(mysqli $conn): array {
+    $samples = [];
+    for ($i = 0; $i < 20; $i++) {
+        $start = microtime(true);
+        $result = $conn->query('SELECT 1');
+        if (!$result) { throw new RuntimeException('Database response check failed.'); }
+        $result->free();
+        $samples[] = (microtime(true) - $start) * 1000;
+    }
+    sort($samples);
+    $indexes = [];
+    foreach (['new_purchase', 'new_purchase_history', 'new_bundle_purchase'] as $table) {
+        $result = $conn->query("SHOW INDEX FROM `$table`");
+        if (!$result) { throw new RuntimeException("Unable to inspect indexes for $table."); }
+        while ($row = $result->fetch_assoc()) {
+            $indexes[$table][$row['Key_name']][(int)$row['Seq_in_index']] = $row['Column_name'];
+        }
+        $result->free();
+    }
+    return [
+        'round_trip_ms' => ['min' => $samples[0], 'median' => ($samples[9] + $samples[10]) / 2, 'max' => $samples[19]],
+        'indexes' => $indexes,
+    ];
+}
+
+// Called by the dashboard profiler during maintenance, never during page loads.
+if (!function_exists('gso_ensure_dashboard_total_indexes')) {
+    function gso_ensure_dashboard_total_indexes(mysqli $conn) {
+        $added = [];
+        foreach (['par_gen_fund', 'property_sef', 'new_purchase'] as $table) {
+            $result = mysqli_query($conn, "SHOW INDEX FROM $table");
+            if (!$result) { throw new RuntimeException("Unable to inspect indexes for $table."); }
+            $hasIndex = false;
+            while ($row = mysqli_fetch_assoc($result)) {
+                if ((int)$row['Seq_in_index'] === 1 && $row['Column_name'] === 'unit_value') {
+                    $hasIndex = true;
+                }
+            }
+            mysqli_free_result($result);
+            if (!$hasIndex) {
+                if (!mysqli_query($conn, "ALTER TABLE $table ADD INDEX idx_dashboard_unit_value (unit_value)")) {
+                    throw new RuntimeException("Unable to add the dashboard index for $table.");
+                }
+                $added[] = $table;
+            }
+        }
+        return $added;
+    }
+}
+
+if (!function_exists('gso_fetch_dashboard_general_metrics')) {
+    function gso_fetch_dashboard_general_metrics(mysqli $conn) {
+        $sources = [
+            'gftotal' => ['par_gen_fund', 'unit_value'],
+            'seftotal' => ['property_sef', 'unit_value'],
+            'trust_fund_total' => ['trust_fund', 'unit_value'],
+            'donation_total' => ['donation', 'unit_value'],
+            'land_total' => ['land_properties', 'total_amount'],
+            'new_purchase_total' => ['new_purchase', 'unit_value'],
+            'infrastructure_gf_total' => ['general_fund_infrastructure', 'amount'],
+            'infrastructure_sef_total' => ['sef_infrastructure', 'amount'],
+            'admin_count' => ['administrator', null],
+        ];
+        $tables = [];
+        $result = mysqli_query($conn, 'SHOW TABLES');
+        if (!$result) { throw new RuntimeException('Unable to load dashboard tables.'); }
+        while ($row = mysqli_fetch_row($result)) { $tables[$row[0]] = true; }
+        mysqli_free_result($result);
+
+        $columns = [];
+        foreach ($sources as $key => $source) {
+            list($table, $column) = $source;
+            if (!isset($tables[$table])) {
+                $columns[] = "0 AS $key";
+                continue;
+            }
+            $aggregate = $column === null ? 'COUNT(*)' : "COALESCE(SUM($column), 0)";
+            $where = strpos($key, 'infrastructure_') === 0 ? " WHERE record_status = 'ACTIVE'" : '';
+            $columns[] = "(SELECT $aggregate FROM $table$where) AS $key";
+        }
+        $result = mysqli_query($conn, 'SELECT ' . implode(', ', $columns));
+        if (!$result) { throw new RuntimeException('Unable to load dashboard totals.'); }
+        $data = mysqli_fetch_assoc($result);
+        mysqli_free_result($result);
+        foreach ($data as $key => $value) {
+            $data[$key] = $key === 'admin_count' ? (int)$value : (float)$value;
+        }
+        return $data;
+    }
+}
+
+if (!function_exists('gso_fetch_dashboard_equipment_metrics')) {
+    function gso_fetch_dashboard_equipment_metrics(mysqli $conn) {
+        $metrics = [
+            'FURNITURE AND FIXTURES' => 'furniture_count',
+            'DESKTOP COMPUTER' => 'desktop_count',
+            'LAPTOP' => 'laptop_count',
+            'AIRCONDITIONER' => 'aircon_count',
+            'MOTOR VEHICLE' => 'vehicle_count',
+            'PRINTER' => 'printer_count',
+            'SERVER' => 'server_count',
+            'OTHER MACHINERY AND EQUIPMENT' => 'machinery_count',
+        ];
+        $data = array_fill_keys(array_values($metrics), 0);
+        $items = "'" . implode("','", array_keys($metrics)) . "'";
+        $sql = "SELECT item, SUM(cnt) AS cnt FROM (
+                    SELECT p.item, COUNT(*) AS cnt
+                    FROM par_gen_fund AS p
+                    JOIN general_fund_property_history AS g
+                        ON g.par_number = p.par_number AND g.status = 1
+                    WHERE p.item IN ($items)
+                    GROUP BY p.item
+                    UNION ALL
+                    SELECT s.item, COUNT(*) AS cnt
+                    FROM property_sef AS s
+                    JOIN sef_property_history AS sh
+                        ON sh.property_number = s.property_number AND sh.status = 1
+                    WHERE s.item IN ($items)
+                    GROUP BY s.item
+                ) AS equipment_counts GROUP BY item";
+        $result = mysqli_query($conn, $sql);
+        if (!$result) { throw new RuntimeException('Unable to load dashboard equipment counts.'); }
+        while ($row = mysqli_fetch_assoc($result)) {
+            $item = strtoupper(trim((string)$row['item']));
+            if (isset($metrics[$item])) { $data[$metrics[$item]] = (int)$row['cnt']; }
+        }
+        mysqli_free_result($result);
+        return $data;
+    }
+}
+
 if(!function_exists('gso_fetch_dashboard_admin_summary')){
     function gso_fetch_dashboard_admin_summary(mysqli $conn, $adminId){
         $adminId = trim((string)$adminId);
@@ -8845,7 +9027,7 @@ if (isset($_POST['delete_new_purchase_group_set'])) {
 
     try {
         $deleteItemStmt = $conn->prepare('DELETE FROM new_purchase WHERE id = ?');
-        $deleteHistoryStmt = $conn->prepare('DELETE FROM new_purchase_history WHERE par_number = ? OR par_number = ?');
+        $deleteHistoryStmt = $conn->prepare("DELETE FROM new_purchase_history WHERE par_number <> '' AND (par_number = ? OR par_number = ?)");
         $clearBundleStmt = $conn->prepare('DELETE FROM new_bundle_purchase WHERE property_number = ? OR bundle_with = ?');
 
         if (!$deleteItemStmt || !$deleteHistoryStmt || !$clearBundleStmt) {
@@ -9547,7 +9729,7 @@ if (isset($_POST['update_new_purchase_group'])) {
         $historyFindStmt = $conn->prepare(
             'SELECT id
              FROM new_purchase_history
-             WHERE status = 1 AND par_number IN (?, ?, ?)
+             WHERE status = 1 AND par_number <> \'\' AND par_number IN (?, ?, ?)
              ORDER BY id DESC
              LIMIT 1'
         );
@@ -9561,7 +9743,7 @@ if (isset($_POST['update_new_purchase_group'])) {
             throw new RuntimeException('Unable to prepare history synchronization: ' . $conn->error);
         }
         $deleteItemStmt = $conn->prepare('DELETE FROM new_purchase WHERE id = ?');
-        $deleteHistoryStmt = $conn->prepare('DELETE FROM new_purchase_history WHERE par_number = ? OR par_number = ?');
+        $deleteHistoryStmt = $conn->prepare("DELETE FROM new_purchase_history WHERE par_number <> '' AND (par_number = ? OR par_number = ?)");
         $clearBundleStmt = $conn->prepare('DELETE FROM new_bundle_purchase WHERE property_number = ? OR bundle_with = ?');
         $bundleNullStmt = $conn->prepare(
             'UPDATE new_bundle_purchase
@@ -9584,6 +9766,7 @@ if (isset($_POST['update_new_purchase_group'])) {
             throw new RuntimeException('Unable to prepare bundle insert statement: ' . $conn->error);
         }
 
+        $historyIds = gso_prefetch_purchase_history_ids($conn, $currentRows);
         $keptExistingIds = [];
         $updatedParentItems = [];
         $setDisplayIndex = 0;
@@ -9758,14 +9941,22 @@ if (isset($_POST['update_new_purchase_group'])) {
                     }
 
                     $historyParNumber = $propertyNumberOptionalFund ? $copyNpidLink : ($copyPropertyNumber !== '' ? $copyPropertyNumber : $copyNpidLink);
-                    $historyFindStmt->bind_param('sss', $copyOldPropNum, $copyNpidLink, $historyParNumber);
-                    if (!$historyFindStmt->execute()) {
-                        throw new RuntimeException('Unable to locate history for item #' . $copyExistingId . '.');
+                    $historyKeys = array_values(array_unique(array_filter([$copyOldPropNum, $copyNpidLink, $historyParNumber], function ($key) { return $key !== ''; })));
+                    $historyId = 0;
+                    $historyCached = true;
+                    foreach ($historyKeys as $key) {
+                        if (!array_key_exists($key, $historyIds)) { $historyCached = false; break; }
+                        $historyId = max($historyId, $historyIds[$key]);
                     }
-                    $historyResult = $historyFindStmt->get_result();
-                    $historyId = $historyResult ? (int)($historyResult->fetch_assoc()['id'] ?? 0) : 0;
-                    if ($historyResult) {
-                        $historyResult->free();
+                    // New property numbers and keys changed earlier in this save need a fresh lookup.
+                    if (!$historyCached) {
+                        $historyFindStmt->bind_param('sss', $copyOldPropNum, $copyNpidLink, $historyParNumber);
+                        if (!$historyFindStmt->execute()) {
+                            throw new RuntimeException('Unable to locate history for item #' . $copyExistingId . '.');
+                        }
+                        $historyResult = $historyFindStmt->get_result();
+                        $historyId = $historyResult ? (int)($historyResult->fetch_assoc()['id'] ?? 0) : 0;
+                        if ($historyResult) { $historyResult->free(); }
                     }
 
                     if ($historyId > 0) {
@@ -9781,6 +9972,8 @@ if (isset($_POST['update_new_purchase_group'])) {
                             throw new RuntimeException('Unable to create history for item #' . $copyExistingId . '.');
                         }
                     }
+
+                    foreach ($historyKeys as $key) { unset($historyIds[$key]); }
 
                     if ($copyOldPropNum !== $copyPropertyNumber && $copyOldPropNum !== '') {
                         if ($copyPropertyNumber === '' && $bundleNullStmt) {
@@ -9822,13 +10015,14 @@ if (isset($_POST['update_new_purchase_group'])) {
                         throw new RuntimeException('Unable to create a new set: ' . $insertStmt->error);
                     }
                     $newItemId = (int)$conn->insert_id;
-                    $historyParNumber = $propertyNumberOptionalFund ? ('NPID:' . $newItemId) : $copyPropertyNumber;
+                    $historyParNumber = $copyPropertyNumber !== '' ? $copyPropertyNumber : ('NPID:' . $newItemId);
                     $historyCreatedAt = $createdAt;
                     $historyStatus = 1;
                     $historyInsertStmt->bind_param('iississ', $employeeId, $setDepartmentPk, $historyParNumber, $referenceNumberForSet, $historyStatus, $category, $historyCreatedAt);
                     if (!$historyInsertStmt->execute()) {
                         throw new RuntimeException('Unable to save history for a new set.');
                     }
+                    unset($historyIds[$historyParNumber]);
                 }
 
                 if (!$propertyNumberOptionalFund && $copyIndex < $itemQuantity) {

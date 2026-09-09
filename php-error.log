@@ -98,3 +98,5 @@
 [07-Sep-2026 09:00:35 Europe/Berlin] PHP Warning:  mysqli_connect(): MySQL server has gone away in C:\xampp\htdocs\gso-pims\database\databaseConnection.php on line 9
 [07-Sep-2026 09:00:35 Europe/Berlin] PHP Warning:  mysqli_connect(): Error while reading greeting packet. PID=15924 in C:\xampp\htdocs\gso-pims\database\databaseConnection.php on line 9
 [07-Sep-2026 09:00:35 Europe/Berlin] PHP Warning:  mysqli_connect(): (HY000/2006): MySQL server has gone away in C:\xampp\htdocs\gso-pims\database\databaseConnection.php on line 9
+[09-Sep-2026 08:31:11 Europe/Berlin] PHP Warning:  session_start(): open(C:\xampp\tmp\sess_n8n7m6d5da1cquhijpq5pf24j0, O_RDWR) failed: Permission denied (13) in C:\xampp\htdocs\gso-pims\config\session_bootstrap.php on line 29
+[09-Sep-2026 08:31:11 Europe/Berlin] PHP Warning:  session_start(): Failed to read session data: files (path: C:\xampp\tmp) in C:\xampp\htdocs\gso-pims\config\session_bootstrap.php on line 29

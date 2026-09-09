@@ -27,6 +27,23 @@ window.gsoAppendFormToken = window.gsoAppendFormToken || function(formData, fiel
 };
 
 window.GSO = window.GSO || {};
+// Reveal form sections without animating the height of the entire modal.
+window.GSO.toggleFormSection = function($sections, show, animate) {
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  $sections.each(function() {
+    var $section = $(this);
+    var wasHidden = $section.css('display') === 'none';
+    var previousAnimation = $section.data('sectionAnimation');
+    if (previousAnimation) { previousAnimation.cancel(); }
+    $section.stop(true, true).toggle(show);
+    if (show && wasHidden && animate !== false && !reduceMotion && this.animate) {
+      $section.data('sectionAnimation', this.animate(
+        [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'translateY(0)' }],
+        { duration: 140, easing: 'ease-out' }
+      ));
+    }
+  });
+};
 window.GSO.LoginLockout = window.GSO.LoginLockout || (function(){
   var timerId = null;
 
@@ -321,166 +338,79 @@ window.GSO.AdminPresencePanel = window.GSO.AdminPresencePanel || (function(){
 })();
 
 window.GSO.DashboardMetrics = window.GSO.DashboardMetrics || (function(){
-  function isDashboardPage(){
-    return $('.gso-dashboard').length > 0;
-  }
+  var initialized = false;
+  var currencyFormatter = new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' });
+  var generalMetrics = {
+    gftotal: 'gftotal_currency',
+    seftotal: 'seftotal_currency',
+    trust_fund_total: 'trust_fund_total_currency',
+    donation_total: 'donation_total_currency',
+    new_purchase_total: 'new_purchase_total_currency',
+    infrastructure_gf_total: 'infrastructure_gf_currency',
+    infrastructure_sef_total: 'infrastructure_sef_currency',
+    land_total: 'land_total_currency',
+    admin_count: 'admin_count'
+  };
+  var equipmentMetrics = {};
+  ['desktop', 'laptop', 'aircon', 'vehicle', 'printer', 'server', 'machinery', 'furniture'].forEach(function(item){
+    equipmentMetrics[item + '_count'] = item + '_count';
+  });
 
-  function parseNumberFromText(text){
-    if (text == null) { return null; }
-    var cleaned = String(text).replace(/[^0-9.\-]/g, '');
-    if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === '-.') { return null; }
-    var value = Number(cleaned);
-    return Number.isFinite(value) ? value : null;
-  }
-
-  function prefersReducedMotion(){
-    try {
-      return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-    } catch (e) {
-      return false;
-    }
-  }
-
-  function easeOutSpring(t){
-    return 1 - (Math.exp(-4.5 * t) * Math.cos(6 * t));
-  }
-
-  function animateValue($element, targetValue, options){
-    var opts = options || {};
-    var duration = Number(opts.duration || 1800);
-    var formatter = typeof opts.formatter === 'function' ? opts.formatter : function(value){ return String(value); };
-    var decimals = Number.isFinite(opts.decimals) ? opts.decimals : 0;
-
-    if (!$element || !$element.length) { return; }
-    if (!Number.isFinite(targetValue)) {
-      $element.text(opts.fallbackText != null ? String(opts.fallbackText) : 'N/A');
-      return;
-    }
-
-    if (prefersReducedMotion()) {
-      $element.text(formatter(decimals > 0 ? Number(targetValue.toFixed(decimals)) : Math.round(targetValue)));
-      return;
-    }
-
-    var currentAnimation = $element.data('gsoAnim');
-    if (currentAnimation && currentAnimation.cancel) {
-      currentAnimation.cancel();
-    }
-
-    var fromValue = parseNumberFromText($element.text());
-    if (!Number.isFinite(fromValue)) {
-      fromValue = 0;
-    }
-    var direction = targetValue >= fromValue ? 1 : -1;
-    var animationFrameId = 0;
-    var isCancelled = false;
-    var startTime = 0;
-
-    function cancel(){
-      isCancelled = true;
-      if (animationFrameId) {
-        cancelAnimationFrame(animationFrameId);
-      }
-      $element.removeClass('gso-counting');
-    }
-
-    $element.data('gsoAnim', { cancel: cancel });
-    $element.removeClass('gso-counting');
-    void $element[0].offsetWidth;
-    $element.addClass('gso-counting');
-
-    function step(timestamp){
-      if (isCancelled) { return; }
-      if (!startTime) {
-        startTime = timestamp;
-      }
-
-      var progress = Math.min(1, (timestamp - startTime) / duration);
-      var easedProgress = Math.min(1, Math.max(0, easeOutSpring(progress)));
-      var currentValue = fromValue + (targetValue - fromValue) * easedProgress;
-      var shownValue = decimals > 0
-        ? Number(currentValue.toFixed(decimals))
-        : (direction >= 0 ? Math.floor(currentValue) : Math.ceil(currentValue));
-
-      $element.text(formatter(shownValue));
-
-      if (progress < 1) {
-        animationFrameId = requestAnimationFrame(step);
+  function renderMetrics(metrics, data){
+    var counters = [];
+    Object.keys(metrics).forEach(function(key){
+      var target = metrics[key];
+      var value = data && data[key] != null ? Number(data[key]) : NaN;
+      var $element = $('[data-metric="' + target + '"]');
+      if (!Number.isFinite(value)) {
+        $element.text('Unavailable').attr('aria-busy', 'false');
         return;
       }
-
-      var finalValue = decimals > 0 ? Number(targetValue.toFixed(decimals)) : Math.round(targetValue);
-      $element.text(formatter(finalValue));
-      $element.removeData('gsoAnim');
-      $element.removeClass('gso-counting');
-    }
-
-    animationFrameId = requestAnimationFrame(step);
-  }
-
-  function setMetric(metricKey, value, options){
-    var $targets = $('[data-metric="' + metricKey + '"]');
-    if (!$targets.length) { return; }
-
-    if (typeof value === 'string' && parseNumberFromText(value) == null) {
-      $targets.text(value);
-      return;
-    }
-
-    var numericValue = typeof value === 'number' ? value : parseNumberFromText(value);
-    $targets.each(function(){
-      animateValue($(this), Number(numericValue), options);
+      counters.push({ element: $element, value: value, currency: target.endsWith('_currency') });
     });
-  }
+    if (!counters.length) { return; }
 
-  function formatCurrency(value){
-    try {
-      return new Intl.NumberFormat('en-PH', {
-        style: 'currency',
-        currency: 'PHP',
-        maximumFractionDigits: 2
-      }).format(Number(value || 0));
-    } catch (e) {
-      return '₱ ' + Number(value || 0).toFixed(2);
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var startTime = performance.now();
+    // One animation loop per section keeps all counters in sync.
+    function step(timestamp){
+      var progress = reduceMotion ? 1 : Math.min(1, (timestamp - startTime) / 650);
+      var eased = 1 - Math.pow(1 - progress, 3);
+      counters.forEach(function(counter){
+        var value = progress === 1 ? counter.value : counter.value * eased;
+        counter.element.text(counter.currency ? currencyFormatter.format(value) : String(Math.round(value)));
+        if (progress === 1) { counter.element.attr('aria-busy', 'false'); }
+      });
+      if (progress < 1) { requestAnimationFrame(step); }
     }
+    step(startTime);
   }
 
-  function init(){
-    if (!isDashboardPage()) { return; }
-
+  function loadMetrics(section, metrics){
+    Object.keys(metrics).forEach(function(key){
+      $('[data-metric="' + metrics[key] + '"]').attr('aria-busy', 'true');
+    });
     $.ajax({
       url: '../auth/fetch_dashboard_metrics.php',
       type: 'GET',
       dataType: 'json',
-      success: function(resp){
-        if (!resp) { return; }
-
-        setMetric('gftotal_currency', resp.gftotal ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-        setMetric('seftotal_currency', resp.seftotal ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-        setMetric('trust_fund_total_currency', resp.trust_fund_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-        setMetric('donation_total_currency', resp.donation_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-        setMetric('new_purchase_total_currency', resp.new_purchase_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-
-        setMetric('admin_count', resp.admin_count ?? 0, { duration: 1800 });
-        setMetric('desktop_count', resp.desktop_count ?? 0, { duration: 1800 });
-        setMetric('laptop_count', resp.laptop_count ?? 0, { duration: 1800 });
-        setMetric('aircon_count', resp.aircon_count ?? 0, { duration: 1800 });
-        setMetric('vehicle_count', resp.vehicle_count ?? 0, { duration: 1800 });
-        setMetric('printer_count', resp.printer_count ?? 0, { duration: 1800 });
-        setMetric('server_count', resp.server_count ?? 0, { duration: 1800 });
-        setMetric('machinery_count', resp.machinery_count ?? 0, { duration: 1800 });
-        setMetric('furniture_count', resp.furniture_count ?? 0, { duration: 1800 });
-
-        setMetric('infrastructure_gf_currency', resp.infrastructure_gf_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-        setMetric('infrastructure_sef_currency', resp.infrastructure_sef_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-        setMetric('land_total_currency', resp.land_total ?? 0, { decimals: 2, formatter: formatCurrency, duration: 2200 });
-      }
+      timeout: 30000,
+      data: { section: section },
+      success: function(data){ renderMetrics(metrics, data); },
+      error: function(){ renderMetrics(metrics, null); }
     });
+  }
+
+  function init(){
+    if (initialized || !$('.gso-dashboard').length) { return; }
+    initialized = true;
+    // Show General Information as soon as it arrives; equipment loads independently.
+    loadMetrics('general', generalMetrics);
+    loadMetrics('equipment', equipmentMetrics);
   }
 
   return { init: init };
 })();
-
 $(function(){
   if (window.GSO && window.GSO.DashboardMetrics) { window.GSO.DashboardMetrics.init(); }
 });
@@ -3613,11 +3543,14 @@ $(function(){
       items: [],
       bundles: [],
       employeeOptionsHtml: '<option value="">-SELECT-</option><option value="add_new_emp"> + ADD NEW EMPLOYEE </option>',
-      useMultipleEndUsers: false
+      useMultipleEndUsers: false,
+      preserveAssignments: false
     };
     var npDetailPropertyRequestId = 0;
     var npDetailPropertyRequest = null;
     var npDetailParIcsRequestId = 0;
+    var npDetailParIcsTimer = null;
+    var npDetailPropertyTimer = null;
     var npDetailDepartmentRequestId = 0;
     var npDetailDepartmentRequest = null;
     var npDetailTempIndex = 0;
@@ -3626,6 +3559,7 @@ $(function(){
     var npDetailDepartmentOptionsCache = {};
     var npDetailEmployeeOptionsCache = {};
     var npDetailOpenRequest = null;
+    var npDetailDirty = false;
 
     function npDetailEsc(value) {
       return $('<div>').text(value === null || value === undefined ? '' : String(value)).html();
@@ -4187,39 +4121,10 @@ $(function(){
     function npDetailApplySerialVisibilityState($card, animate) {
       var $serialRow = $card.find('.edit-np-serial-row');
       var $toggle = $card.find('.edit-np-add-serial');
-      var showSerial = $toggle.is(':checked');
       if (!$serialRow.length || !$toggle.length) { return; }
-
-      $serialRow.stop(true, true);
-      if (showSerial) {
-        if (animate && !$serialRow.is(':visible')) {
-          $serialRow
-            .css({ display: 'flex', overflow: 'hidden', opacity: 0 })
-            .hide()
-            .slideDown({
-              duration: 280,
-              queue: false,
-              complete: function () {
-                $serialRow.css({ display: 'flex', overflow: '', opacity: '' });
-              }
-            });
-          $serialRow.animate({ opacity: 1 }, { duration: 280, queue: false });
-        } else {
-          $serialRow.css({ display: 'flex', overflow: '', opacity: '' });
-        }
-      } else if (animate && $serialRow.is(':visible')) {
-        $serialRow.animate({ opacity: 0 }, { duration: 240, queue: false });
-        $serialRow.slideUp({
-          duration: 240,
-          queue: false,
-          complete: function () {
-            $serialRow.css({ overflow: '', opacity: '' });
-          }
-        });
-      } else {
-        $serialRow.hide().css({ overflow: '', opacity: '' });
-      }
-
+      var showSerial = $toggle.is(':checked');
+      window.GSO.toggleFormSection($serialRow, showSerial, !!animate);
+      if (showSerial) { $serialRow.css('display', 'flex'); }
       $serialRow.find('.edit-np-serial-primary, .edit-np-serial-secondary').prop('disabled', !showSerial);
     }
 
@@ -4295,6 +4200,14 @@ $(function(){
 
     function npDetailRefreshParIcsNumbers() {
       var requestId = ++npDetailParIcsRequestId;
+      clearTimeout(npDetailParIcsTimer);
+      npDetailParIcsTimer = setTimeout(function () {
+        npDetailGenerateParIcsNumbers(requestId);
+      }, 120);
+    }
+
+    function npDetailGenerateParIcsNumbers(requestId) {
+      if (requestId !== npDetailParIcsRequestId) { return; }
       if (!npDetailState.items.length) { return; }
 
       var selectedYear = npDetailGetYear($('#edit_np_year').val());
@@ -4355,6 +4268,8 @@ $(function(){
         requestRows.push({ category: category, group: group, skip: preservedCode ? 1 : 0 });
         npDetailSetParIcs(itemId, preservedCode);
       });
+
+      if (!requestRows.some(function (row) { return !row.skip && row.category && row.group; })) { return; }
 
       $.ajax({
         url: '../auth/auth.php',
@@ -4589,6 +4504,7 @@ $(function(){
     }
 
     function npDetailResetEmployeeSelection() {
+      npDetailState.preserveAssignments = false;
       $.each(npDetailState.items, function (_, item) {
         item.emp_id = '';
         item.emp_name = '';
@@ -4633,8 +4549,8 @@ $(function(){
         var singleItem = npDetailState.items[0];
         var singleItemKey = String(singleItem.key || '');
         var primaryEmployee = npDetailGetPrimaryEmployee();
-        var singleValue = primaryEmployee.value;
-        var singleLabel = primaryEmployee.label;
+        var singleValue = npDetailState.preserveAssignments ? '__keep_existing__' : primaryEmployee.value;
+        var singleLabel = npDetailState.preserveAssignments ? 'KEEP EXISTING DEPARTMENTS / END USERS' : primaryEmployee.label;
 
         $multiToggle.prop('checked', false).prop('disabled', npDetailState.items.length <= 1);
         $('#editNpDeptSearch, #edit_np_dept').prop('disabled', false).attr('aria-disabled', 'false');
@@ -4657,9 +4573,9 @@ $(function(){
           .val('');
 
         if (String($single.val() || '').toLowerCase() === 'add_new_emp') {
-          $newEmpSection.stop(true, true).slideDown(180);
+          window.GSO.toggleFormSection($newEmpSection, true);
         } else {
-          $newEmpSection.stop(true, true).slideUp(180);
+          window.GSO.toggleFormSection($newEmpSection, false);
         }
         return;
       }
@@ -4700,7 +4616,8 @@ $(function(){
           + '    <input type="text" class="form-control text-uppercase edit-np-emp-new-position" name="emp_new_position[' + npDetailEsc(itemKey) + ']" data-item-id="' + npDetailEsc(itemKey) + '" placeholder="Enter position" disabled>'
           + '  </div>'
           + '</div>';
-        $section.html(html).stop(true, true).slideDown(180);
+        $section.html(html);
+        window.GSO.toggleFormSection($section, true);
         npDetailLoadEmployeesForSetRow($section, empValue);
       });
 
@@ -4915,7 +4832,7 @@ $(function(){
       var year = npDetailGetYear($('#edit_np_year').val());
       var dept = npDetailState.useMultipleEndUsers
         ? String($card.find('.edit-np-dept-select').val() || '').trim()
-        : npDetailCurrentDeptCode();
+        : (npDetailState.preserveAssignments ? String(item.dept || '').trim() : npDetailCurrentDeptCode());
       var accountCode = String($card.find('.edit-np-account-code').val() || '').trim();
       var originalYear = npDetailGetYear(item.original_year || item.year || '');
       var originalFund = npDetailNormalizeFund(item.original_fund || item.fund || '');
@@ -5005,6 +4922,7 @@ $(function(){
     }
 
     function npDetailCancelPropertyRequest() {
+      clearTimeout(npDetailPropertyTimer);
       npDetailPropertyRequestId++;
       if (npDetailPropertyRequest && npDetailPropertyRequest.readyState !== 4) {
         npDetailPropertyRequest.abort();
@@ -5031,6 +4949,11 @@ $(function(){
 
     function npDetailRefreshAllProperties() {
       npDetailCancelPropertyRequest();
+      $('#editNpItemRows .item-set-card').data('propertyStatus', 'loading');
+      npDetailPropertyTimer = setTimeout(npDetailGenerateAllProperties, 120);
+    }
+
+    function npDetailGenerateAllProperties() {
       var cards = $('#editNpItemRows .item-set-card').toArray();
       var reserved = [];
       var batchRequestId = npDetailPropertyRequestId;
@@ -5110,9 +5033,9 @@ $(function(){
       $name.prop('disabled', !isAddNew).prop('required', isAddNew);
       $position.prop('disabled', !isAddNew).prop('required', isAddNew);
       if (isAddNew) {
-        $fields.stop(true, true).slideDown(180);
+        window.GSO.toggleFormSection($fields, true);
       } else {
-        $fields.stop(true, true).slideUp(180);
+        window.GSO.toggleFormSection($fields, false);
         $name.val('');
         $position.val('');
       }
@@ -5167,6 +5090,7 @@ $(function(){
 
     function npDetailFillModal(data, options) {
       npDetailCancelPropertyRequest();
+      clearTimeout(npDetailParIcsTimer);
       npDetailParIcsRequestId++;
       var opts = options || {};
       var group = data && data.group ? data.group : {};
@@ -5224,8 +5148,9 @@ $(function(){
       $.each(npDetailState.items, function (_, item) {
         accountabilityGroups[String(item.dept || '') + '|' + String(item.emp_id || '')] = true;
       });
-      npDetailState.useMultipleEndUsers = npDetailState.items.length > 1 && Object.keys(accountabilityGroups).length > 1;
-      $('#editNpMultipleEndUserCheckBox').prop('checked', npDetailState.useMultipleEndUsers);
+      npDetailState.preserveAssignments = Object.keys(accountabilityGroups).length > 1;
+      npDetailState.useMultipleEndUsers = false;
+      $('#editNpMultipleEndUserCheckBox').prop('checked', false);
       npDetailState.bundles = $.map(bundles, function (bundle) {
         return npDetailNormalizeBundle($.extend({}, bundle, {
           key: String(bundle.id || ('bundle_' + (++npDetailTempIndex))),
@@ -5413,8 +5338,9 @@ $(function(){
     }
 
     function npDetailAdjustSetCount(nextCount) {
-      npDetailSnapshotBundleRows();
       nextCount = npDetailNormalizeSetCount(nextCount);
+      if (nextCount === npDetailState.items.length) { return; }
+      npDetailSnapshotBundleRows();
       while (npDetailState.items.length < nextCount) {
         npDetailState.items.push(npDetailCreateBlankItem());
       }
@@ -5468,6 +5394,9 @@ $(function(){
         },
         success: function (resp) {
           if (resp && Number(resp.status) === 200 && resp.data) {
+            var group = resp.data.group || {};
+            var cacheKey = npDetailGroupCacheKey(group.po, group.row_id, npDetailSourceContext(), npDetailFundInventoryKey());
+            npDetailGroupCache[cacheKey] = resp.data;
             npDetailFillModal(resp.data);
             if (typeof onDone === 'function') { onDone(true, resp); }
             return;
@@ -5483,6 +5412,7 @@ $(function(){
     $(document)
       .off('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn, #FundInventoryTable .np-edit-btn')
       .on('click.addItemNpDetailBtn', '#addItemNewPurchaseTable .np-edit-btn, #FundInventoryTable .np-edit-btn', function () {
+        npDetailDirty = false;
         var $btn = $(this);
         var po = String($btn.data('po') || '').trim();
         var rowId = parseInt($btn.data('rowId'), 10) || 0;
@@ -5523,6 +5453,7 @@ $(function(){
               return;
             }
             npDetailGroupCache[cacheKey] = resp.data;
+            if (npDetailDirty) { return; }
             npDetailFillModal(resp.data, { skipDerivedRefresh: true });
             $('#editNpDetailModal').modal('show');
           },
@@ -5575,6 +5506,7 @@ $(function(){
     $(document)
       .off('change.editNpMultipleEndUsers', '#editNpMultipleEndUserCheckBox')
       .on('change.editNpMultipleEndUsers', '#editNpMultipleEndUserCheckBox', function () {
+        npDetailState.preserveAssignments = false;
         npDetailState.useMultipleEndUsers = $(this).is(':checked') && npDetailState.items.length > 1;
         if (!npDetailState.useMultipleEndUsers) {
           var firstItem = npDetailState.items[0] || {};
@@ -5630,6 +5562,10 @@ $(function(){
         npDetailToggleNewEmployeeRow($field);
 
         if ($field.is('#edit_np_emp_single')) {
+          if (selectedValue !== '__keep_existing__') {
+            npDetailState.preserveAssignments = false;
+            $field.find('option[value="__keep_existing__"]').remove();
+          }
           if (npDetailState.items.length === 1) {
             npDetailState.items[0].emp_id = selectedValue;
             npDetailState.items[0].emp_name = selectedLabel;
@@ -5637,6 +5573,8 @@ $(function(){
             $.each(npDetailState.items, function (_, item) {
               item.emp_id = selectedValue;
               item.emp_name = selectedLabel;
+              item.dept = npDetailCurrentDeptCode();
+              item.department_code = item.dept;
             });
           }
         } else {
@@ -5653,9 +5591,9 @@ $(function(){
           $('#edit_np_new_emp').prop('disabled', !isAddNew);
           $('#edit_np_position').prop('disabled', !isAddNew);
           if (isAddNew) {
-            $('#edit_np_add_new_employee').stop(true, true).slideDown(180);
+            window.GSO.toggleFormSection($('#edit_np_add_new_employee'), true);
           } else {
-            $('#edit_np_add_new_employee').stop(true, true).slideUp(180);
+            window.GSO.toggleFormSection($('#edit_np_add_new_employee'), false);
             $('#edit_np_new_emp').val('');
             $('#edit_np_position').val('');
           }
@@ -5798,39 +5736,51 @@ $(function(){
         });
       });
 
+    function npDetailUpdateItemQuantity($field) {
+      clearTimeout($field.data('quantityTimer'));
+      if (!$field.closest('#editNpDetailForm').length) { return; }
+      var itemKey = String($field.data('itemId') || '');
+      var item = npDetailFindItem(itemKey);
+      var quantity = npDetailNormalizeItemQuantity($field.val());
+      var $card = $field.closest('.item-set-card');
+      if (!item) { return; }
+      var serials1 = (item.serial_numbers || []).slice();
+      var serials2 = (item.serial_numbers_2 || []).slice();
+
+      $field.val(quantity);
+      if (quantity === item.item_quantity) { return; }
+      $card.find('.edit-np-serial-primary').each(function (index) { serials1[index] = String($(this).val() || ''); });
+      $card.find('.edit-np-serial-secondary').each(function (index) { serials2[index] = String($(this).val() || ''); });
+
+      item.item_quantity = quantity;
+      item.serial_numbers = serials1;
+      item.serial_numbers_2 = serials2;
+      $card.find('.edit-np-serial-table-wrap').html(npDetailBuildSerialRows(item));
+      npDetailApplySerialVisibilityState($card, false);
+      npDetailSyncTotalAmount($card.find('.edit-np-unit-value'));
+      npDetailSnapshotBundleRows();
+      npDetailRenderBundleRows();
+      npDetailRefreshParIcsNumbers();
+      npDetailRefreshProperty(itemKey);
+    }
+
+    $(document)
+      .off('input.editNpDirty change.editNpDirty', '#editNpDetailForm :input')
+      .on('input.editNpDirty change.editNpDirty', '#editNpDetailForm :input', function () {
+        npDetailDirty = true;
+      });
+
     $(document)
       .off('input.editNpItemQuantity change.editNpItemQuantity blur.editNpItemQuantity', '#editNpItemRows .edit-np-item-quantity')
-      .on('input.editNpItemQuantity change.editNpItemQuantity blur.editNpItemQuantity', '#editNpItemRows .edit-np-item-quantity', function () {
+      .on('input.editNpItemQuantity change.editNpItemQuantity blur.editNpItemQuantity', '#editNpItemRows .edit-np-item-quantity', function (event) {
         var $field = $(this);
-        var itemKey = String($field.data('itemId') || '');
-        var item = npDetailFindItem(itemKey);
-        var quantity = npDetailNormalizeItemQuantity($field.val());
-        var $card = $field.closest('.item-set-card');
-        var serials1 = [];
-        var serials2 = [];
-
-        $field.val(quantity);
-        $card.find('.edit-np-serial-primary').each(function () { serials1.push(String($(this).val() || '')); });
-        $card.find('.edit-np-serial-secondary').each(function () { serials2.push(String($(this).val() || '')); });
-
-        if (item) {
-          item.item_quantity = quantity;
-          item.serial_numbers = serials1;
-          item.serial_numbers_2 = serials2;
+        clearTimeout($field.data('quantityTimer'));
+        if (event.type === 'input') {
+          if (!/^[1-9][0-9]*$/.test($field.val())) { return; }
+          $field.data('quantityTimer', setTimeout(function () { npDetailUpdateItemQuantity($field); }, 150));
+          return;
         }
-
-        $card.find('.edit-np-serial-table-wrap').html(npDetailBuildSerialRows(item || {
-          key: itemKey,
-          item_quantity: quantity,
-          serial_numbers: serials1,
-          serial_numbers_2: serials2
-        }));
-        npDetailApplySerialVisibilityState($card, false);
-        npDetailSyncTotalAmount($card.find('.edit-np-unit-value'));
-        npDetailSnapshotBundleRows();
-        npDetailRenderBundleRows();
-        npDetailRefreshParIcsNumbers();
-        npDetailRefreshProperty(itemKey);
+        npDetailUpdateItemQuantity($field);
       });
 
     $(document)
@@ -5934,6 +5884,9 @@ $(function(){
       .off('submit.editNpDetailForm', '#editNpDetailForm')
       .on('submit.editNpDetailForm', '#editNpDetailForm', function (e) {
         e.preventDefault();
+        $('#editNpItemRows .edit-np-item-quantity').each(function () {
+          npDetailUpdateItemQuantity($(this));
+        });
 
         if ($('#editNpItemRows .item-set-card').filter(function () {
           return ['loading', 'error'].indexOf($(this).data('propertyStatus')) !== -1;
@@ -6041,9 +5994,14 @@ $(function(){
           if (!useMultipleEndUsers && npDetailState.items.length > 1) {
             $.each(npDetailState.items, function (_, item) {
               var itemKey = String(item.key || '');
-              var employeeValue = singleEmployeeValue || String(item.emp_id || '').trim();
+              var employeeValue = npDetailState.preserveAssignments
+                ? String(item.emp_id || '').trim()
+                : (singleEmployeeValue || String(item.emp_id || '').trim());
 
               formData.set('emp_id[' + itemKey + ']', employeeValue);
+              if (npDetailState.preserveAssignments) {
+                formData.set('dept_id_multi[' + itemKey + ']', String(item.dept || '').trim());
+              }
 
               if (singleEmployeeValue === 'add_new_emp') {
                 formData.set('emp_new_name[' + itemKey + ']', String($('#edit_np_new_emp').val() || '').trim());
@@ -6137,7 +6095,9 @@ $(function(){
     $('#editNpDetailModal')
       .off('hidden.bs.modal.editNpDetail')
       .on('hidden.bs.modal.editNpDetail', function () {
+        if (npDetailOpenRequest) { npDetailOpenRequest.abort(); }
         npDetailCancelPropertyRequest();
+        clearTimeout(npDetailParIcsTimer);
         npDetailParIcsRequestId++;
         npDetailCancelDepartmentRequest();
         npDetailState.group = null;
@@ -6145,6 +6105,7 @@ $(function(){
         npDetailState.bundles = [];
         npDetailState.employeeOptionsHtml = '<option value="">-SELECT-</option><option value="add_new_emp"> + ADD NEW EMPLOYEE </option>';
         npDetailState.useMultipleEndUsers = false;
+        npDetailState.preserveAssignments = false;
         npDetailBundleParIcsCache = {};
         $('#editNpDetailForm')[0].reset();
         $('#editNpItemRows').html('<div class="text-center text-muted py-4">Select a purchase to view details.</div>');
@@ -8661,23 +8622,8 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
     var hasRows = bundleRowEls().length > 0;
     var $body = $('#bundleCardBody');
     var $rows = $('#bundleRows');
-    var doAnim = (animate !== false);
-    var speed = doAnim ? 320 : 0;
-    var easing = 'swing';
-
-    if (hasRows) {
-      $rows.show();
-      if ($body.is(':visible')) { return; }
-      $body.stop(true, true).slideDown(speed, easing);
-      return;
-    }
-    if (!$body.is(':visible')) {
-      $rows.hide().empty();
-      return;
-    }
-    $body.stop(true, true).slideUp(speed, easing, function(){
-      $rows.hide();
-    });
+    $rows.toggle(hasRows);
+    window.GSO.toggleFormSection($body, hasRows, animate);
   }
 
   function getBundleAssetOptionsHtml(){
@@ -9315,8 +9261,8 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     });
   }
 
-  function snapshotItemSetInputsIntoCache(){
-    $('#itemSetRows .item-set-card').each(function(){
+  function snapshotItemSetInputsIntoCache($rows){
+    ($rows || $('#itemSetRows .item-set-card')).each(function(){
       var $row = $(this);
       var idxKey = toRowKey($row.data('setIndex'));
       if (!idxKey) { return; }
@@ -9432,7 +9378,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
   function refreshSerialRowsForItemSet($row){
     if (!$row || !$row.length) { return; }
-    snapshotItemSetInputsIntoCache();
+    snapshotItemSetInputsIntoCache($row);
     var setIndex = parseInt($row.data('setIndex'), 10) || 1;
     var state = getItemSetState(setIndex);
     $row.find('.js-item-serial-table-wrap').html(buildSerialRowsHtml(setIndex, state));
@@ -9678,34 +9624,13 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $input.prop('readonly', true).attr('placeholder', '');
   }
 
-  function applySerialVisibilityState($row, animate){
-    var $serialRow = $row.find('.js-item-serial-row');
-    var $toggle = $row.find('.js-item-add-serial');
+  function applySerialVisibilityState($card, animate) {
+    var $serialRow = $card.find('.js-item-serial-row');
+    var $toggle = $card.find('.js-item-add-serial');
+    if (!$serialRow.length || !$toggle.length) { return; }
     var showSerial = $toggle.is(':checked');
-    if(!$serialRow.length || !$toggle.length) { return; }
-
-    $serialRow.stop(true, true);
-    if (showSerial) {
-      if (animate && !$serialRow.is(':visible')) {
-        $serialRow
-          .css({ display: 'flex', overflow: 'hidden', opacity: 0 })
-          .hide()
-          .slideDown({ duration: 280, queue: false, complete: function(){
-            $serialRow.css({ display: 'flex', overflow: '', opacity: '' });
-          }});
-        $serialRow.animate({ opacity: 1 }, { duration: 280, queue: false });
-      } else {
-        $serialRow.css({ display: 'flex', overflow: '', opacity: '' });
-      }
-    } else if (animate && $serialRow.is(':visible')) {
-      $serialRow.animate({ opacity: 0 }, { duration: 240, queue: false });
-      $serialRow.slideUp({ duration: 240, queue: false, complete: function(){
-        $serialRow.css({ overflow: '', opacity: '' });
-      }});
-    } else {
-      $serialRow.hide().css({ overflow: '', opacity: '' });
-    }
-
+    window.GSO.toggleFormSection($serialRow, showSerial, !!animate);
+    if (showSerial) { $serialRow.css('display', 'flex'); }
     $serialRow.find('.js-item-serial1, .js-item-serial2').prop('disabled', !showSerial);
   }
 
@@ -10074,16 +9999,15 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     if (on) {
       $nm.prop('disabled', false).prop('required', true);
       $ps.prop('disabled', false).prop('required', true);
-      $fields.stop(true, true).slideDown(180);
+      window.GSO.toggleFormSection($fields, true);
       return;
     }
     $nm.prop('required', false);
     $ps.prop('required', false);
-    $fields.stop(true, true).slideUp(180, function(){
-      $nm.prop('disabled', true).val('');
-      $ps.prop('disabled', true).val('');
-      snapshotEndUserInputsIntoCache();
-    });
+    window.GSO.toggleFormSection($fields, false);
+    $nm.prop('disabled', true).val('');
+    $ps.prop('disabled', true).val('');
+    snapshotEndUserInputsIntoCache();
   }
 
   function loadEmployeesForSetRow($row, selectedEmployee){
@@ -10491,11 +10415,11 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     if (!$section.length) { return; }
 
     if (isAddNew) {
-      $section.stop(true, true).slideDown(200);
+      window.GSO.toggleFormSection($section, true);
       $('#new_emp').prop('required', true);
       $('#position').prop('required', true);
     } else {
-      $section.stop(true, true).slideUp(200);
+      window.GSO.toggleFormSection($section, false);
       $('#new_emp').prop('required', false);
       $('#position').prop('required', false);
       resetAddNewEmpFieldsAddItem();
@@ -10524,7 +10448,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       $emp.val('').prop('disabled', true).html('<option value="">SELECT A DEPARTMENT FIRST</option>');
       var $section = $('#add_new_employee');
       if ($section.length && $section.is(':visible')) {
-        $section.stop(true, true).slideUp(200);
+        window.GSO.toggleFormSection($section, false);
       }
       $('#new_emp').prop('required', false).val('');
       $('#position').prop('required', false).val('');
@@ -10680,6 +10604,10 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
         var qty = parseInt($(this).val(), 10) || 1;
         if (qty < 1) { qty = 1; }
         $(this).val(qty);
+        var previousQuantity = $(this).data('renderedQuantity');
+        if (previousQuantity === undefined) { previousQuantity = parseInt(this.defaultValue, 10) || 1; }
+        if (qty === previousQuantity) { return; }
+        $(this).data('renderedQuantity', qty);
         var $row = $(this).closest('.item-set-card');
         updateItemSetTotal($row);
         refreshSerialRowsForItemSet($row);
@@ -10844,7 +10772,9 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
     $(document)
       .off('input.gsoAddItemPageCache change.gsoAddItemPageCache', '#itemSetRows input, #itemSetRows textarea, #itemSetRows select')
-      .on('input.gsoAddItemPageCache change.gsoAddItemPageCache', '#itemSetRows input, #itemSetRows textarea, #itemSetRows select', snapshotItemSetInputsIntoCache);
+      .on('input.gsoAddItemPageCache change.gsoAddItemPageCache', '#itemSetRows input, #itemSetRows textarea, #itemSetRows select', function(){
+        snapshotItemSetInputsIntoCache($(this).closest('.item-set-card'));
+      });
     $(document)
       .off('input.gsoAddItemPageCache2 change.gsoAddItemPageCache2', '#itemSetRows input.parEmpNewName, #itemSetRows input.parEmpNewPos')
       .on('input.gsoAddItemPageCache2 change.gsoAddItemPageCache2', '#itemSetRows input.parEmpNewName, #itemSetRows input.parEmpNewPos', snapshotEndUserInputsIntoCache);
