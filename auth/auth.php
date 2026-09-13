@@ -2062,10 +2062,6 @@ if (!function_exists('gso_new_purchase_property_number_in_use')) {
             return false;
         }
 
-        if ($oldPropertyNumber !== '' && $candidate === $oldPropertyNumber) {
-            return false;
-        }
-
         $stmtDup = $conn->prepare('
             SELECT 1
             FROM (
@@ -2096,7 +2092,10 @@ if (!function_exists('gso_new_purchase_property_number_in_use')) {
             $candidate,
             $candidate
         );
-        $stmtDup->execute();
+        if (!$stmtDup->execute()) {
+            $stmtDup->close();
+            throw new RuntimeException('Unable to check property number availability.');
+        }
         $resDup = $stmtDup->get_result();
         $inUse = $resDup && $resDup->num_rows > 0;
         $stmtDup->close();
@@ -9858,14 +9857,18 @@ if (isset($_POST['update_new_purchase_group'])) {
                 $serial2Values[$copyIndex] = gso_clean_text_for_db($getPostedNestedMapValue('serial_number_2', $setKey, $copyIndex));
             }
 
+            $previewNumbers = (array)($_POST['property_number_copies'][$setKey] ?? []);
             $currentPropertyNumber = ($propertyNumberOptionalFund || $skipAccountAndProperty) ? '' : $propertyNumber;
-            if ($propertyInputsChanged && !$propertyNumberOptionalFund && !$skipAccountAndProperty) {
+            if ($propertyInputsChanged && !$previewNumbers && !$propertyNumberOptionalFund && !$skipAccountAndProperty) {
                 $currentPropertyNumber = '';
             }
             if (!$propertyNumberOptionalFund && !$skipAccountAndProperty && $currentPropertyNumber === '') {
                 $currentPropertyNumber = $generateAvailablePropertyNumber($category, $accountCode, $setDepartmentCode, $existingId, $oldPropNum, [], $itemQuantity);
             }
 
+            if ($previewNumbers && count($previewNumbers) !== $itemQuantity) {
+                throw new RuntimeException('Please refresh the property numbers before saving.');
+            }
             $firstPropertyForSet = '';
             for ($copyIndex = 1; $copyIndex <= $itemQuantity; $copyIndex++) {
                 $copyExistingId = (int)($existingIds[$copyIndex - 1] ?? 0);
@@ -9873,11 +9876,20 @@ if (isset($_POST['update_new_purchase_group'])) {
                 $copyOldPropNum = strtoupper(trim((string)($copyCurrentRow['property_number'] ?? '')));
                 $copyNpidLink = $copyExistingId > 0 ? ('NPID:' . $copyExistingId) : '';
                 $copyPropertyNumber = ($propertyNumberOptionalFund || $skipAccountAndProperty) ? '' : $currentPropertyNumber;
+                if (!$propertyNumberOptionalFund && !$skipAccountAndProperty && $previewNumbers) {
+                    $copyPropertyNumber = strtoupper(trim((string)($previewNumbers[$copyIndex] ?? '')));
+                    if ($copyPropertyNumber === '') {
+                        throw new RuntimeException('A property number is missing. Please refresh the preview.');
+                    }
+                }
                 if (!$propertyNumberOptionalFund && !$skipAccountAndProperty && $copyPropertyNumber !== '') {
                     $checkId = $copyExistingId > 0 ? $copyExistingId : 0;
                     $checkOld = $copyOldPropNum;
                     $guard = 0;
                     while (gso_new_purchase_property_number_in_use($conn, $copyPropertyNumber, $checkId, $checkOld)) {
+                        if ($previewNumbers) {
+                            throw new RuntimeException('Property number ' . $copyPropertyNumber . ' is already in use. Please review the quantity and try again.');
+                        }
                         $nextCandidate = strtoupper(trim($nextPropertyNumber($copyPropertyNumber)));
                         if ($nextCandidate === '' || $nextCandidate === $copyPropertyNumber) {
                             $copyPropertyNumber = $generateAvailablePropertyNumber($category, $accountCode, $setDepartmentCode, $checkId, $checkOld, [$copyPropertyNumber]);
@@ -16180,10 +16192,6 @@ if (!function_exists('gso_new_purchase_property_number_in_use')) {
             return false;
         }
 
-        if ($oldPropertyNumber !== '' && $candidate === $oldPropertyNumber) {
-            return false;
-        }
-
         $stmtDup = $conn->prepare('
             SELECT 1
             FROM (
@@ -16214,7 +16222,10 @@ if (!function_exists('gso_new_purchase_property_number_in_use')) {
             $candidate,
             $candidate
         );
-        $stmtDup->execute();
+        if (!$stmtDup->execute()) {
+            $stmtDup->close();
+            throw new RuntimeException('Unable to check property number availability.');
+        }
         $resDup = $stmtDup->get_result();
         $inUse = $resDup && $resDup->num_rows > 0;
         $stmtDup->close();
@@ -16265,6 +16276,46 @@ if (isset($_POST['generate_new_purchase_edit_property_number'])) {
             $parts[$seqIndex] = str_pad((string)(((int)$seq) + 1), strlen($seq), '0', STR_PAD_LEFT);
             return implode('-', $parts);
         };
+
+        // Continue each set from its existing sequence, skipping occupied numbers.
+        if (!empty($_POST['preserve_sequence']) && $oldPropertyNumber !== '') {
+            $existingIds = array_values(array_map('intval', (array)($_POST['existing_item_ids'] ?? [])));
+            $lookup = $conn->prepare('SELECT property_number FROM new_purchase WHERE id = ? LIMIT 1');
+            if (!$lookup) { throw new RuntimeException('Unable to verify existing item numbers.'); }
+            $candidate = $oldPropertyNumber;
+            $numbers = [];
+            $reserved = array_fill_keys(array_map(function ($number) { return strtoupper(trim((string)$number)); }, $postedExcludedNumbers), true);
+            try {
+                for ($index = 0; $index < $itemQuantity; $index++) {
+                    $existingId = $existingIds[$index] ?? 0;
+                    $existingNumber = '';
+                    if ($existingId > 0) {
+                        $lookup->bind_param('i', $existingId);
+                        if (!$lookup->execute()) { throw new RuntimeException('Unable to verify existing item numbers.'); }
+                        $row = $lookup->get_result()->fetch_assoc();
+                        $existingNumber = strtoupper(trim((string)($row['property_number'] ?? '')));
+                    }
+                    // Keep saved copies when possible, including sets with gaps in their sequence.
+                    if ($existingNumber !== '') { $candidate = $existingNumber; }
+                    $attempts = 0;
+                    while (isset($reserved[$candidate])
+                        || gso_new_purchase_property_number_in_use($conn, $candidate, $existingId, $existingNumber)) {
+                        $next = gso_next_property_number_value($candidate);
+                        if ($next === $candidate || ++$attempts > 50000) {
+                            throw new RuntimeException('Unable to find the next available property number.');
+                        }
+                        $candidate = $next;
+                    }
+                    $numbers[] = $candidate;
+                    $reserved[$candidate] = true;
+                    $candidate = gso_next_property_number_value($candidate);
+                }
+            } finally {
+                $lookup->close();
+            }
+            echo json_encode(['status' => 200, 'data' => ['property_number' => $numbers[0], 'numbers' => $numbers]]);
+            return;
+        }
 
         for ($attempt = 0; $attempt < 50; $attempt++) {
             $gen = gso_generate_one_property_number($conn, $category, $year, $accountCode, $dept, $fund, $exclude);

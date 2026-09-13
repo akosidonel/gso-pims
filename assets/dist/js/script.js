@@ -4764,20 +4764,21 @@ $(function(){
       }
     }
 
-    function npDetailSetProperty(itemId, value, message, type) {
+    function npDetailSetProperty(itemId, value, message, type, numbers) {
       var $card = $('#editNpItemRows .item-set-card[data-item-id="' + itemId + '"]');
       var $hidden = $card.find('.edit-np-property-value');
       var $preview = $card.find('.edit-np-property-preview');
       var quantity = npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val());
       var firstValue = String(value || '').trim();
-      var previewValue = npDetailPropertyCopies(firstValue, quantity).join(', ');
+      numbers = $.isArray(numbers) ? numbers : npDetailPropertyCopies(firstValue, quantity);
+      var previewValue = numbers.join(', ');
       var displayValue = npDetailPropertyDisplay(previewValue);
       var item = npDetailFindItem(itemId);
 
       if (item) {
         item.property_number = firstValue;
         item.property_number_preview = previewValue;
-        item.property_numbers = npDetailPropertyCopies(firstValue, quantity);
+        item.property_numbers = numbers;
       }
 
       $hidden.val(firstValue);
@@ -4813,7 +4814,7 @@ $(function(){
         }
 
         var quantity = npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val());
-        $.each(npDetailPropertyCopies(firstValue, quantity), function (_, propertyNumber) {
+        $.each((npDetailFindItem(itemId) || {}).property_numbers || npDetailPropertyCopies(firstValue, quantity), function (_, propertyNumber) {
           var candidate = String(propertyNumber || '').trim().toUpperCase();
           if (!candidate || seen[candidate]) {
             return;
@@ -4843,8 +4844,7 @@ $(function(){
         && category === originalCategory
         && year === originalYear
         && dept === originalDept
-        && accountCode === originalAccount
-        && npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val()) === npDetailNormalizeItemQuantity(item.original_item_quantity);
+        && accountCode === originalAccount;
       var savedPropertyNumber = String(item.original_property_number || item.property_number || '').trim();
       var excludedNumbers = npDetailCollectReservedPropertyNumbers(itemId);
 
@@ -4864,12 +4864,6 @@ $(function(){
       if ($card.find('.edit-np-no-account-property').is(':checked')) {
         npDetailSetProperty(itemId, '', 'No property number.', 'info');
         if (typeof onDone === 'function') { onDone(''); }
-        return;
-      }
-
-      if (unchanged && savedPropertyNumber) {
-        npDetailSetProperty(itemId, savedPropertyNumber, savedPropertyNumber ? 'Generated from account code.' : 'No property number.', 'info');
-        if (typeof onDone === 'function') { onDone(savedPropertyNumber); }
         return;
       }
 
@@ -4894,6 +4888,8 @@ $(function(){
         data: {
           generate_new_purchase_edit_property_number: 1,
           new_purchase_id: itemId,
+          preserve_sequence: unchanged && savedPropertyNumber ? 1 : 0,
+          existing_item_ids: item.existing_item_ids || [],
           property_number: item.original_property_number || item.property_number || '',
           category: category,
           year: year,
@@ -4906,7 +4902,7 @@ $(function(){
         success: function (resp) {
           if (requestId !== npDetailPropertyRequestId) { return; }
           if (resp && Number(resp.status) === 200 && resp.data && resp.data.property_number) {
-            npDetailSetProperty(itemId, resp.data.property_number, 'Available property number generated.', 'success');
+            npDetailSetProperty(itemId, resp.data.property_number, 'Available property number generated.', 'success', resp.data.numbers);
             if (typeof onDone === 'function') { onDone(resp.data.property_number); }
             return;
           }
@@ -4965,7 +4961,7 @@ $(function(){
         var value = String(firstValue || '').trim();
         if (!npDetailIsUsablePropertyNumber(value)) { return; }
         var quantity = npDetailNormalizeItemQuantity($card.find('.edit-np-item-quantity').val());
-        $.each(npDetailPropertyCopies(value, quantity), function (_, propertyNumber) {
+        $.each((npDetailFindItem($card.data('itemId')) || {}).property_numbers || npDetailPropertyCopies(value, quantity), function (_, propertyNumber) {
           var candidate = String(propertyNumber || '').trim().toUpperCase();
           if (candidate && $.inArray(candidate, reserved) === -1) {
             reserved.push(candidate);
@@ -5977,6 +5973,11 @@ $(function(){
               $(this).val(npDetailNormalizeTextInput($(this).val()));
             });
           var formData = new FormData(e.currentTarget);
+          $.each(npDetailState.items, function (_, item) {
+            $.each(item.property_numbers || [], function (index, number) {
+              formData.set('property_number_copies[' + item.key + '][' + (index + 1) + ']', number);
+            });
+          });
           formData.set('dept_id', deptCode);
           formData.set('fund', $('#edit_np_fund').val() || '');
           formData.set('source_context', npDetailSourceContext());

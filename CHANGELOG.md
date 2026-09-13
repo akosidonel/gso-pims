@@ -2,7 +2,7 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.1.0) - September 6, 2026
+## Unreleased (planned v1.1.0) - September 10, 2026
 
 ### Added
 - Added PAIR to the Unit dropdown in the Add/Edit Item modal
@@ -20,6 +20,7 @@ This file is generated from git history by `php tools/release.php`.
 - Can now summarize the total amount of the returned items in the return slip and increase the quantity of the returned items in the inventory
 - Continuation pages now start their description text at the same visual offset as page 1, matching the normal table spacer between the header and the first description row
 - Adjusted the threshold in both PAR & ICS unit values
+- Bugfix and system improvements
 
 ### Fixed
 - Bug fix on change log and version number
@@ -46,3 +47,4 @@ This file is generated from git history by `php tools/release.php`.
 - Fixed the sidebar hover transition on change-log.php
 - Fixed the units issue in the printing of par
 - Bug fixes and system improvements -multi-department support added in add-item -multi-department support added in printpar -multi-department support added in edit-item -multiple bug fixes
+- Fix: populate PAR/ICS numbers for new sets in edit modal -Inherit the shared end user when adding sets. -Ignore stale PAR/ICS preview responses
