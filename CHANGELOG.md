@@ -2,7 +2,7 @@
 
 This file is generated from git history by `php tools/release.php`.
 
-## Unreleased (planned v1.1.0) - September 10, 2026
+## Unreleased (planned v1.1.0) - September 13, 2026
 
 ### Added
 - Added PAIR to the Unit dropdown in the Add/Edit Item modal
@@ -24,7 +24,7 @@ This file is generated from git history by `php tools/release.php`.
 
 ### Fixed
 - Bug fix on change log and version number
-- General bug fixes and maintenance improvements (9 times)
+- General bug fixes and maintenance improvements (10 times)
 - Minor bug fix and improvements
 - Bug fix in the change log and auth files
 - Fix the mitchmatch of the version number
@@ -48,3 +48,4 @@ This file is generated from git history by `php tools/release.php`.
 - Fixed the units issue in the printing of par
 - Bug fixes and system improvements -multi-department support added in add-item -multi-department support added in printpar -multi-department support added in edit-item -multiple bug fixes
 - Fix: populate PAR/ICS numbers for new sets in edit modal -Inherit the shared end user when adding sets. -Ignore stale PAR/ICS preview responses
+- Fix: continue property number sequences when editing set quantities - Skip occupied numbers across sets and inventory tables - Keep previews, bundles, and saved property numbers consistent - Preserve duplicate checks for par_gen_fund and property_sef

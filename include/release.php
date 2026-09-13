@@ -7,19 +7,34 @@ const PIMS_RELEASE_INITIAL_PATCH = 0;
 const PIMS_RELEASE_ROOT = __DIR__ . '/..';
 
 function pims_release_git_binary(): string {
+  static $binary = null;
+  if ($binary !== null) {
+    return $binary;
+  }
+
   $candidates = [
     '/usr/bin/git',
     '/opt/homebrew/bin/git',
     '/usr/local/bin/git',
+    '/Library/Developer/CommandLineTools/usr/bin/git',
+    '/Applications/Xcode.app/Contents/Developer/usr/bin/git',
+    'git',
   ];
 
   foreach ($candidates as $candidate) {
-    if (is_executable($candidate)) {
-      return $candidate;
+    if ($candidate !== 'git' && !is_executable($candidate)) {
+      continue;
+    }
+    // Apple's Git shim can be executable but fail under XAMPP's Intel PHP.
+    $version = pims_release_command_output(escapeshellarg($candidate) . ' --version' . pims_release_null_redirect());
+    if (strpos($version, 'git version ') === 0) {
+      $binary = $candidate;
+      return $binary;
     }
   }
 
-  return 'git';
+  $binary = 'git';
+  return $binary;
 }
 
 function pims_release_command_output(string $command): string {
@@ -62,7 +77,11 @@ function pims_release_null_redirect(): string {
 }
 
 function pims_release_git_base_command(): string {
-  return escapeshellarg(pims_release_git_binary()) . ' -C ' . escapeshellarg(PIMS_RELEASE_ROOT);
+  $root = realpath(PIMS_RELEASE_ROOT) ?: PIMS_RELEASE_ROOT;
+  // Trust only this application checkout when PHP runs as the web-server user.
+  return escapeshellarg(pims_release_git_binary())
+    . ' -c ' . escapeshellarg('safe.directory=' . $root)
+    . ' -C ' . escapeshellarg($root);
 }
 
 function pims_release_git_available(): bool {
