@@ -833,7 +833,7 @@ class PDF extends TCPDF
         );
     }
 
-    protected function drawGrandTotalBlock($grandTotal, $footerContentTopY) {
+    protected function drawGrandTotalBlock($grandTotal, $footerContentTopY, $amountsBottomY) {
         $grandTotalSafe = htmlspecialchars('₱ ' . number_format((float)$grandTotal, 2, '.', ','), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         $html = '
           <table cellpadding="5" cellspacing="0" border="0">
@@ -852,7 +852,7 @@ class PDF extends TCPDF
         $preferredY = $this->GetY() + 1.5;
         $maxY = $footerContentTopY - $totalHeightMm - 2.5;
         $targetY = min($preferredY, $maxY);
-        $targetY = max($targetY, 54.0);
+        $targetY = max($targetY, $amountsBottomY + 1.5);
 
         $this->writeHTMLCell(0, 0, 15, $targetY, $html, 0, 1, false, true, 'L', false);
     }
@@ -913,7 +913,9 @@ class PDF extends TCPDF
         $lineHeightMm  = 3.4;
         $footerContentTopY = $this->getPageHeight() - 102;
         $descriptionLimitY = $this->getPageHeight() - 82;
-        $totalTopLimitY = $footerContentTopY - 12.0;
+        // The total uses the amount columns, so long descriptions may continue
+        // beside it. Reserve enough room below the final numeric row.
+        $totalTopLimitY = $footerContentTopY - 14.0;
         $xQty = 16.5;
         $xUnit = 30.0;
         $xDesc = 45.0;
@@ -921,8 +923,10 @@ class PDF extends TCPDF
         $xUnitValue = 151.0;
         $xTotal = 182.0;
         $y = $textStartY;
+        $amountsBottomY = $textStartY;
+        $lastRowIndex = count($rows) - 1;
 
-        foreach($rows as $r){
+        foreach($rows as $rowIndex => $r){
           $desc     = (string)($r['description'] ?? '');
           $baseDesc = trim($desc);
           $qty = (int)($r['qty'] ?? 1);
@@ -975,9 +979,13 @@ class PDF extends TCPDF
             if (count($segments) === 0) {
               $segments = [['text' => '', 'justify' => false]];
             }
-            if ($y + min(3, count($segments)) * $lineHeightMm > $descriptionLimitY) {
+            $needsTotalSpace = $grandTotal !== null && $rowIndex === $lastRowIndex
+              && $y + $lineHeightMm > $totalTopLimitY;
+            if ($needsTotalSpace || $y + min(3, count($segments)) * $lineHeightMm > $descriptionLimitY) {
               $this->AddPage();
+              $this->SetFont('dejavusans', '', 8);
               $y = $textStartY;
+              $amountsBottomY = $textStartY;
             }
 
             $isContinuationOnly = !empty($r['is_continuation']);
@@ -999,11 +1007,14 @@ class PDF extends TCPDF
             $this->Cell(27, $lineHeightMm, $uvSafe, 0, 0, 'R');
             $this->SetXY($xTotal, $y);
             $this->Cell(27, $lineHeightMm, $rowTotalSafe, 0, 0, 'R');
+            $amountsBottomY = $y + $lineHeightMm;
 
             foreach ($segments as $segment) {
               if ($y + $lineHeightMm > $descriptionLimitY) {
                 $this->AddPage();
+                $this->SetFont('dejavusans', '', 8);
                 $y = $textStartY;
+                $amountsBottomY = $textStartY;
               }
               $this->drawJustifiedDescriptionLine(
                 $xDesc,
@@ -1019,12 +1030,8 @@ class PDF extends TCPDF
         }
 
         if ($grandTotal !== null) {
-          if ($y > $totalTopLimitY) {
-            $this->AddPage();
-            $y = $textStartY;
-          }
           $this->SetY($y);
-          $this->drawGrandTotalBlock($grandTotal, $footerContentTopY);
+          $this->drawGrandTotalBlock($grandTotal, $footerContentTopY, $amountsBottomY);
         }
         $this->SetAutoPageBreak(true, 82);
         return [];
@@ -1056,15 +1063,15 @@ class PDF extends TCPDF
       $this->SetAutoPageBreak(false, 0);
       $this->SetY(-102);
       $this->SetFont('dejavusans','',8);
-      $this->SetX(130);
+      $this->SetX(134);
       $this->MultiCell(62, 5, $this->supplier, 0, 'L', false, 1);
-      $this->SetX(130);
+      $this->SetX(134);
       $this->MultiCell(62, 5, $this->po, 0, 'L', false, 1);
-      $this->SetX(130);
+      $this->SetX(134);
       $this->MultiCell(62, 5, $this->pr, 0, 'L', false, 1);//pr
-      $this->SetX(130);
+      $this->SetX(134);
       $this->MultiCell(62, 5, $this->obr, 0, 'L', false, 1);//obr
-      $this->SetX(130);
+      $this->SetX(134);
       $this->MultiCell(62, 5, $this->code, 0, 'L', false, 1);//code
       $this->SetAutoPageBreak(true, 82);
     }
@@ -1105,8 +1112,8 @@ foreach ($printRows as $r) {
 foreach ($pageOrder as $pk) {
   $bucket = $pageBuckets[$pk];
   $rows = $bucket['rows'];
-  $maxItemsPerPage = 8;
-  $rowPages = array_chunk($rows, $maxItemsPerPage);
+  // Let measured text height determine page breaks, not a fixed item count.
+  $rowPages = [$rows];
 
   // startPageGroup() must be called BEFORE AddPage() — it marks the *next* added
   // page as the start of a new group, resetting the per-group page counter.
