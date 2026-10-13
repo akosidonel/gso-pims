@@ -4856,7 +4856,9 @@ $(function(){
       });
 
       if (npDetailPropertyOptionalFund()) {
-        npDetailSetProperty(itemId, '', 'Property number is not generated for ' + fund + '.', 'info');
+        npDetailSetProperty(itemId, '', fund === 'DONATION'
+          ? 'Property number will be generated automatically when this item is transferred to records.'
+          : 'Property number is not generated for ' + fund + '.', 'info');
         if (typeof onDone === 'function') { onDone(''); }
         return;
       }
@@ -6396,7 +6398,9 @@ $(function(){
 
       if (fund === 'TRUST FUND' || fund === 'DONATION') {
         $('#show_property_number').val(npPropertyDisplay(''));
-        npSetPropertyHelp('Property number is not generated for ' + fund + '.', 'info');
+        npSetPropertyHelp(fund === 'DONATION'
+          ? 'Property number will be generated automatically when this item is transferred to records.'
+          : 'Property number is not generated for ' + fund + '.', 'info');
         npEditPropertyGenerating = false;
         npEditPropertyValid = true;
         $('#npEditSaveBtn').prop('disabled', false);

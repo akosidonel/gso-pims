@@ -1513,7 +1513,7 @@ if(!function_exists('gso_find_department_by_code')){
     function gso_find_department_by_code($conn, $departmentCode){
         $departmentCode = trim((string)$departmentCode);
         if ($departmentCode === '') { return null; }
-        $stmt = mysqli_prepare($conn, 'SELECT dept_id, department_code, department_name FROM department WHERE department_code = ? LIMIT 1');
+        $stmt = mysqli_prepare($conn, 'SELECT dept_id, department_code, department_name, agencies FROM department WHERE department_code = ? LIMIT 1');
         if (!$stmt) { return null; }
         mysqli_stmt_bind_param($stmt, 's', $departmentCode);
         mysqli_stmt_execute($stmt);
@@ -1527,7 +1527,7 @@ if(!function_exists('gso_find_department_by_pk')){
     function gso_find_department_by_pk($conn, $deptId){
         $deptId = (int)$deptId;
         if ($deptId <= 0) { return null; }
-        $stmt = mysqli_prepare($conn, 'SELECT dept_id, department_code, department_name FROM department WHERE dept_id = ? LIMIT 1');
+        $stmt = mysqli_prepare($conn, 'SELECT dept_id, department_code, department_name, agencies FROM department WHERE dept_id = ? LIMIT 1');
         if (!$stmt) { return null; }
         mysqli_stmt_bind_param($stmt, 'i', $deptId);
         mysqli_stmt_execute($stmt);
@@ -6258,6 +6258,8 @@ if (!function_exists('gso_propnum_exists')) {
             ['table' => 'new_bundle_purchase', 'col' => 'bundle_with'],
             ['table' => 'par_gen_fund', 'col' => 'par_number'],
             ['table' => 'property_sef', 'col' => 'property_number'],
+            ['table' => 'general_fund_property_history', 'col' => 'par_number'],
+            ['table' => 'sef_property_history', 'col' => 'property_number'],
             ['table' => 'trust_fund', 'col' => 'property_number'],
             ['table' => 'donation', 'col' => 'property_number'],
         ];
@@ -6368,6 +6370,8 @@ if (!function_exists('gso_allocate_property_number_block')) {
             ['table' => 'new_bundle_purchase', 'column' => 'bundle_with'],
             ['table' => 'par_gen_fund', 'column' => 'par_number'],
             ['table' => 'property_sef', 'column' => 'property_number'],
+            ['table' => 'general_fund_property_history', 'column' => 'par_number'],
+            ['table' => 'sef_property_history', 'column' => 'property_number'],
             ['table' => 'trust_fund', 'column' => 'property_number'],
             ['table' => 'donation', 'column' => 'property_number'],
         ];
@@ -7559,6 +7563,10 @@ if (isset($_GET['TransferFromStock'])) {
 
 // Bulk transfer of trust fund / donation inventory to a department
 if (isset($_POST['bulkTransferFundInventory'])) {
+    if (empty($_SESSION['alogin'])) {
+        echo json_encode(['status' => 401, 'message' => 'Not logged in']);
+        return false;
+    }
     $fundKey = strtolower(trim((string)($_POST['fund_bulk'] ?? '')));
     $fundMap = [
         'trust' => [
@@ -7634,19 +7642,30 @@ if (isset($_POST['bulkTransferFundInventory'])) {
         }
     };
 
-    mysqli_begin_transaction($conn);
+    // Serialize donation transfers until the generated numbers are committed.
+    $numberLock = false;
     try {
+        if ($fundKey === 'donation') {
+            $lockResult = mysqli_query($conn, "SELECT GET_LOCK('gso_donation_transfer', 10) AS acquired");
+            $numberLock = $lockResult && (int)(mysqli_fetch_assoc($lockResult)['acquired'] ?? 0) === 1;
+            if (!$numberLock) {
+                throw new RuntimeException('Another donation transfer is in progress. Please try again.');
+            }
+        }
+        mysqli_begin_transaction($conn);
         foreach ($fundIds as $fundId) {
             $fundId = (int)$fundId;
 
-            $itemQuery = mysqli_query($conn, "SELECT * FROM {$sourceTable} WHERE id = {$fundId} LIMIT 1");
-            $historyQuery = mysqli_query($conn, "SELECT * FROM {$sourceHistoryTable} WHERE id = {$fundId} AND status = 1 ORDER BY created_at DESC LIMIT 1");
+            $itemQuery = mysqli_query($conn, "SELECT * FROM {$sourceTable} WHERE id = {$fundId} LIMIT 1 FOR UPDATE");
+            $historyQuery = mysqli_query($conn, "SELECT * FROM {$sourceHistoryTable} WHERE id = {$fundId} AND status = 1 ORDER BY created_at DESC LIMIT 1 FOR UPDATE");
             if (!$itemQuery || !$historyQuery || mysqli_num_rows($itemQuery) !== 1 || mysqli_num_rows($historyQuery) !== 1) {
                 continue;
             }
 
             $itemRow = mysqli_fetch_assoc($itemQuery);
             $historyRow = mysqli_fetch_assoc($historyQuery);
+            $employeeId = (int)($historyRow['emp_id'] ?? 0);
+            $employeeSql = $employeeId > 0 ? (string)$employeeId : 'NULL';
             $category = trim((string)($itemRow['category'] ?? $historyRow['category'] ?? ''));
             $propertyNumber = trim((string)($itemRow['property_number'] ?? ''));
             if ($propertyNumber === '') {
@@ -7662,11 +7681,15 @@ if (isset($_POST['bulkTransferFundInventory'])) {
                 throw new Exception('Missing department assignment for ' . $propertyNumber . '.');
             }
 
-            $currentDeptEscaped = mysqli_real_escape_string($conn, $currentDept);
-            $deptRow = mysqli_fetch_assoc(mysqli_query($conn, "SELECT agencies FROM department WHERE department_code='{$currentDeptEscaped}' LIMIT 1"));
+            $deptRow = gso_resolve_history_department($conn, $currentDept);
             if (!$deptRow) {
                 throw new Exception('Assigned department not found for ' . $propertyNumber . '.');
             }
+            $currentDept = trim((string)($deptRow['department_code'] ?? ''));
+            if ($currentDept === '') {
+                throw new Exception('Assigned department has no code for ' . $propertyNumber . '.');
+            }
+            $currentDeptEscaped = mysqli_real_escape_string($conn, $currentDept);
 
             $destIsGF = strtoupper(trim((string)($deptRow['agencies'] ?? ''))) === 'CITY DEPARTMENT';
             $destTable = $destIsGF ? 'par_gen_fund' : 'property_sef';
@@ -7674,6 +7697,17 @@ if (isset($_POST['bulkTransferFundInventory'])) {
             $destHistoryTable = $destIsGF ? 'general_fund_property_history' : 'sef_property_history';
             $destHistoryDeptColumn = $destIsGF ? 'dept_id' : 'sch_id';
             $destFundLabel = $destIsGF ? 'GENERAL FUND' : 'SPECIAL EDUCATION FUND';
+            if ($fundKey === 'donation') {
+                $generated = gso_generate_one_property_number(
+                    $conn, $category, $itemRow['date_aquired'] ?? '',
+                    $itemRow['account_code'] ?? '', $currentDept, $destFundLabel
+                );
+                if (!$generated['ok']) {
+                    throw new RuntimeException('Cannot generate property number for donation #' . $fundId . ': ' . $generated['error']);
+                }
+                $propertyNumber = $generated['property_number'];
+                $propertyNumberEscaped = mysqli_real_escape_string($conn, $propertyNumber);
+            }
             $parIcsNumber = mysqli_real_escape_string($conn, $nextParIcs($destTable, $category, $destIsGF ? 'GF' : 'SEF'));
             $categoryEscaped = mysqli_real_escape_string($conn, $category);
             $destFundEscaped = mysqli_real_escape_string($conn, $destFundLabel);
@@ -7708,7 +7742,7 @@ if (isset($_POST['bulkTransferFundInventory'])) {
             $run("DELETE FROM {$sourceTable} WHERE id='{$fundId}' LIMIT 1", true);
 
             $run("INSERT INTO {$destHistoryTable} (emp_id,{$destHistoryDeptColumn},{$destPropertyColumn},reference_number,status,category,created_at)
-                VALUES (NULL,'{$currentDeptEscaped}','{$propertyNumberEscaped}','{$referenceNumber}','1','{$categoryEscaped}','{$today}')");
+                VALUES ({$employeeSql},'{$currentDeptEscaped}','{$propertyNumberEscaped}','{$referenceNumber}','1','{$categoryEscaped}','{$today}')");
 
             $activityText = 'Transferred ' . $propertyNumber . ' from ' . $fundMap[$fundKey]['label'] . ' to records for department ' . $currentDept;
             $run("INSERT INTO activity_log (admin_id,ip_address,activity)
@@ -7726,9 +7760,13 @@ if (isset($_POST['bulkTransferFundInventory'])) {
             'status' => 200,
             'message' => 'Transferred to records successfully.',
         ]);
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
         mysqli_rollback($conn);
         echo json_encode(['status' => 500, 'message' => 'Transfer failed: ' . $e->getMessage()]);
+    } finally {
+        if ($numberLock) {
+            mysqli_query($conn, "SELECT RELEASE_LOCK('gso_donation_transfer')");
+        }
     }
     return false;
 }
