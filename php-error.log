@@ -100,3 +100,9 @@
 [07-Sep-2026 09:00:35 Europe/Berlin] PHP Warning:  mysqli_connect(): (HY000/2006): MySQL server has gone away in C:\xampp\htdocs\gso-pims\database\databaseConnection.php on line 9
 [09-Sep-2026 08:31:11 Europe/Berlin] PHP Warning:  session_start(): open(C:\xampp\tmp\sess_n8n7m6d5da1cquhijpq5pf24j0, O_RDWR) failed: Permission denied (13) in C:\xampp\htdocs\gso-pims\config\session_bootstrap.php on line 29
 [09-Sep-2026 08:31:11 Europe/Berlin] PHP Warning:  session_start(): Failed to read session data: files (path: C:\xampp\tmp) in C:\xampp\htdocs\gso-pims\config\session_bootstrap.php on line 29
+[14-Sep-2026 01:25:59 Europe/Berlin] PHP Warning:  mysqli_connect(): (HY000/2002): No connection could be made because the target machine actively refused it.
+ in C:\xampp\htdocs\gso-pims\database\databaseConnection.php on line 9
+[14-Sep-2026 01:26:03 Europe/Berlin] PHP Warning:  mysqli_connect(): (HY000/2002): No connection could be made because the target machine actively refused it.
+ in C:\xampp\htdocs\gso-pims\database\databaseConnection.php on line 9
+[19-Sep-2026 04:15:59 Europe/Berlin] PHP Warning:  session_start(): open(C:\xampp\tmp\sess_lasafvuffed899f73p73g73f54, O_RDWR) failed: Permission denied (13) in C:\xampp\htdocs\gso-pims\config\session_bootstrap.php on line 29
+[19-Sep-2026 04:15:59 Europe/Berlin] PHP Warning:  session_start(): Failed to read session data: files (path: C:\xampp\tmp) in C:\xampp\htdocs\gso-pims\config\session_bootstrap.php on line 29
