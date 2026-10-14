@@ -3255,6 +3255,15 @@ $(function(){
       }
     }
 
+    var npSelectedRows = Object.create(null);
+    var npSelectionRevision = 0;
+    var npSelectionRequest = null;
+    var npLastSearch = '';
+    function npSelectionKey(row) {
+      var po = String((row && row.purchase_order) || '').trim().toUpperCase();
+      return po ? 'PO:' + po : 'ID:' + String((row && row.row_id) || '');
+    }
+
     var addItemNpTable = $('#addItemNewPurchaseTable').DataTable({
       responsive: true,
       lengthChange: false,
@@ -3262,6 +3271,8 @@ $(function(){
       autoWidth: false,
       deferRender: true,
       processing: true,
+      serverSide: true,
+      pageLength: 10,
       searchDelay: 350,
       ajax: {
         url: '../auth/fetch_new_purchase_summary.php',
@@ -3289,7 +3300,8 @@ $(function(){
             var poRaw = String((row && row.purchase_order) || '').trim();
             var checkboxValue = gsoNpEsc(poRaw);
             var label = poRaw ? checkboxValue : 'NULL';
-            return '<input type="checkbox" class="add-item-np-checkbox" value="' + checkboxValue + '" aria-label="Select P.O. ' + label + '">';
+            var selectionKey = npSelectionKey(row);
+            return '<input type="checkbox" class="add-item-np-checkbox" data-selection-key="' + gsoNpEsc(selectionKey) + '" value="' + checkboxValue + '" aria-label="Select P.O. ' + label + '"' + (npSelectedRows[selectionKey] ? ' checked' : '') + '>';
           }
         },
         {
@@ -3434,8 +3446,8 @@ $(function(){
             }
 
             var purchaseOrders = [];
-            $(addItemNpTable.rows({ search: 'applied' }).nodes()).find('input.add-item-np-checkbox:checked').each(function () {
-              var value = String($(this).val() || '').trim();
+            Object.keys(npSelectedRows).forEach(function (key) {
+              var value = String(npSelectedRows[key].purchase_order || '').trim();
               if (value) { purchaseOrders.push(value); }
             });
             purchaseOrders = purchaseOrders.filter(function (value, index, array) { return array.indexOf(value) === index; });
@@ -3520,15 +3532,71 @@ $(function(){
     $(document)
       .off('change.addItemNpSelectAll', '#add_item_np_select_all')
       .on('change.addItemNpSelectAll', '#add_item_np_select_all', function () {
-        $(addItemNpTable.rows({ search: 'applied' }).nodes()).find('input.add-item-np-checkbox').prop('checked', $(this).is(':checked'));
-        syncAddItemNpSelectAll();
+        var checked = $(this).is(':checked');
+        var revision = ++npSelectionRevision;
+        if (npSelectionRequest && npSelectionRequest.readyState !== 4) { npSelectionRequest.abort(); }
+        if (!checked) {
+          npSelectedRows = Object.create(null);
+          $(addItemNpTable.rows().nodes()).find('input.add-item-np-checkbox').prop('checked', false);
+          syncAddItemNpSelectAll();
+          return;
+        }
+        // Fetch only identities, so Select All still includes matching rows on other pages.
+        $('#add_item_np_select_all').prop('disabled', true);
+        npSelectionRequest = $.ajax({
+          url: '../auth/fetch_new_purchase_summary.php',
+          type: 'POST',
+          dataType: 'json',
+          data: { select_all: 1, search: { value: addItemNpTable.search() } },
+          success: function (response) {
+            if (revision !== npSelectionRevision) { return; }
+            $.each((response && response.data) || [], function (_, row) {
+              npSelectedRows[npSelectionKey(row)] = row;
+            });
+            $(addItemNpTable.rows().nodes()).find('input.add-item-np-checkbox').prop('checked', true);
+          },
+          error: function (xhr, status) {
+            if (status !== 'abort') { Swal.fire({ icon: 'error', title: 'Unable to select rows. Please try again.' }); }
+          },
+          complete: function () {
+            $('#add_item_np_select_all').prop('disabled', false);
+            syncAddItemNpSelectAll();
+          }
+        });
       });
 
     $(document)
       .off('change.addItemNpRowCheckbox', '#addItemNewPurchaseTable input.add-item-np-checkbox')
-      .on('change.addItemNpRowCheckbox', '#addItemNewPurchaseTable input.add-item-np-checkbox', syncAddItemNpSelectAll);
+      .on('change.addItemNpRowCheckbox', '#addItemNewPurchaseTable input.add-item-np-checkbox', function () {
+        var key = $(this).attr('data-selection-key');
+        if ($(this).is(':checked')) {
+          npSelectedRows[key] = { purchase_order: $(this).val() };
+        } else {
+          delete npSelectedRows[key];
+        }
+        syncAddItemNpSelectAll();
+      });
 
-    addItemNpTable.on('draw', syncAddItemNpSelectAll);
+    function clearNpSelection() {
+      ++npSelectionRevision;
+      if (npSelectionRequest && npSelectionRequest.readyState !== 4) { npSelectionRequest.abort(); }
+      npSelectedRows = Object.create(null);
+      $(addItemNpTable.rows().nodes()).find('input.add-item-np-checkbox').prop('checked', false);
+      syncAddItemNpSelectAll();
+    }
+    $('#addItemNewPurchaseTable').on('gso:clear-selection', clearNpSelection);
+    addItemNpTable.on('search', function () {
+      var search = addItemNpTable.search();
+      if (search === npLastSearch) { return; }
+      npLastSearch = search;
+      clearNpSelection();
+    });
+    addItemNpTable.on('draw', function () {
+      $(addItemNpTable.rows().nodes()).find('input.add-item-np-checkbox').each(function () {
+        $(this).prop('checked', !!npSelectedRows[$(this).attr('data-selection-key')]);
+      });
+      syncAddItemNpSelectAll();
+    });
     syncAddItemNpSelectAll();
   }
 
@@ -5364,6 +5432,7 @@ $(function(){
       var settings = table.settings()[0] || {};
 
       if (settings.ajax) {
+        $('#addItemNewPurchaseTable').trigger('gso:clear-selection');
         table.ajax.reload(null, false);
         return;
       }
@@ -11468,13 +11537,18 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
           showConfirmButton: false,
           timer: 1500
         });
-        setTimeout(function(){
-          $('#addItemModal').modal('hide');
-          $('#addItem')[0].reset();
-          $('#addItem').removeData('printPreference');
-          // Force fresh token by reloading page (simplest approach)
+        $('#addItemModal').modal('hide');
+        $('#addItem')[0].reset();
+        $('#addItem').removeData('printPreference');
+        if (res.submission_token && res.data && res.data.condition === 'NEW') {
+          $('#add_item_submission_token').val(res.submission_token);
+          if ($.fn.dataTable.isDataTable('#addItemNewPurchaseTable')) {
+            $('#addItemNewPurchaseTable').trigger('gso:clear-selection');
+            $('#addItemNewPurchaseTable').DataTable().ajax.reload(null, false);
+          }
+        } else {
           location.reload();
-        }, 1700);
+        }
       } else if(res.status == 409){
         // Duplicate / invalid token
         Swal.fire({

@@ -1,6 +1,7 @@
 <?php
-ini_set('display_errors', '1');
-error_reporting(E_ALL);
+// TCPDF output must not be mixed with PHP diagnostics.
+ini_set('display_errors', '0');
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
 require_once __DIR__ . '/../database/databaseConnection.php';
 require_once __DIR__ . '/../tcpdf/tcpdf.php';
 
@@ -165,16 +166,14 @@ $sqlNew = "
   FROM (
     SELECT DISTINCT emp_id, dept_id, par_number, reference_number, status, category, created_at
     FROM new_purchase_history
+    WHERE reference_number IN ($referencePlaceholders) AND status = 1
   ) AS h
-  JOIN new_purchase AS np ON np.id = (
-    SELECT np2.id
-    FROM new_purchase AS np2
-    WHERE (
-      (UPPER(COALESCE(h.par_number, '')) LIKE 'NPID:%' AND np2.id = CAST(SUBSTRING(h.par_number, 6) AS UNSIGNED))
-      OR (UPPER(COALESCE(h.par_number, '')) NOT LIKE 'NPID:%' AND np2.property_number = h.par_number)
-    )
-    ORDER BY (COALESCE(np2.unit_value, 0) > 0) DESC, np2.id ASC
-    LIMIT 1
+  JOIN new_purchase AS np ON np.id = IF(
+      UPPER(COALESCE(h.par_number, '')) LIKE 'NPID:%',
+      CAST(SUBSTRING(h.par_number, 6) AS UNSIGNED),
+      (SELECT np2.id FROM new_purchase AS np2
+       WHERE np2.property_number = h.par_number
+       ORDER BY (COALESCE(np2.unit_value, 0) > 0) DESC, np2.id ASC LIMIT 1)
   )
   LEFT JOIN employee AS e ON e.emp_id = h.emp_id
   LEFT JOIN department AS d ON (
@@ -188,8 +187,7 @@ $sqlNew = "
       )
     )
   )
-  WHERE h.reference_number IN ($referencePlaceholders)
-    AND REPLACE(UPPER(h.category), '.', '') = 'PAR'
+  WHERE REPLACE(UPPER(h.category), '.', '') = 'PAR'
     AND h.status = 1
 " . $parsInNew . "
   ORDER BY np.property_number ASC
@@ -792,8 +790,16 @@ function gso_wrap_pdf_text_segments($pdf, string $text, float $widthMm): array {
   return $segments;
 }
 
-class PDF extends TCPDF  
+class PDF extends TCPDF
 {
+    public $supplier = '';
+    public $po = '';
+    public $pr = '';
+    public $obr = '';
+    public $code = '';
+    public $parno = '';
+    public $employee = '';
+    public $dept = '';
     protected function fitTextFontSize($text, $width, $baseSize = 10, $minSize = 7, $maxLines = 2) {
         $text = trim((string)$text);
         if ($text === '') { return $baseSize; }

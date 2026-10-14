@@ -10,6 +10,7 @@ require_once __DIR__ . '/../include/getuser_ipaddress.php';
 require_once __DIR__ . '/../include/generate_par_ics_number.php';
 require_once __DIR__ . '/../include/generate_ptr_number.php';
 require_once __DIR__ . '/../include/generate_ref_number.php';
+require_once __DIR__ . '/../include/batch_insert.php';
 require_once __DIR__ . '/../include/release.php';
 date_default_timezone_set('Asia/Manila');
 // Helper utilities (restored)
@@ -6349,7 +6350,7 @@ if (!function_exists('gso_allocate_property_number')) {
 }
 
 if (!function_exists('gso_allocate_property_number_block')) {
-    function gso_allocate_property_number_block($conn, $fundRaw, $candidate, $quantity, array $exclude = [], $maxAttempts = 20000) {
+    function gso_allocate_property_number_block($conn, $fundRaw, $candidate, $quantity, array $exclude = [], $maxAttempts = 20000, ?array &$lookupCache = null) {
         $candidate = strtoupper(trim((string)$candidate));
         $quantity = max(1, min(10000, (int)$quantity));
         $parts = explode('-', $candidate);
@@ -6362,43 +6363,50 @@ if (!function_exists('gso_allocate_property_number_block')) {
         $patternParts = $parts;
         $patternParts[$sequenceIndex] = '%';
         $pattern = implode('-', $patternParts);
-        $existing = [];
-        $checks = [
-            ['table' => 'new_purchase', 'column' => 'property_number'],
-            ['table' => 'new_purchase_history', 'column' => 'par_number'],
-            ['table' => 'new_bundle_purchase', 'column' => 'property_number'],
-            ['table' => 'new_bundle_purchase', 'column' => 'bundle_with'],
-            ['table' => 'par_gen_fund', 'column' => 'par_number'],
-            ['table' => 'property_sef', 'column' => 'property_number'],
-            ['table' => 'general_fund_property_history', 'column' => 'par_number'],
-            ['table' => 'sef_property_history', 'column' => 'property_number'],
-            ['table' => 'trust_fund', 'column' => 'property_number'],
-            ['table' => 'donation', 'column' => 'property_number'],
-        ];
-        $selects = [];
-        $params = [];
-        foreach ($checks as $check) {
-            $selects[] = "SELECT UPPER(TRIM(COALESCE({$check['column']}, ''))) AS property_number FROM {$check['table']} WHERE UPPER(TRIM({$check['column']})) LIKE ?";
-            $params[] = $pattern;
-        }
-        $sql = 'SELECT property_number FROM (' . implode(' UNION ALL ', $selects) . ') AS property_number_matches';
-        $stmt = mysqli_prepare($conn, $sql);
-        if (!$stmt) {
-            return ['ok' => false, 'error' => 'Unable to prepare property-number block allocation.'];
-        }
-        $types = str_repeat('s', count($params));
-        gso_stmt_bind_params($stmt, $types, $params);
-        if (!mysqli_stmt_execute($stmt)) {
+        $existing = $lookupCache[$pattern] ?? null;
+        if ($existing === null) {
+            $existing = [];
+            $checks = [
+                ['table' => 'new_purchase', 'column' => 'property_number'],
+                ['table' => 'new_purchase_history', 'column' => 'par_number'],
+                ['table' => 'new_bundle_purchase', 'column' => 'property_number'],
+                ['table' => 'new_bundle_purchase', 'column' => 'bundle_with'],
+                ['table' => 'par_gen_fund', 'column' => 'par_number'],
+                ['table' => 'property_sef', 'column' => 'property_number'],
+                ['table' => 'general_fund_property_history', 'column' => 'par_number'],
+                ['table' => 'sef_property_history', 'column' => 'property_number'],
+                ['table' => 'trust_fund', 'column' => 'property_number'],
+                ['table' => 'donation', 'column' => 'property_number'],
+            ];
+            $selects = [];
+            $params = [];
+            foreach ($checks as $check) {
+                // Prefix range scans for canonical values and legacy values with surrounding spaces.
+                $selects[] = "SELECT UPPER(TRIM({$check['column']})) AS property_number FROM {$check['table']} WHERE {$check['column']} LIKE ?";
+                $params[] = $pattern . '%';
+                $selects[] = "SELECT UPPER(TRIM({$check['column']})) AS property_number FROM {$check['table']} WHERE {$check['column']} LIKE ' %' AND UPPER(TRIM({$check['column']})) LIKE ?";
+                $params[] = $pattern;
+            }
+            $sql = 'SELECT property_number FROM (' . implode(' UNION ALL ', $selects) . ') AS property_number_matches';
+            $stmt = mysqli_prepare($conn, $sql);
+            if (!$stmt) {
+                return ['ok' => false, 'error' => 'Unable to prepare property-number block allocation.'];
+            }
+            $types = str_repeat('s', count($params));
+            gso_stmt_bind_params($stmt, $types, $params);
+            if (!mysqli_stmt_execute($stmt)) {
+                mysqli_stmt_close($stmt);
+                return ['ok' => false, 'error' => 'Unable to look up existing property numbers.'];
+            }
+            $result = mysqli_stmt_get_result($stmt);
+            while ($result && ($row = mysqli_fetch_assoc($result))) {
+                $value = strtoupper(trim((string)($row['property_number'] ?? '')));
+                if ($value !== '') { $existing[$value] = true; }
+            }
             mysqli_stmt_close($stmt);
-            return ['ok' => false, 'error' => 'Unable to look up existing property numbers.'];
-        }
-        $result = mysqli_stmt_get_result($stmt);
-        while ($result && ($row = mysqli_fetch_assoc($result))) {
-            $value = strtoupper(trim((string)($row['property_number'] ?? '')));
-            if ($value !== '') { $existing[$value] = true; }
-        }
-        mysqli_stmt_close($stmt);
 
+            if ($lookupCache !== null) { $lookupCache[$pattern] = $existing; }
+        }
         $reserved = [];
         foreach ($exclude as $value) {
             $value = strtoupper(trim((string)$value));
@@ -6431,7 +6439,7 @@ if (!function_exists('gso_allocate_property_number_block')) {
 }
 
 if (!function_exists('gso_generate_one_property_number')) {
-    function gso_generate_one_property_number($conn, $category, $year, $accountCode, $dept, $fund, $exclude = [], $quantity = 1) {
+    function gso_generate_one_property_number($conn, $category, $year, $accountCode, $dept, $fund, $exclude = [], $quantity = 1, ?array &$lookupCache = null) {
         $category = strtoupper(trim((string)$category));
         $year = trim((string)$year);
         $accountCode = strtoupper(trim((string)$accountCode));
@@ -6502,7 +6510,7 @@ if (!function_exists('gso_generate_one_property_number')) {
 
         $candidate = $prefix . '-' . $sub . '-' . str_pad((string)$seq, $seqLen, '0', STR_PAD_LEFT) . '-' . $deptCode;
         // Load occupied numbers once, then find the entire available block in memory.
-        $allocation = gso_allocate_property_number_block($conn, $fund, $candidate, $quantity, $exclude, 50000);
+        $allocation = gso_allocate_property_number_block($conn, $fund, $candidate, $quantity, $exclude, 50000, $lookupCache);
         if (!$allocation['ok']) { return $allocation; }
         return [
             'ok' => true,
@@ -6530,6 +6538,7 @@ if (isset($_POST['generate_property_numbers_batch'])) {
 
     $numbers = [];
     $exclude = [];
+    $lookupCache = [];
     $totalQuantity = 0;
     foreach ($rows as $rowIndex => $row) {
         if (!is_array($row)) {
@@ -6558,7 +6567,8 @@ if (isset($_POST['generate_property_numbers_batch'])) {
             $departmentCode,
             $fund,
             $exclude,
-            $quantity
+            $quantity,
+            $lookupCache
         );
         if (!isset($generated['ok']) || !$generated['ok']) {
             echo json_encode([
@@ -10278,6 +10288,24 @@ if (isset($_POST['save_item'])) {
         echo json_encode(['status'=>409,'message'=>'Duplicate or invalid submission token.']);
         return false;
     }
+    // Serialize add-item writers while each request uses an occupied-number snapshot.
+    // Previews and PDF reads do not acquire this lock.
+    $saveLock = mysqli_query($conn, "SELECT GET_LOCK('gso_add_item_save', 10) AS acquired");
+    $saveLockRow = $saveLock ? mysqli_fetch_assoc($saveLock) : null;
+    if (!$saveLockRow || (int)$saveLockRow['acquired'] !== 1) {
+        echo json_encode(['status' => 503, 'message' => 'Another item save is in progress. Please try again.']);
+        return false;
+    }
+    register_shutdown_function(function () use ($conn) {
+        mysqli_query($conn, "SELECT RELEASE_LOCK('gso_add_item_save')");
+    });
+    // Restore a consumed token after a failed save; successful saves remain single-use.
+    register_shutdown_function(function () use ($submissionToken) {
+        if (empty($GLOBALS['gso_add_item_saved'])) {
+            $_SESSION['form_tokens']['add_item'][$submissionToken] = time();
+        }
+    });
+    $propertyLookupCache = [];
     // Mark token as used immediately (idempotent) then unset it to prevent reuse
     unset($_SESSION['form_tokens']['add_item'][$submissionToken]);
     // Optional: garbage collect old tokens (>30 min)
@@ -10690,6 +10718,14 @@ if (isset($_POST['save_item'])) {
         };
         $nextDonationId = $isDonation ? $nextManualFundId('donation', 'donation_history') : null;
 
+        $purchaseBatch = [];
+        $historyBatch = [];
+        $flushPurchaseBatch = function () use ($conn, $newFlowInsertSql, $newFlowHistoryInsertSql, $isDonation, &$purchaseBatch, &$historyBatch) {
+            gso_insert_batch($conn, $newFlowInsertSql, $isDonation ? 'isssssssssdssssssssss' : 'sssssssssdssssssssss', $purchaseBatch);
+            gso_insert_batch($conn, $newFlowHistoryInsertSql, $isDonation ? 'isississ' : 'iississ', $historyBatch);
+            $purchaseBatch = [];
+            $historyBatch = [];
+        };
         mysqli_begin_transaction($conn);
         try {
             for ($i=1; $i <= $quantity; $i++) {
@@ -10780,7 +10816,9 @@ if (isset($_POST['save_item'])) {
                         $accountCodeForRow,
                         $deptCodeForRow,
                         $fundNorm,
-                        $reservedPropertyNumbers
+                        $reservedPropertyNumbers,
+                        1,
+                        $propertyLookupCache
                     );
                     if (!isset($generatedPropertyNumber['ok']) || !$generatedPropertyNumber['ok']) {
                         throw new Exception($generatedPropertyNumber['error'] ?? ('Unable to generate a property number for row ' . $i . '.'));
@@ -10810,7 +10848,9 @@ if (isset($_POST['save_item'])) {
                         $fundNorm,
                         $parNumberForSet,
                         $itemQuantityForRow,
-                        $reservedPropertyNumbers
+                        $reservedPropertyNumbers,
+                        20000,
+                        $propertyLookupCache
                     );
                     if (!isset($allocation['ok']) || !$allocation['ok']) {
                         throw new Exception($allocation['error'] ?? ('Unable to allocate property numbers for row ' . $i . '.'));
@@ -10857,102 +10897,33 @@ if (isset($_POST['save_item'])) {
                     $jevForPurchase = empty($_POST['jev']) ? null : strtoupper(trim((string)$_POST['jev']));
 
                     $newPurchaseId = 0;
+                    $purchaseRow = [
+                        $fundForPurchase, $categoryForRow, $unitForPurchase, $itemForRow,
+                        $brandForRow, $descriptionForRow, $serial1ForPurchase, $serial2ForPurchase,
+                        $isDonation ? null : $par_number, $unitValueForRow, $year,
+                        $accountCodeForPurchase, $supplierForPurchase, $parIcsForRow,
+                        $poForPurchase, $prForPurchase, $obrForPurchase, $jevForPurchase,
+                        $remarksForPurchase, $createdAt
+                    ];
                     if ($isDonation) {
-                        $newPurchaseId = (int)$nextDonationId;
-                        $nextDonationId--;
-                        $propertyNumberForPurchase = null;
-
-                        mysqli_stmt_bind_param(
-                            $stmtNewPurchase,
-                            'isssssssssdssssssssss',
-                            $newPurchaseId,
-                            $fundForPurchase,
-                            $categoryForRow,
-                            $unitForPurchase,
-                            $itemForRow,
-                            $brandForRow,
-                            $descriptionForRow,
-                            $serial1ForPurchase,
-                            $serial2ForPurchase,
-                            $propertyNumberForPurchase,
-                            $unitValueForRow,
-                            $year,
-                            $accountCodeForPurchase,
-                            $supplierForPurchase,
-                            $parIcsForRow,
-                            $poForPurchase,
-                            $prForPurchase,
-                            $obrForPurchase,
-                            $jevForPurchase,
-                            $remarksForPurchase,
-                            $createdAt
-                        );
-                    } else {
-                        mysqli_stmt_bind_param(
-                            $stmtNewPurchase,
-                            'sssssssssdssssssssss',
-                            $fundForPurchase,
-                            $categoryForRow,
-                            $unitForPurchase,
-                            $itemForRow,
-                            $brandForRow,
-                            $descriptionForRow,
-                            $serial1ForPurchase,
-                            $serial2ForPurchase,
-                            $par_number,
-                            $unitValueForRow,
-                            $year,
-                            $accountCodeForPurchase,
-                            $supplierForPurchase,
-                            $parIcsForRow,
-                            $poForPurchase,
-                            $prForPurchase,
-                            $obrForPurchase,
-                            $jevForPurchase,
-                            $remarksForPurchase,
-                            $createdAt
-                        );
-                    }
-                    if (!mysqli_stmt_execute($stmtNewPurchase)) {
-                        throw new Exception('Item insert failed.');
-                    }
-                    if (!$isDonation) {
+                        $newPurchaseId = (int)$nextDonationId--;
+                        array_unshift($purchaseRow, $newPurchaseId);
+                        $purchaseBatch[] = $purchaseRow;
+                    } elseif ($skipPropertyNumberForRow) {
+                        if ($purchaseBatch) { $flushPurchaseBatch(); }
+                        $stmtNewPurchase->bind_param('sssssssssdssssssssss', ...$purchaseRow);
+                        if (!$stmtNewPurchase->execute()) { throw new Exception('Item insert failed.'); }
                         $newPurchaseId = (int)mysqli_insert_id($conn);
-                    }
-                    $historyParNumber = $par_number;
-                    if (($skipPropertyNumberForRow || $isDonation) && $newPurchaseId !== 0) {
-                        $historyParNumber = 'NPID:' . $newPurchaseId;
-                    }
-
-                    if ($isDonation) {
-                        mysqli_stmt_bind_param(
-                            $stmtNewPurchaseHist,
-                            'isississ',
-                            $newPurchaseId,
-                            $empForRowInt,
-                            $deptCodeForRow,
-                            $historyParNumber,
-                            $referenceNumberForRow,
-                            $statusActive,
-                            $categoryForRow,
-                            $createdAt
-                        );
                     } else {
-                        mysqli_stmt_bind_param(
-                            $stmtNewPurchaseHist,
-                            'iississ',
-                            $empForRowInt,
-                            $deptIdForRow,
-                            $historyParNumber,
-                            $referenceNumberForRow,
-                            $statusActive,
-                            $categoryForRow,
-                            $createdAt
-                        );
+                        $purchaseBatch[] = $purchaseRow;
                     }
-                    if (!mysqli_stmt_execute($stmtNewPurchaseHist)) {
-                        throw new Exception('Item history insert failed.');
-                    }
+                    $historyParNumber = ($skipPropertyNumberForRow || $isDonation)
+                        ? 'NPID:' . $newPurchaseId : $par_number;
+                    $historyRow = [$empForRowInt, $isDonation ? $deptCodeForRow : $deptIdForRow,
+                        $historyParNumber, $referenceNumberForRow, $statusActive, $categoryForRow, $createdAt];
+                    if ($isDonation) { array_unshift($historyRow, $newPurchaseId); }
+                    $historyBatch[] = $historyRow;
+                    if (count($historyBatch) >= 200) { $flushPurchaseBatch(); }
 
                     $insertedCount++;
                     if (!in_array($referenceNumberForRow, $printRefs[$categoryForRow], true)) {
@@ -10966,6 +10937,8 @@ if (isset($_POST['save_item'])) {
                 $parentDeptCodes[$i] = $deptCodeForRow;
                 $parentSkipPropertyNumbers[$i] = $skipPropertyNumberForRow;
             }
+
+            $flushPurchaseBatch();
 
             // Save bundle equipment rows (if any)
             if ($hasBundleRows) {
@@ -11073,6 +11046,7 @@ if (isset($_POST['save_item'])) {
             }
 
             mysqli_commit($conn);
+            $GLOBALS['gso_add_item_saved'] = true;
 
             mysqli_stmt_close($stmtNewPurchaseHist);
             mysqli_stmt_close($stmtNewPurchase);
@@ -11082,6 +11056,7 @@ if (isset($_POST['save_item'])) {
                 'status' => 200,
                 'message' => 'Added Successfully!',
                 'count' => $insertedCount,
+                'submission_token' => gso_issue_form_token('add_item'),
                 'data' => [
                     'condition' => 'NEW',
                     'reference_number' => $referenceNumber,
@@ -11312,7 +11287,9 @@ if (isset($_POST['save_item'])) {
                 $accountCodeForRow,
                 $deptCodeForRow,
                 $fundUpper,
-                $reservedPropertyNumbers
+                $reservedPropertyNumbers,
+                1,
+                $propertyLookupCache
             );
             if (!isset($generatedPropertyNumber['ok']) || !$generatedPropertyNumber['ok']) {
                 mysqli_rollback($conn);
@@ -11342,7 +11319,9 @@ if (isset($_POST['save_item'])) {
                 $fundUpper,
                 $parNumberForSet,
                 $itemQuantityForRow,
-                $reservedPropertyNumbers
+                $reservedPropertyNumbers,
+                20000,
+                $propertyLookupCache
             );
             if (!isset($allocation['ok']) || !$allocation['ok']) {
                 mysqli_rollback($conn);
@@ -11441,10 +11420,12 @@ if (isset($_POST['save_item'])) {
         return false;
     }
     mysqli_commit($conn);
+    $GLOBALS['gso_add_item_saved'] = true;
     echo json_encode([
         'status' => 200,
         'message' => 'Added Successfully!',
         'count' => $insertedCount,
+        'submission_token' => gso_issue_form_token('add_item'),
         'data' => [
             'condition' => 'EXISTING',
             'should_print' => true,
