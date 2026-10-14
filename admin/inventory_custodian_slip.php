@@ -855,7 +855,7 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
     $pdf->AddPage();
     $pdf->SetFont('dejavusans', 'I', 10);
     $pdf->SetY(8);
-    $pdf->Cell(0, 5, 'Appendix 52', 0, 1, 'R');
+    $pdf->Cell(0, 5, 'Appendix 59', 0, 1, 'R');
     $logoPath = '../admin/logo.jpg';
     if (file_exists($logoPath)) {
         $logoWidth = 24; $logoHeight = 24; $pageWidth = 210; $margin = 10;
@@ -980,7 +980,7 @@ function render_ics_page($pdf, $row, $ics_no) {
     $pdf->AddPage();
     $pdf->SetFont('dejavusans', 'I', 10);
     $pdf->SetY(8);
-    $pdf->Cell(0, 5, 'Appendix 52', 0, 1, 'R');
+    $pdf->Cell(0, 5, 'Appendix 59', 0, 1, 'R');
     $logoPath = '../admin/logo.jpg';
     if (file_exists($logoPath)) {
         $logoWidth = 24; $logoHeight = 24; $pageWidth = 210; $margin = 10;
