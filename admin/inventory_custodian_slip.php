@@ -206,7 +206,15 @@ $pars = $parsRaw !== ''
     : ($parFilter !== '' ? [$parFilter] : []);
 $parsIn = count($pars) ? implode(',', array_fill(0, count($pars), '?')) : '';
 $rows = [];
-if ($refs_csv !== '') {
+if (isset($_GET['inventory_par'])) {
+    require_once __DIR__ . '/../include/general_fund_inventory_print.php';
+    $inventoryFund = strtoupper(trim((string)($_GET['inventory_fund'] ?? 'GF')));
+    if (!in_array($inventoryFund, ['GF', 'SEF'], true)) {
+        exit('Unknown inventory fund.');
+    }
+    $inventoryRow = gso_fetch_inventory_print_row($conn, trim((string)$_GET['inventory_par']), $inventoryFund);
+    $rows = ($inventoryRow && $inventoryRow['category'] === 'ICS') ? [$inventoryRow] : [];
+} elseif ($refs_csv !== '') {
     $refs = array_filter(array_map('trim', explode(',', $refs_csv)));
     if (count($refs) > 0) {
         $placeholders = implode(',', array_fill(0, count($refs), '?'));

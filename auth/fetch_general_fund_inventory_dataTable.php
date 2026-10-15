@@ -2,6 +2,7 @@
 session_start();
 require_once __DIR__ . '/../database/databaseConnection.php';
 require_once __DIR__ . '/datatable_helpers.php';
+require_once __DIR__ . '/../include/general_fund_inventory_print.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -142,6 +143,7 @@ $orderColumn = isset($_POST['order'][0]['column']) ? (int)$_POST['order'][0]['co
 $orderDir = strtolower((string)($_POST['order'][0]['dir'] ?? 'asc')) === 'desc' ? 'DESC' : 'ASC';
 $orderBy = isset($columns[$orderColumn]) ? $columns[$orderColumn] : 'p.item';
 
+$transferIdSql = gso_inventory_transfer_id_sql();
 $dataSql = "SELECT
                 p.item,
                 p.model,
@@ -152,7 +154,8 @@ $dataSql = "SELECT
                 {$unitSelect},
                 p.date_aquired,
                 p.category,
-                e.emp_name
+                e.emp_name,
+                ({$transferIdSql} IS NOT NULL) AS has_active_transfer
             {$baseFromSql}
             {$whereSql}
             ORDER BY {$orderBy} {$orderDir}";
@@ -184,6 +187,7 @@ foreach ($rows as $row) {
         'date_aquired' => (string)($row['date_aquired'] ?? ''),
         'category' => (string)($row['category'] ?? ''),
         'emp_name' => (string)($row['emp_name'] ?? ''),
+        'has_active_transfer' => (bool)($row['has_active_transfer'] ?? false),
     );
 }
 

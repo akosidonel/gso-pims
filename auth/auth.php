@@ -7445,6 +7445,31 @@ if (isset($_GET['propertyTransfer'])) {
     }
 }
 
+// Inventory printing uses the current assignment, even without transfer history.
+if (isset($_GET['inventoryPrintInfo'])) {
+    header('Content-Type: application/json');
+    require_once __DIR__ . '/../include/general_fund_inventory_print.php';
+    $par = trim((string)$_GET['inventoryPrintInfo']);
+    if ($par === '') {
+        return json_response(422, 'Missing property number.');
+    }
+    $fund = strtoupper(trim((string)($_GET['inventory_fund'] ?? 'GF')));
+    if (!in_array($fund, ['GF', 'SEF'], true)) {
+        return json_response(422, 'Unknown inventory fund.');
+    }
+    $row = gso_fetch_inventory_print_row($conn, $par, $fund);
+    if (!$row) {
+        return json_response(422, 'Active assignment not found for this property.');
+    }
+    if (!in_array($row['category'], ['PAR', 'ICS'], true)) {
+        return json_response(422, 'No PAR/ICS category found for this property.');
+    }
+    return json_response(200, 'OK', [
+        'category' => $row['category'],
+        'has_active_transfer' => (bool)$row['has_active_transfer'],
+    ]);
+}
+
 // Re-print info lookup: get category (status=1) and latest reference number for a given par number
 if (isset($_GET['reprintInfo'])) {
     header('Content-Type: application/json');

@@ -1,6 +1,7 @@
 <?php
-ini_set("display_errors", "1");
-error_reporting(E_ALL);
+// Keep legacy TCPDF deprecation notices out of the PDF response.
+ini_set('display_errors', '0');
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
 require '../database/databaseConnection.php';
 if (!defined('GSO_AUTH_LIB_ONLY')) {
     define('GSO_AUTH_LIB_ONLY', true);
@@ -97,8 +98,8 @@ class PDF extends TCPDF
     }
   }
 
-      if (isset($_GET['reference_number']) || isset($_GET['refnumber'])) {
-        $refnumber = isset($_GET['reference_number']) ? trim((string)$_GET['reference_number']) : trim((string)$_GET['refnumber']);
+      if (isset($_GET['inventory_par']) || isset($_GET['reference_number']) || isset($_GET['refnumber'])) {
+        $refnumber = trim((string)($_GET['reference_number'] ?? $_GET['refnumber'] ?? ''));
         $parFilter = isset($_GET['par']) ? trim($_GET['par']) : '';
                 $parsRaw = isset($_GET['pars']) ? trim($_GET['pars']) : '';
                 $parsFilter = [];
@@ -110,7 +111,17 @@ class PDF extends TCPDF
                                 $parsFilter = array_slice($parsFilter, 0, 200);
                         }
                 }
-        $rows = gso_fetch_printpt_rows($conn, $refnumber, $parFilter, $parsFilter);
+        if (isset($_GET['inventory_par'])) {
+            require_once __DIR__ . '/../include/general_fund_inventory_print.php';
+            $inventoryFund = strtoupper(trim((string)($_GET['inventory_fund'] ?? 'GF')));
+            if (!in_array($inventoryFund, ['GF', 'SEF'], true)) {
+                exit('Unknown inventory fund.');
+            }
+            $inventoryRow = gso_fetch_inventory_print_row($conn, trim((string)$_GET['inventory_par']), $inventoryFund);
+            $rows = ($inventoryRow && $inventoryRow['category'] === 'PAR') ? [$inventoryRow] : [];
+        } else {
+            $rows = gso_fetch_printpt_rows($conn, $refnumber, $parFilter, $parsFilter);
+        }
         if(!empty($rows)){
             // Summarize identical items with no serial numbers into single rows
             $rows = summarizePrintRows($rows);
@@ -574,8 +585,8 @@ class PDF extends TCPDF
                       $pdf->pr = "P.R NO. : $pr";
                       $pdf->obr = "O.B.R NO. : $obr";
                       $pdf->code = "ACCOUNT CODE: $code";
-                      $pdf->previous_user = "This will cancel previous P.A.R issued to $pvuser";
-                      $pdf->previous_dept = "of $pvdept";
+                      $pdf->previous_user = trim((string)$pvuser) !== '' ? "This will cancel previous P.A.R issued to $pvuser" : '';
+                      $pdf->previous_dept = trim((string)$pvuser) !== '' && trim((string)$pvdept) !== '' ? "of $pvdept" : '';
                   } else {
                       clearFooterFields($pdf);
                   }

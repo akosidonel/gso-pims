@@ -441,7 +441,7 @@ $refNumber = generateReferenceNumber($conn,'sef_property_history', 'reference_nu
       </div>
       <div class="modal-body">
       <form method="POST" id="reprintForm"  enctype="multipart/form-data">
-      <h6 class="text-dark">Do you want to re-print the PAR/ICS documents for this item?</h6>
+      <h6 class="text-dark" id="inventoryPrintPrompt">Do you want to print the PAR/ICS document for this item’s current end user?</h6>
       <input type="hidden" class="form-control" id="parnum" name="parnum">
       <input type="hidden" class="form-control" id="emp_id" name="emp_id">
       <input type="hidden" class="form-control" id="cdept_id" name="cdept_id">
@@ -679,6 +679,7 @@ $refNumber = generateReferenceNumber($conn,'sef_property_history', 'reference_nu
           className: 'text-center',
           render: function (data, type, row) {
             var par = escHtml(data || '');
+            var printLabel = row.has_active_transfer ? 'Re-print' : 'Print';
             var btns = '' +
               '<div class="btn-group">' +
                 '<button type="button" class="btn btn-secondary btn-sm editPropertyDetails" data-target="#editInModal" data-value="' + par + '">' +
@@ -688,8 +689,8 @@ $refNumber = generateReferenceNumber($conn,'sef_property_history', 'reference_nu
                   '<i class="fas fa-bars" data-toggle="popover" data-content="Actions" data-trigger="hover"></i>' +
                 '</button>' +
                 '<div class="dropdown-menu" role="menu">' +
-                  '<a href="#" class="dropdown-item reprintTransferOfProperty" data-toggle="modal" data-target="#requestToPrintModal" data-value="' + par + '">' +
-                    '<i class="fa fa-print" aria-hidden="true"></i>&nbsp; Re-print' +
+                  '<a href="#" class="dropdown-item reprintTransferOfProperty" data-toggle="modal" data-target="#requestToPrintModal" data-value="' + par + '" data-reprint="' + (row.has_active_transfer ? '1' : '0') + '">' +
+                    '<i class="fa fa-print" aria-hidden="true"></i>&nbsp; ' + printLabel +
                   '</a>';
             if (['DISPOSAL-ADMIN', 'SYSTEM-ADMIN'].indexOf(currentRoleJS) !== -1) {
               btns += '<a href="#" class="dropdown-item returnItem" data-value="' + par + '">' +
@@ -1414,6 +1415,8 @@ $(function(){
   $(document).on('click', '.reprintTransferOfProperty', function(){
     var par = $(this).data('value') || '';
     $('#reprintForm #parnum').val(par);
+    var verb = $(this).attr('data-reprint') === '1' ? 're-print' : 'print';
+    $('#inventoryPrintPrompt').text('Do you want to ' + verb + ' the PAR/ICS document for this item’s current end user?');
   });
 
   $('#reprintForm').on('submit', function(e){
@@ -1423,18 +1426,17 @@ $(function(){
     $.ajax({
       url: '../auth/auth.php',
       type: 'GET',
-      data: { reprintInfo: par },
+      data: { inventoryPrintInfo: par, inventory_fund: 'SEF' },
       dataType: 'json',
       success: function(res){
-        if (!(res && res.status == 200 && res.data && res.data.reference_number)) {
+        if (!(res && res.status == 200 && res.data && res.data.category)) {
           var msg = (res && res.message) ? res.message : 'No printable record found for this item.';
           if (window.toastr) toastr.warning(msg); else alert(msg);
           return;
         }
         var cat = (res.data.category || '').toUpperCase();
-        var ref = res.data.reference_number;
         var page = (cat.indexOf('ICS') !== -1) ? 'inventory_custodian_slip.php' : 'printpt.php';
-        var url = page + '?reference_number=' + encodeURIComponent(ref) + '&par=' + encodeURIComponent(par);
+        var url = page + '?inventory_fund=SEF&inventory_par=' + encodeURIComponent(par);
         try {
           var w = window.open(url, '_blank');
           if (w) {
@@ -1444,7 +1446,7 @@ $(function(){
         } catch (_) { /* keep current page in place */ }
         $('#requestToPrintModal').modal('hide');
       },
-      error: function(){ if (window.toastr) toastr.error('Server error: failed to fetch re-print info.'); }
+      error: function(){ if (window.toastr) toastr.error('Server error: failed to fetch print information.'); }
     });
   });
 });
