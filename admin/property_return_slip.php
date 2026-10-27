@@ -284,7 +284,7 @@ $addRow = function (array $row) use (&$currentPageRows, &$currentRowCount, $tabl
     $currentRowCount++;
 };
 
-foreach ($rows as $r) {
+foreach ($rows as $rowIndex => $r) {
     $parts = [];
     if (!empty($r['description'])) {
         $parts[] = $r['description'];
@@ -303,10 +303,17 @@ foreach ($rows as $r) {
     }
 
     $fullDesc = implode(' | ', $parts);
-    $maxDescHeight = max(1.0, (float)$rowHeight - 2.0);
+    $isLastItem = ($rowIndex === count($rows) - 1);
+    // Reserve room for the end-of-batch marker on the final description chunk.
+    $markerHeight = $isLastItem ? $pdf->getStringHeight((float)$widths[2], "\n\n***Nothing Follows***") : 0.0;
+    $maxDescHeight = max(1.0, (float)$rowHeight - 2.0 - $markerHeight);
     $descChunks = prs_splitTextToFitCellHeight($pdf, $fullDesc, (float)$widths[2], $maxDescHeight);
     if (count($descChunks) === 0) {
         $descChunks = [''];
+    }
+    if ($isLastItem) {
+        $lastChunkIndex = count($descChunks) - 1;
+        $descChunks[$lastChunkIndex] .= "\n\n***Nothing Follows***";
     }
 
     // First chunk: full row with values

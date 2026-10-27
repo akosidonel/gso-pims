@@ -6382,7 +6382,8 @@ class TCPDF {
 		$chars = TCPDF_FONTS::UTF8StringToArray($s, $this->isunicode, $this->CurrentFont);
 		// calculate maximum width for a single character on string
 		$chrw = $this->GetArrStringWidth($chars, '', '', 0, true);
-		array_walk($chrw, array($this, 'getRawCharWidth'));
+		// These are already measured widths, not character codes. Passing them
+		// to getRawCharWidth() causes lossy float array-key conversions on PHP 8.1+.
 		$maxchwidth = max($chrw);
 		// get array of chars
 		$uchars = TCPDF_FONTS::UTF8ArrayToUniArray($chars, $this->isunicode);
