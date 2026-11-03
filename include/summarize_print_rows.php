@@ -123,9 +123,9 @@ function summarizePrintRows(array $rows): array {
         $desc    = strtoupper(trim((string)($row['description'] ?? '')));
         $unit    = strtoupper(trim((string)($row['unit'] ?? '')));
         
-        // Group by user, model, description, and unit only
+        // Keep identical items in separate groups when their print fund clusters differ.
         // Serial numbers will be aggregated in arrays
-        $key     = $endUser . '|' . $model . '|' . $desc . '|' . $unit;
+        $key     = $endUser . '|' . $model . '|' . $desc . '|' . $unit . '|' . ($row['fund_cluster'] ?? '');
 
         if (!isset($grouped[$key])) {
             $grouped[$key] = $row;

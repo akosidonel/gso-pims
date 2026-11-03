@@ -7,6 +7,7 @@ ini_set('error_log', __DIR__ . '/php-error.log');
 error_reporting(E_ALL);
 
 require_once __DIR__ . '/auth/auth.php';
+require_once __DIR__ . '/config/auth_helpers.php';
 
 $loginLockout = [
   'is_locked' => false,
@@ -29,13 +30,17 @@ if (isset($_SESSION['login_lockout']) && is_array($_SESSION['login_lockout'])) {
   }
 }
 
-if(isset($_SESSION['alogin'])){
-  $sessionRole = strtoupper(trim((string)($_SESSION['role'] ?? '')));
-  $landingPage = $sessionRole === 'MV-ADMIN' ? 'admin/motor-vehicle-dashboard.php' : 'admin/dashboard.php';
-  if ($sessionRole === 'CLEARANCE-ADMIN') { $landingPage = 'services/clearance.php'; }
-  header('Location:' . $landingPage);
-  exit();
-}else{
+if (isset($_SESSION['alogin'])) {
+  $landingPage = gso_admin_landing_page($_SESSION['role'] ?? null);
+  if ($landingPage !== null) {
+    header('Location:' . $landingPage);
+    exit();
+  }
+
+  unset($_SESSION['alogin'], $_SESSION['role'], $_SESSION['admin_name'], $_SESSION['start']);
+}
+
+if (!isset($_SESSION['alogin'])) {
 	  if(isset($_POST['signinbtn'])){
 	    $empid = trim((string)($_POST['empid'] ?? ''));
 	    $password = (string)($_POST['password'] ?? '');

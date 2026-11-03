@@ -38,6 +38,7 @@ function gso_fetch_new_condition_ics_rows(mysqli $conn, string $table, string $h
             np.id AS new_purchase_id,
             np.id AS source_id,
             '{$tableSafe}' AS source_table,
+            '{$tableSafe}' AS fund,
             COALESCE(NULLIF(np.property_number, ''), h.par_number, CONCAT('NPID:', np.id)) AS par_number,
             h.reference_number,
             '' AS previous_user,
@@ -113,6 +114,7 @@ function gso_fetch_existing_condition_ics_rows(
     $parsIn = count($pars) ? implode(',', array_fill(0, count($pars), '?')) : '';
     $sql = "SELECT
             h.{$historyPropertySafe} AS par_number,
+            '{$tableSafe}' AS fund,
             h.reference_number,
             '' AS previous_user,
             '' AS previous_dept,
@@ -221,6 +223,7 @@ if (isset($_GET['inventory_par'])) {
         // NEW purchases
         $sqlNew = "SELECT
             np.id AS new_purchase_id,
+            np.fund AS fund,
                 COALESCE(NULLIF(np.property_number, ''), h.par_number, CONCAT('NPID:', np.id)) AS par_number,
                 h.reference_number,
                 '' AS previous_user,
@@ -302,6 +305,18 @@ if (isset($_GET['inventory_par'])) {
         $sqlOld = "SELECT 
                 i.par_number, i.reference_number, i.previous_user, i.previous_dept, i.new_user, i.new_dept,
                 d.department_code, d.department_name,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM sef_property_history AS sh
+                        WHERE sh.property_number = i.par_number AND sh.reference_number = i.reference_number
+                    ) THEN 'property_sef'
+                    WHEN EXISTS (
+                        SELECT 1 FROM general_fund_property_history AS gh
+                        WHERE gh.par_number = i.par_number AND gh.reference_number = i.reference_number
+                    ) THEN 'par_gen_fund'
+                    WHEN pg.par_number IS NULL AND ps.property_number IS NOT NULL THEN 'property_sef'
+                    ELSE 'par_gen_fund'
+                END AS fund,
                 COALESCE(pg.par_ics_number, ps.par_ics_number) AS par_ics_number,
                 COALESCE(pg.model, ps.model) AS model,
                 COALESCE(pg.description, ps.description) AS description,
@@ -341,6 +356,7 @@ if (isset($_GET['inventory_par'])) {
     // NEW purchases
     $sqlNew = "SELECT
             np.id AS new_purchase_id,
+            np.fund AS fund,
             COALESCE(NULLIF(np.property_number, ''), h.par_number, CONCAT('NPID:', np.id)) AS par_number,
             h.reference_number,
             '' AS previous_user,
@@ -418,6 +434,18 @@ if (isset($_GET['inventory_par'])) {
     $sqlOld = "SELECT 
             i.par_number, i.reference_number, i.previous_user, i.previous_dept, i.new_user, i.new_dept,
             d.department_code, d.department_name,
+            CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM sef_property_history AS sh
+                    WHERE sh.property_number = i.par_number AND sh.reference_number = i.reference_number
+                ) THEN 'property_sef'
+                WHEN EXISTS (
+                    SELECT 1 FROM general_fund_property_history AS gh
+                    WHERE gh.par_number = i.par_number AND gh.reference_number = i.reference_number
+                ) THEN 'par_gen_fund'
+                WHEN pg.par_number IS NULL AND ps.property_number IS NOT NULL THEN 'property_sef'
+                ELSE 'par_gen_fund'
+            END AS fund,
             COALESCE(pg.par_ics_number, ps.par_ics_number) AS par_ics_number,
             COALESCE(pg.model, ps.model) AS model,
             COALESCE(pg.description, ps.description) AS description,
@@ -452,6 +480,27 @@ if (isset($_GET['inventory_par'])) {
 }
 
 $rows = gso_ics_deduplicate_rows($rows);
+foreach ($rows as &$row) {
+    $row['fund_cluster'] = gso_ics_fund_cluster($row['fund'] ?? '');
+}
+unset($row);
+
+function gso_ics_fund_cluster(string $fund): string {
+    switch (strtoupper(trim($fund))) {
+        case 'PROPERTY_SEF':
+        case 'SEF':
+        case 'SF':
+        case 'SPECIAL EDUCATION FUND':
+            return 'Special Education Fund';
+        case 'TRUST_FUND':
+        case 'TRUST FUND':
+            return 'Trust Fund';
+        case 'DONATION':
+            return 'Donation';
+        default:
+            return 'General Fund';
+    }
+}
 
 // Ensure each row has a par_ics_number; if missing, generate and persist
 if (count($rows) > 0) {
@@ -895,7 +944,7 @@ function render_ics_new_items_page($pdf, array $rows, float $bodyHeight = 95.0) 
     $pdf->SetFont('dejavusans', '', 11);
     $pdf->Cell(35, 7, 'Fund Cluster :', 0, 0, 'L');
     $pdf->SetFont('dejavusans', 'B', 11);
-    $pdf->Cell(40, 7, 'General Fund', 0, 1, 'L');
+    $pdf->Cell(0, 7, $rows[0]['fund_cluster'], 0, 1, 'L');
     $pdf->Ln(2);
 
     $pdf->SetFont('dejavusans', '', 10);
@@ -1021,7 +1070,7 @@ function render_ics_page($pdf, $row, $ics_no) {
     $pdf->SetFont('dejavusans', '', 11);
     $pdf->Cell(35, 7, 'Fund Cluster :', 0, 0, 'L');
     $pdf->SetFont('dejavusans', 'B', 11);
-    $pdf->Cell(40, 7, 'General Fund', 0, 1, 'L');
+    $pdf->Cell(0, 7, $row['fund_cluster'] ?? 'General Fund', 0, 1, 'L');
     $pdf->Ln(2);
 
     // Table header
@@ -1116,7 +1165,8 @@ if (count($rows) > 0) {
         $groupKey = sha1(
             strtoupper(trim((string)($row['reference_number'] ?? ''))) . '|' .
             strtoupper(trim((string)($row['emp_id'] ?? ($row['user'] ?? '')))) . '|' .
-            strtoupper(trim((string)($row['department_name'] ?? '')))
+            strtoupper(trim((string)($row['department_name'] ?? ''))) . '|' .
+            $row['fund_cluster']
         );
         if (!isset($newGroups[$groupKey])) {
             $newGroups[$groupKey] = [];
