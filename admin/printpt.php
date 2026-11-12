@@ -123,8 +123,8 @@ class PDF extends TCPDF
             $rows = gso_fetch_printpt_rows($conn, $refnumber, $parFilter, $parsFilter);
         }
         if(!empty($rows)){
-            // Summarize identical items with no serial numbers into single rows
-            $rows = summarizePrintRows($rows);
+            // Group matching equipment only when its unit value also matches.
+            $rows = summarizePrintRows($rows, groupByUnitValue: true);
 
             $pdf = new PDF ('P','mm','A4',true,'UTF-8',false);
 
@@ -443,6 +443,13 @@ class PDF extends TCPDF
               $qty = $row['qty'] ?? 1;
               $totalValue = $row['total_value'] ?? (float)$price;
               $amount = "₱".number_format($totalValue, 2, ".", ",");
+              if ($qty > 1) {
+                  $unitAmount = "₱".number_format((float)$price, 2, ".", ",");
+                  $amount = '<table cellpadding="0" cellspacing="0">'
+                      . '<tr><td align="center">' . $unitAmount . '</td></tr>'
+                      . '<tr><td align="center" style="border-top: 1px solid #000;">' . $amount . '</td></tr>'
+                      . '</table>';
+              }
               $parDisplay = ($qty > 1) ? implode("\n", $row['par_numbers'] ?? [$par]) : $par;
               $supplier = $row['supplier'];
               $po = $row['purchase_order'];

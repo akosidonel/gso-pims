@@ -108,12 +108,13 @@ function collapsePropertyNumbers(array $propertyNumbers): string {
     return implode("\n", $outParts);
 }
 
-function summarizePrintRows(array $rows): array {
+function summarizePrintRows(array $rows, bool $groupByUnitValue = false): array {
     $grouped = [];
 
     foreach ($rows as $row) {
+        $unitValue = (float)($row['unit_value'] ?? 0);
         $row['qty'] = 1;
-        $row['total_value'] = (float)($row['unit_value'] ?? 0);
+        $row['total_value'] = $unitValue;
         $row['par_numbers'] = [$row['par_number'] ?? ''];
         $row['serial_numbers'] = [trim((string)($row['serial_number'] ?? ''))];
         $row['serial_numbers_2'] = [trim((string)($row['serial_number_2'] ?? ''))];
@@ -126,12 +127,15 @@ function summarizePrintRows(array $rows): array {
         // Keep identical items in separate groups when their print fund clusters differ.
         // Serial numbers will be aggregated in arrays
         $key     = $endUser . '|' . $model . '|' . $desc . '|' . $unit . '|' . ($row['fund_cluster'] ?? '');
+        if ($groupByUnitValue) {
+            $key .= '|' . $unitValue;
+        }
 
         if (!isset($grouped[$key])) {
             $grouped[$key] = $row;
         } else {
             $grouped[$key]['qty']++;
-            $grouped[$key]['total_value'] += (float)($row['unit_value'] ?? 0);
+            $grouped[$key]['total_value'] += $unitValue;
             $grouped[$key]['par_numbers'][] = $row['par_number'] ?? '';
             // Accumulate serial numbers from all grouped items
             $grouped[$key]['serial_numbers'][] = trim((string)($row['serial_number'] ?? ''));
