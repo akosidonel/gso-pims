@@ -12,6 +12,9 @@ require_once('../include/summarize_print_rows.php');
 
 class PDF extends TCPDF  
 {
+    public const FULL_FOOTER_OFFSET_MM = 126;
+    public const SIGNATORIES_OFFSET_MM = 67;
+
     public $supplier = '';
     public $po = '';
     public $pr = '';
@@ -54,12 +57,12 @@ class PDF extends TCPDF
         $this->Cell(62,5,$this->obr,0,1);
         $this->SetX(130);
         $this->Cell(62,5,$this->code,0,1);
-        $this->SetY(-126);
+        $this->SetY(-self::FULL_FOOTER_OFFSET_MM);
         $this->SetX(130);
         $this->SetFont('dejavusans','',9.5);
         $cancelText = trim($this->previous_user . ((trim($this->previous_dept) !== '') ? "\n" . $this->previous_dept : ''));
         $this->MultiCell(62, 5, $cancelText, 0, 'L', false, 1);
-        $this->SetY(-67);
+        $this->SetY(-self::SIGNATORIES_OFFSET_MM);
         // Dynamically center $this->new_user below $this->new_dept
         $this->SetX(40);
         $this->SetFont('dejavusans','',9.5);
@@ -123,6 +126,7 @@ class PDF extends TCPDF
             $rows = gso_fetch_printpt_rows($conn, $refnumber, $parFilter, $parsFilter);
         }
         if(!empty($rows)){
+            $isMultiItemPrint = count($rows) > 1;
             // Group matching equipment only when its unit value also matches.
             $rows = summarizePrintRows($rows, groupByUnitValue: true);
 
@@ -213,55 +217,62 @@ class PDF extends TCPDF
                 return $pluralUnits[$unit] ?? ($unit . 'S');
             }
 
-            function splitTextByRenderedLines($pdf, $text, $widthMm, $maxLinesFirstPage, $maxLinesNextPages) {
-                $words = preg_split('/\s+/', trim((string)$text));
-                $words = array_values(array_filter($words, function($w) { return $w !== ''; }));
+            function paginatePtDescription($pdf, array $blocks, float $widthMm, int $continuationLines, int $finalLines): array {
+                $measuredParts = [];
 
-                if (count($words) === 0) {
-                    return ['No property description available.'];
+                foreach ($blocks as $block) {
+                    $lineCount = $pdf->getNumLines($block, $widthMm);
+                    $parts = [$block];
+                    if ($lineCount > $finalLines) {
+                        // Keep each property's serials together when the entry fits on a page.
+                        $parts = [];
+                        foreach (explode("\n", $block) as $line) {
+                            $words = preg_split('/\s+/', trim($line));
+                            $part = '';
+                            foreach ($words as $word) {
+                                $candidate = $part === '' ? $word : $part . ' ' . $word;
+                                if ($part !== '' && $pdf->getNumLines($candidate, $widthMm) > 1) {
+                                    $parts[] = $part;
+                                    $part = $word;
+                                } else {
+                                    $part = $candidate;
+                                }
+                            }
+                            $parts[] = $part;
+                        }
+                    }
+
+                    foreach ($parts as $part) {
+                        $measuredParts[] = ['text' => $part, 'lines' => $pdf->getNumLines($part, $widthMm)];
+                    }
                 }
 
+                $remainingLines = array_sum(array_column($measuredParts, 'lines'));
+                $lastPartLines = $measuredParts[array_key_last($measuredParts)]['lines'];
+                $pageBlocks = [];
                 $chunks = [];
-                $currentChunk = [];
-                $pageIndex = 0;
+                $linesUsed = 0;
+                $pageLimit = 0;
 
-                foreach ($words as $word) {
-                    $lineLimit = ($pageIndex === 0) ? $maxLinesFirstPage : $maxLinesNextPages;
-                    $candidate = trim(implode(' ', array_merge($currentChunk, [$word])));
-                    $numLines = (int)$pdf->getNumLines($candidate, $widthMm);
-
-                    if ($numLines <= $lineLimit || empty($currentChunk)) {
-                        $currentChunk[] = $word;
-                    } else {
-                        $chunks[] = implode(' ', $currentChunk);
-                        $currentChunk = [$word];
-                        $pageIndex++;
+                foreach ($measuredParts as $part) {
+                    if ($pageBlocks && $linesUsed + $part['lines'] > $pageLimit) {
+                        $chunks[] = implode("\n", $pageBlocks);
+                        $pageBlocks = [];
+                        $linesUsed = 0;
                     }
+                    if (!$pageBlocks) {
+                        // Reserve the last entry for the page with the full footer.
+                        $pageLimit = $remainingLines <= $finalLines
+                            ? $finalLines
+                            : min($continuationLines, $remainingLines - $lastPartLines);
+                    }
+                    $pageBlocks[] = $part['text'];
+                    $linesUsed += $part['lines'];
+                    $remainingLines -= $part['lines'];
                 }
 
-                if (!empty($currentChunk)) {
-                    $chunks[] = implode(' ', $currentChunk);
-                }
-
+                $chunks[] = implode("\n", $pageBlocks);
                 return $chunks;
-            }
-
-            function estimateRenderedHtmlLines($pdf, $html, $widthMm) {
-                $html = (string)$html;
-                if (trim($html) === '') { return 0; }
-
-                $parts = preg_split('/<br\s*\/?>/i', $html);
-                $totalLines = 0;
-                foreach ($parts as $part) {
-                    $text = trim(html_entity_decode(strip_tags((string)$part), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
-                    if ($text === '') {
-                        $totalLines += 1;
-                        continue;
-                    }
-                    $totalLines += max(1, (int)$pdf->getNumLines($text, $widthMm));
-                }
-
-                return $totalLines;
             }
 
             function gso_pt_bundle_table_columns(mysqli $conn, string $table): array {
@@ -355,7 +366,7 @@ class PDF extends TCPDF
                 return array_values($out);
             }
 
-            function gso_pt_bundle_block_html(array $bundlesByParentPropertyNumbers): string {
+            function gso_pt_bundle_description_blocks(array $bundlesByParentPropertyNumbers): array {
                 $groups = [];
 
                 foreach ($bundlesByParentPropertyNumbers as $bundleRows) {
@@ -385,25 +396,22 @@ class PDF extends TCPDF
                     }
                 }
 
-                $lines = [];
-                $hasHeading = false;
+                $blocks = [];
                 foreach ($groups as $group) {
-                    $detailSafe = htmlspecialchars($group['detail'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-                    $serialText = implode(', ', $group['serials']);
-                    $serialSafe = htmlspecialchars($serialText, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-
-                    $line = '';
-                    if ($detailSafe !== '') { $line .= $detailSafe; }
-                    if ($serialSafe !== '') { $line .= ' (SN: ' . $serialSafe . ')'; }
-                    if (trim(strip_tags($line)) === '') { continue; }
-                    if (!$hasHeading) {
-                        $lines[] = '<br><br>Bundle Items:';
-                        $hasHeading = true;
+                    $line = $group['detail'];
+                    if ($group['serials']) {
+                        $line .= ' (SN: ' . implode(', ', $group['serials']) . ')';
                     }
-                    $lines[] = '<br>' . $line;
+                    if ($line === '') {
+                        continue;
+                    }
+                    if (!$blocks) {
+                        $line = "\nBundle Items:\n" . $line;
+                    }
+                    $blocks[] = $line;
                 }
 
-                return implode('', $lines);
+                return $blocks;
             }
 
             $bundleCache = [];
@@ -435,8 +443,6 @@ class PDF extends TCPDF
                       foreach ($rows as $row) {
               $model = $row['model'];
               $description = $row['description'];
-              $snid = $row['serial_number'];
-              $snid2 = $row['serial_number_2'];
               $par = $row['par_number'];
               $price = $row['unit_value'];
               $date = $row['date_aquired'];
@@ -450,7 +456,6 @@ class PDF extends TCPDF
                       . '<tr><td align="center" style="border-top: 1px solid #000;">' . $amount . '</td></tr>'
                       . '</table>';
               }
-              $parDisplay = ($qty > 1) ? implode("\n", $row['par_numbers'] ?? [$par]) : $par;
               $supplier = $row['supplier'];
               $po = $row['purchase_order'];
               $pr = $row['purchase_request'];
@@ -463,79 +468,35 @@ class PDF extends TCPDF
                   $fundCluster = strtoupper(trim($row['fund'] ?? 'GENERAL FUND'));
               $newdept = $row['department_name'];
               $bundlesByProp = (isset($row['bundles_by_property']) && is_array($row['bundles_by_property'])) ? $row['bundles_by_property'] : [];
-              $bundleHtml = !empty($bundlesByProp) ? gso_pt_bundle_block_html($bundlesByProp) : '';
-
-              // Apply static footer fields (signatories) per item
-              $pdf->new_user = $newuser;
-              $pdf->new_dept = $newdept;
-
-              // Split only description content; serial lines are rendered separately below it.
               $baseDescription = trim($model . ' - ' . $description, " -");
-              if ($baseDescription === '') {
-                  $baseDescription = 'No property description available.';
-              }
+              $descriptionBlocks = [$baseDescription === '' ? 'No property description available.' : $baseDescription];
 
-              // Skip serial lines for summarized (grouped) items since they have no serials
-              if ($qty > 1) {
-                  $serialLine1 = '';
-                  $serialLine2 = '';
-              } else {
-                  $serialLine1 = 'SN 1: ' . ((trim((string)$snid) !== '') ? trim((string)$snid) : 'N/A');
-                  $serialLine2 = 'SN 2: ' . ((trim((string)$snid2) !== '') ? trim((string)$snid2) : 'N/A');
+              // The summary keeps property numbers and both serial arrays in the same order.
+              foreach ($row['par_numbers'] as $index => $propertyNumber) {
+                  $serial1 = $row['serial_numbers'][$index];
+                  $serial2 = $row['serial_numbers_2'][$index];
+                  $serialLines = 'SN 1: ' . ($serial1 !== '' ? $serial1 : 'N/A')
+                      . ($isMultiItemPrint ? ' | ' : "\n")
+                      . 'SN 2: ' . ($serial2 !== '' ? $serial2 : 'N/A');
+                  $descriptionBlocks[] = $isMultiItemPrint
+                      ? 'Property No.: ' . $propertyNumber . "\n" . $serialLines
+                      : $serialLines;
               }
+              $descriptionBlocks = array_merge($descriptionBlocks, gso_pt_bundle_description_blocks($bundlesByProp));
 
-              // Stable split by rendered lines for description column (avoids TCPDF transaction state issues).
-              $pdf->SetFont('dejavusans','',8);
-              $descWidthMm = 110.0;
-              $lineHeightMm = 3.2;
-              $footerTopY = $pdf->getPageHeight() - 125;
-              $contentStartY = 116.5;
-              $usableHeightMm = max(20, $footerTopY - $contentStartY - 1.0);
-              $amountReserveMm = 10.0;
-              $firstPageUsableHeightMm = max(16, $usableHeightMm - $amountReserveMm);
-              $baseMaxLines = max(8, (int)floor($usableHeightMm / $lineHeightMm));
-              $baseFirstPageMaxLines = max(6, (int)floor($firstPageUsableHeightMm / $lineHeightMm));
-              $fillRatio = 1.65; // Pack more text before splitting to reduce blank space.
-              $maxLinesPerPage = max(14, (int)floor($baseMaxLines * $fillRatio));
-              $maxLinesFirstPage = max(10, (int)floor($baseFirstPageMaxLines * $fillRatio));
-
-              // SN lines are only printed for non-grouped items, so reserve space accordingly.
-              $serialTailHtml = '';
-              if ($qty <= 1) {
-                  if ($serialLine1 !== '') { $serialTailHtml .= '<br>' . htmlspecialchars($serialLine1, ENT_QUOTES, 'UTF-8'); }
-                  if ($serialLine2 !== '') { $serialTailHtml .= '<br>' . htmlspecialchars($serialLine2, ENT_QUOTES, 'UTF-8'); }
-              } elseif ($bundleHtml !== '') {
-                  $serialTailHtml .= '<br>SN 1: N/A<br>SN 2: N/A';
-              }
-              $tailHtml = $serialTailHtml;
-              if ($bundleHtml !== '') {
-                  $tailHtml .= $bundleHtml;
-              }
-              $tailLineCount = estimateRenderedHtmlLines($pdf, $tailHtml, $descWidthMm);
-              $tailReserveLines = max(0, $tailLineCount - 1);
-              $maxLinesFirstPage = max(8, $maxLinesFirstPage - $tailReserveLines);
-              $maxLinesPerPage = max(10, $maxLinesPerPage - $tailReserveLines);
-              $chunks = splitTextByRenderedLines($pdf, $baseDescription, $descWidthMm, $maxLinesFirstPage, $maxLinesPerPage);
-
-              $lastPageBaseLimit = (count($chunks) === 1) ? $maxLinesFirstPage : $maxLinesPerPage;
-              $lastPageLineLimit = max(6, $lastPageBaseLimit);
-              if (!empty($chunks)) {
-                  $lastChunkIndex = count($chunks) - 1;
-                  $lastChunkLines = (int)$pdf->getNumLines($chunks[$lastChunkIndex], $descWidthMm);
-                  if ($lastChunkLines > $lastPageLineLimit) {
-                      $tailChunks = splitTextByRenderedLines(
-                          $pdf,
-                          $chunks[$lastChunkIndex],
-                          $descWidthMm,
-                          $maxLinesPerPage,
-                          $lastPageLineLimit
-                      );
-                      array_pop($chunks);
-                      foreach ($tailChunks as $tailChunk) {
-                          $chunks[] = $tailChunk;
-                      }
-                  }
-              }
+              $pdf->SetFont('dejavusans', '', 8);
+              $bodyOffsetMm = 52.5;
+              // The description cell is 220 px wide with 5 px padding on each side.
+              $descWidthMm = $pdf->getHTMLUnitToUnits('210px');
+              $contentStartY = $pdf->getMargins()['top'] + $bodyOffsetMm;
+              $lineHeightMm = $pdf->getCellHeight($pdf->getFontSize(), false);
+              // Continuation pages only need room for table padding and signatories.
+              $continuationHeightMm = $pdf->getPageHeight() - PDF::SIGNATORIES_OFFSET_MM - $contentStartY - 6;
+              // The final page also needs room for "NOTHING FOLLOWS" and the transfer details.
+              $finalHeightMm = $pdf->getPageHeight() - PDF::FULL_FOOTER_OFFSET_MM - $contentStartY - 12;
+              $continuationLines = (int)floor($continuationHeightMm / $lineHeightMm);
+              $finalLines = (int)floor($finalHeightMm / $lineHeightMm);
+              $chunks = paginatePtDescription($pdf, $descriptionBlocks, $descWidthMm, $continuationLines, $finalLines);
 
               $last_idx = count($chunks) - 1;
 
@@ -545,30 +506,18 @@ class PDF extends TCPDF
                   $pdf->fund_cluster = ($fundCluster === 'SEF' || $fundCluster === 'SPECIAL EDUCATION FUND') ? 'SPECIAL EDUCATION FUND' : 'GENERAL FUND';
                   $pdf->parno = $parIcsNumber;
                   $pdf->AddPage();
-                  if ($idx === 0) {
-                      // Set total pages for this item after starting its first page
-                      $pdf->itemTotal = count($chunks);
-                  }
-                  $pdf->Ln(52.5);
-                  $pdf->SetFont('dejavusans','',8);
+                  $pdf->new_user = $newuser;
+                  $pdf->new_dept = $newdept;
+                  $pdf->itemTotal = count($chunks);
+                  $pdf->Ln($bodyOffsetMm);
+                  $pdf->SetFont('dejavusans', '', 8);
 
-                  $chunkHtml = nl2br(htmlspecialchars($chunk_text, ENT_QUOTES, 'UTF-8'));
-                  if ($idx === $last_idx && ($serialLine1 !== '' || $serialLine2 !== '')) {
-                      if ($serialLine1 !== '') {
-                          $chunkHtml .= '<br>' . htmlspecialchars($serialLine1, ENT_QUOTES, 'UTF-8');
-                      }
-                      if ($serialLine2 !== '') {
-                          $chunkHtml .= '<br>' . htmlspecialchars($serialLine2, ENT_QUOTES, 'UTF-8');
-                      }
-                  } elseif ($idx === $last_idx && $bundleHtml !== '') {
-                      $chunkHtml .= '<br>SN 1: N/A<br>SN 2: N/A';
-                  }
-                  if ($idx === $last_idx && $bundleHtml !== '') {
-                      $chunkHtml .= $bundleHtml;
-                  }
+                  $chunkHtml = nl2br(htmlspecialchars($chunk_text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
 
                   // Only display PAR / Date / Amount on the first page of this item
-                  $displayPar = ($idx === 0) ? $parDisplay : '';
+                  $displayPar = ($idx === 0 && !$isMultiItemPrint)
+                      ? htmlspecialchars((string)$par, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                      : '';
                   $displayDate = ($idx === 0) ? $date : '';
                   $displayAmount = ($idx === 0) ? $amount : '';
                   $displayQty = ($idx === 0) ? (string)$qty : '';

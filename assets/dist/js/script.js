@@ -9057,89 +9057,6 @@ window.GSO.AddItemBundle = window.GSO.AddItemBundle || (function(){
 })();
 
 // ==========================================================
-// Add Item: Year Acquired
-// ==========================================================
-window.GSO = window.GSO || {};
-window.GSO.AddItemMeta = window.GSO.AddItemMeta || (function(){
-  var inited = false;
-
-  function hasUI(){
-    return $('#addItemModal').length && $('#addItem').length;
-  }
-
-  function fillYearOptions(){
-    var $year = $('#year');
-    if (!$year.length) { return; }
-
-    // If already populated, leave it (avoid clobbering user's selection)
-    if ($year.find('option').length > 1) { return; }
-
-    var start = 2001;
-    var current = new Date().getFullYear();
-    var options = "<option value='' >-SELECT-</option>";
-    for (var y = current; y >= start; y--) {
-      options += "<option value='" + y + "'>" + y + "</option>";
-    }
-    options += "<option value='RFS'>Found at Station</option>";
-    $year.html(options);
-  }
-
-  function syncYearLockWithCondition(){
-    var $year = $('#year');
-    if (!$year.length) { return; }
-
-    var cond = String($('#condition').val() || '').trim().toUpperCase();
-    var currentYear = String(new Date().getFullYear());
-
-    // Ensure options exist (server usually renders them, but keep this as a fallback)
-    if ($year.find('option').length === 0) {
-      fillYearOptions();
-    }
-
-    if (!cond) {
-      $year.val('');
-      $year.prop('disabled', true);
-      $year.trigger('change');
-    } else if (cond === 'NEW') {
-      $year.val(currentYear);
-      $year.prop('disabled', true);
-      $year.trigger('change');
-    } else {
-      $year.prop('disabled', false);
-    }
-  }
-
-  function onConditionChange(){
-    if (!hasUI()) { return; }
-    syncYearLockWithCondition();
-  }
-
-  function init(){
-    if (inited) { return; }
-    if (!hasUI()) { return; }
-    inited = true;
-
-    // Ensure Year dropdown is always populated when modal opens
-    $('#addItemModal')
-      .off('shown.bs.modal.addItemMeta')
-      .on('shown.bs.modal.addItemMeta', function(){
-        fillYearOptions();
-        syncYearLockWithCondition();
-        // Enforce NEW-condition default behavior on open (browser may restore previous selection).
-        onConditionChange();
-      });
-
-    $(document)
-      .off('change.addItemMetaCond', '#condition')
-      .on('change.addItemMetaCond', '#condition', onConditionChange);
-
-  }
-
-  $(function(){ init(); });
-  return { init: init, fillYearOptions: fillYearOptions, syncYearLockWithCondition: syncYearLockWithCondition };
-})();
-
-// ==========================================================
 // Add Item page UI (admin/add-item.php)
 // - Migrated from inline JS to keep templates clean
 // - Guarded so it only runs on the Add Item modal/form
@@ -10273,16 +10190,18 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
       updateYearOptions();
     }
 
+    var lockToCurrentYear = condition === 'NEW' && !isDonationFund();
+    $year.prop('disabled', !condition || lockToCurrentYear);
+
+    var previousYear = String($year.val() || '');
+    var year = previousYear;
     if (!condition) {
-      $year.val('');
-      $year.prop('disabled', true);
-      $year.trigger('change');
-    } else if (condition === 'NEW') {
-      $year.val(currentYear);
-      $year.prop('disabled', true);
-      $year.trigger('change');
-    } else {
-      $year.prop('disabled', false);
+      year = '';
+    } else if (lockToCurrentYear || (condition === 'NEW' && !previousYear)) {
+      year = currentYear;
+    }
+    if (year !== previousYear) {
+      $year.val(year).trigger('change');
     }
   }
 
@@ -10626,6 +10545,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $(document)
       .off('change.gsoAddItemPageFund', '#fund')
       .on('change.gsoAddItemPageFund', '#fund', function(){
+        syncYearAcquiredWithCondition();
         var fund = String($(this).val() || '').trim();
         var previousDepartment = String($('#dept').val() || '');
         if (reqFundDepts && reqFundDepts.readyState !== 4) { reqFundDepts.abort(); }
@@ -10948,9 +10868,6 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
     $('#addItemModal')
       .off('shown.bs.modal.gsoAddItemPageMeta')
       .on('shown.bs.modal.gsoAddItemPageMeta', function(){
-        if (window.GSO && window.GSO.AddItemMeta && typeof window.GSO.AddItemMeta.fillYearOptions === 'function') {
-          window.GSO.AddItemMeta.fillYearOptions();
-        }
         lastRenderedSetCount = getSetCount();
         renderItemSetRows();
         enforcePerRowQtyLimit();
@@ -11109,18 +11026,7 @@ window.GSO.AddItemPage = window.GSO.AddItemPage || (function(){
 
       syncNoEndUserState();
 
-      var condition = String($('#condition').val() || '').toUpperCase();
-      if (condition === 'NEW') {
-        var currentYear = String(new Date().getFullYear());
-        $('#year').val(currentYear).prop('disabled', false);
-        applyNoAccountPropertyStateToAll();
-        setTimeout(function(){
-          try { $('#year').prop('disabled', true); } catch(_) {}
-        }, 0);
-      } else {
-        applyNoAccountPropertyStateToAll();
-        $('#year').prop('disabled', false);
-      }
+      applyNoAccountPropertyStateToAll();
 
       if(!validateUnitValue()){
         e.preventDefault();
@@ -11324,6 +11230,8 @@ $(document).on('submit','#addItem',function(e){//to save p.a.r general fund info
   $form.removeData('printWindows');
 
   var fd = new FormData(this);
+  // Include the displayed year even when it is locked for new purchases.
+  fd.set('year', String($('#year').val() || ''));
   fd.append("save_item",true);
   // ensure token present
   var tokenField = document.getElementById('add_item_submission_token');
