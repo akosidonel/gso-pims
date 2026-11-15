@@ -14450,6 +14450,7 @@ $(function(){
   }
 
   var fundKey = String($page.data('fund-key') || '').trim().toLowerCase();
+  var isDonationInventory = fundKey === 'donation';
   var selectedAssetClass = '';
   var selectedEndUser = '';
   var selectedFundRows = {};
@@ -14516,7 +14517,9 @@ $(function(){
     lengthMenu: [[10, 25, 50, 100, 500, 1500], [10, 25, 50, 100, 500, 1500]],
     autoWidth: false,
     stateSave: false,
-    dom: "<'row'<'col-sm-12 col-md-8'Bl><'col-sm-12 col-md-4'f>>" +
+    dom: (isDonationInventory
+      ? "<'donation-inventory-toolbar'Blf>"
+      : "<'row'<'col-sm-12 col-md-8'Bl><'col-sm-12 col-md-4'f>>") +
          "<'row'<'col-sm-12'tr>>" +
          "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>",
     processing: true,
@@ -14737,7 +14740,7 @@ $(function(){
     ]
   });
 
-  if (table.buttons && typeof table.buttons === 'function') {
+  if (!isDonationInventory && table.buttons && typeof table.buttons === 'function') {
     table.buttons().container().appendTo('#FundInventoryTable_wrapper .col-md-8:eq(0)');
   }
 
@@ -14832,6 +14835,12 @@ $(function(){
 
     syncFundSelectionUI();
   });
+
+  if (isDonationInventory) {
+    var search = $(table.table().container()).find('.donation-inventory-toolbar .dataTables_filter');
+    search.before(assetClassSelect.removeClass('ml-3'), endUserSelect.removeClass('ml-3'));
+    return;
+  }
 
   setTimeout(function() {
     var left = $('#FundInventoryTable_wrapper .col-md-8:eq(0)');

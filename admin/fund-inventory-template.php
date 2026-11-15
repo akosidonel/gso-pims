@@ -59,6 +59,44 @@ $assetClasses = array(
     padding: 0.75rem !important;
   }
 
+  #FundInventoryTable_wrapper .donation-inventory-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  #FundInventoryTable_wrapper .donation-inventory-toolbar .dt-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    width: auto;
+    margin: 0;
+  }
+
+  #FundInventoryTable_wrapper .donation-inventory-toolbar .btn + .btn {
+    margin-left: 0;
+  }
+
+  #FundInventoryTable_wrapper .donation-inventory-toolbar .dataTables_filter {
+    margin-left: auto;
+    max-width: 100%;
+  }
+
+  #FundInventoryTable_wrapper .donation-inventory-toolbar label {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  #FundInventoryTable_wrapper .donation-inventory-toolbar input[type="search"] {
+    min-width: 0;
+    margin-left: 0;
+  }
+
   #editNpDetailModal .modal-content > form#editNpDetailForm {
     display: flex;
     flex-direction: column;
