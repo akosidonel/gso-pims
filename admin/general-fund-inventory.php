@@ -660,7 +660,7 @@ $refNumber = generateReferenceNumber($conn,'general_fund_property_history', 'ref
       }
     }
 
-    $('#bulkTransferBtn').prop('disabled', getSelectedInventoryRows().length === 0);
+    $('#bulkTransferBtn, #printSelectedInventoryBtn').prop('disabled', getSelectedInventoryRows().length === 0);
   }
 
   function cleanExportValue(value) {
@@ -775,50 +775,6 @@ $refNumber = generateReferenceNumber($conn,'general_fund_property_history', 'ref
 
     Object.keys(grouped).forEach(function (key) {
       grouped[key].row[7] = collapseExportPropertyNumbers(grouped[key].propertyNumbers);
-    });
-
-    exportData.body = output;
-  }
-
-  function summarizePdfInventoryRows(exportData) {
-    var grouped = {};
-    var output = [];
-
-    exportData.header = ['ASSET CLASS', 'MODEL', 'DESCRIPTION', 'QTY', 'SNID NO.1', 'SNID NO.2', 'PROPERTY NUMBER', 'END USER'];
-
-    exportData.body.forEach(function (row) {
-      var item = cleanExportValue(row[0]);
-      var model = cleanExportValue(row[1]);
-      var description = cleanExportValue(row[2]);
-      var unit = displayUnit(row[3]);
-      var serialPrimary = cleanExportValue(row[4]);
-      var serialSecondary = cleanExportValue(row[5]);
-      var propertyNumber = cleanExportValue(row[6]);
-      var endUser = cleanExportValue(row[7]);
-
-      if (!hasNoSerial(serialPrimary) || !hasNoSerial(serialSecondary)) {
-        output.push([item, model, description, '1 ' + unit, serialPrimary, serialSecondary, propertyNumber, endUser]);
-        return;
-      }
-
-      var key = [item, model, description, unit, endUser].join('|').toUpperCase();
-      if (!grouped[key]) {
-        grouped[key] = {
-          row: [item, model, description, '', '', '', '', endUser],
-          count: 0,
-          unit: unit,
-          propertyNumbers: []
-        };
-        output.push(grouped[key].row);
-      }
-
-      grouped[key].count += 1;
-      grouped[key].row[3] = grouped[key].count + ' ' + grouped[key].unit;
-      grouped[key].propertyNumbers.push(propertyNumber);
-    });
-
-    Object.keys(grouped).forEach(function (key) {
-      grouped[key].row[6] = collapseExportPropertyNumbers(grouped[key].propertyNumbers);
     });
 
     exportData.body = output;
@@ -1063,46 +1019,16 @@ $refNumber = generateReferenceNumber($conn,'general_fund_property_history', 'ref
             dt.page.len(-1).draw();
           }
         },
-        { extend: "pdfHtml5", orientation:"landscape", pageSize:"LEGAL", title:"INVENTORY REPORT", exportOptions: {
-            columns: [2, 8, 9, 11, 4, 5, 6, 7],
-            customizeData: summarizePdfInventoryRows,
-            format: {
-              body: function (data) {
-                return cleanExportValue(data);
-              }
-            }
-          },
-          customize: function (doc) {
-            var tableNode = doc.content.find(function (node) {
-              return node.table && node.table.body;
-            });
-            if (tableNode) {
-              tableNode.table.widths = ['10%', '12%', '25%', '9%', '10%', '10%', '14%', '10%'];
-            }
-          },
-          action: function (e, dt, button, config) {
-            var doDefaultExport = function(){
-              if (!($.fn && $.fn.dataTable && $.fn.dataTable.ext && $.fn.dataTable.ext.buttons && $.fn.dataTable.ext.buttons.pdfHtml5 && $.fn.dataTable.ext.buttons.pdfHtml5.action)) return;
-              return $.fn.dataTable.ext.buttons.pdfHtml5.action.call(this, e, dt, button, config);
-            }.bind(this);
+        { text: 'Print PAR/ICS', attr: { id: 'printSelectedInventoryBtn', disabled: true },
+          action: function () {
+            var propertyNumbers = getSelectedInventoryRows().map(function (row) { return row.par; });
+            if (!propertyNumbers.length) return;
 
-            if (!hasFocusedExportFilter(dt)) {
-              return doDefaultExport();
-            }
-
-            var previousLength = dt.page.len();
-            if (previousLength === -1) {
-              return doDefaultExport();
-            }
-
-            dt.one('draw', function(){
-              doDefaultExport();
-              setTimeout(function(){
-                try { dt.page.len(previousLength).draw(false); } catch(_) {}
-              }, 400);
-            });
-
-            dt.page.len(-1).draw();
+            var form = $('<form>', { method: 'post', action: 'print-general-fund-selection.php', target: '_blank' });
+            $('<input>', { type: 'hidden', name: 'property_numbers' }).val(JSON.stringify(propertyNumbers)).appendTo(form);
+            form.appendTo(document.body);
+            form[0].submit();
+            form.remove();
           }
         }
       ]

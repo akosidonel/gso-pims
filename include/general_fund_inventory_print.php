@@ -16,6 +16,10 @@ function gso_fetch_general_fund_inventory_print_row(mysqli $conn, string $par): 
 }
 
 function gso_fetch_inventory_print_row(mysqli $conn, string $par, string $fund = 'GF'): ?array {
+    return gso_fetch_inventory_print_rows($conn, [$par], $fund)[$par] ?? null;
+}
+
+function gso_fetch_inventory_print_rows(mysqli $conn, array $propertyNumbers, string $fund = 'GF'): array {
     if (!in_array($fund, ['GF', 'SEF'], true)) {
         throw new InvalidArgumentException('Unknown inventory fund.');
     }
@@ -49,9 +53,16 @@ function gso_fetch_inventory_print_row(mysqli $conn, string $par, string $fund =
             WHERE {$alias}.{$propertyColumn} = ? AND {$alias}.status = 1
             ORDER BY {$alias}.id DESC LIMIT 1";
     $stmt = $conn->prepare($sql);
+    $par = '';
     $stmt->bind_param('s', $par);
-    $stmt->execute();
-    $row = $stmt->get_result()->fetch_assoc();
+    $rows = [];
+    foreach ($propertyNumbers as $par) {
+        $stmt->execute();
+        $row = $stmt->get_result()->fetch_assoc();
+        if ($row) {
+            $rows[$par] = $row;
+        }
+    }
     $stmt->close();
-    return $row ?: null;
+    return $rows;
 }

@@ -2,7 +2,7 @@
 // Keep legacy TCPDF deprecation notices out of the PDF response.
 ini_set('display_errors', '0');
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
-require '../database/databaseConnection.php';
+require_once __DIR__ . '/../database/databaseConnection.php';
 if (!defined('GSO_AUTH_LIB_ONLY')) {
     define('GSO_AUTH_LIB_ONLY', true);
 }
@@ -101,7 +101,7 @@ class PDF extends TCPDF
     }
   }
 
-      if (isset($_GET['inventory_par']) || isset($_GET['reference_number']) || isset($_GET['refnumber'])) {
+      if (isset($inventorySelectionRows) || isset($_GET['inventory_par']) || isset($_GET['reference_number']) || isset($_GET['refnumber'])) {
         $refnumber = trim((string)($_GET['reference_number'] ?? $_GET['refnumber'] ?? ''));
         $parFilter = isset($_GET['par']) ? trim($_GET['par']) : '';
                 $parsRaw = isset($_GET['pars']) ? trim($_GET['pars']) : '';
@@ -114,7 +114,9 @@ class PDF extends TCPDF
                                 $parsFilter = array_slice($parsFilter, 0, 200);
                         }
                 }
-        if (isset($_GET['inventory_par'])) {
+        if (isset($inventorySelectionRows)) {
+            $rows = $inventorySelectionRows;
+        } elseif (isset($_GET['inventory_par'])) {
             require_once __DIR__ . '/../include/general_fund_inventory_print.php';
             $inventoryFund = strtoupper(trim((string)($_GET['inventory_fund'] ?? 'GF')));
             if (!in_array($inventoryFund, ['GF', 'SEF'], true)) {
@@ -126,9 +128,11 @@ class PDF extends TCPDF
             $rows = gso_fetch_printpt_rows($conn, $refnumber, $parFilter, $parsFilter);
         }
         if(!empty($rows)){
-            $isMultiItemPrint = count($rows) > 1;
-            // Group matching equipment only when its unit value also matches.
-            $rows = summarizePrintRows($rows, groupByUnitValue: true);
+            $isMultiItemPrint = !isset($inventorySelectionRows) && count($rows) > 1;
+            // Selected properties keep their own form number and transfer details.
+            $rows = isset($inventorySelectionRows)
+                ? array_map(static fn(array $row): array => summarizePrintRows([$row])[0], $rows)
+                : summarizePrintRows($rows, groupByUnitValue: true);
 
             $pdf = new PDF ('P','mm','A4',true,'UTF-8',false);
 

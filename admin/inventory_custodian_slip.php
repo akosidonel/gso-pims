@@ -208,7 +208,9 @@ $pars = $parsRaw !== ''
     : ($parFilter !== '' ? [$parFilter] : []);
 $parsIn = count($pars) ? implode(',', array_fill(0, count($pars), '?')) : '';
 $rows = [];
-if (isset($_GET['inventory_par'])) {
+if (isset($inventorySelectionRows)) {
+    $rows = $inventorySelectionRows;
+} elseif (isset($_GET['inventory_par'])) {
     require_once __DIR__ . '/../include/general_fund_inventory_print.php';
     $inventoryFund = strtoupper(trim((string)($_GET['inventory_fund'] ?? 'GF')));
     if (!in_array($inventoryFund, ['GF', 'SEF'], true)) {
@@ -516,6 +518,16 @@ if (count($rows) > 0) {
                     $stmtU->execute();
                     $stmtU->close();
                 }
+            } elseif (isset($inventorySelectionRows)) {
+                $stmtU = $conn->prepare("UPDATE par_gen_fund SET par_ics_number=? WHERE par_number=? AND COALESCE(TRIM(par_ics_number), '') = ''");
+                $stmtU->bind_param('ss', $newParIcs, $r['par_number']);
+                $stmtU->execute();
+                if ($stmtU->affected_rows === 0) {
+                    // Another request may have assigned a slip number while this document was loading.
+                    $currentRow = gso_fetch_general_fund_inventory_print_row($conn, $r['par_number']);
+                    $newParIcs = $currentRow['par_ics_number'] ?? '';
+                }
+                $stmtU->close();
             } else {
                 if ($stmtU = $conn->prepare("UPDATE par_gen_fund SET par_ics_number=? WHERE par_number=?")) {
                     $stmtU->bind_param('ss', $newParIcs, $r['par_number']);
@@ -1146,8 +1158,9 @@ function render_ics_page($pdf, $row, $ics_no) {
     gso_ics_render_supply_note($pdf);
 }
 
-// Summarize identical items with no serial numbers into single rows
-$rows = summarizePrintRows($rows);
+if (!isset($inventorySelectionRows)) {
+    $rows = summarizePrintRows($rows);
+}
 
 // Build one page per item (or per summarized group)
 if (count($rows) > 0) {
