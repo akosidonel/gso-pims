@@ -27,7 +27,7 @@ foreach ($propertyNumbers as &$propertyNumber) {
 unset($propertyNumber);
 $propertyNumbers = array_unique($propertyNumbers);
 
-require_once __DIR__ . '/../database/databaseConnection.php';
+require_once __DIR__ . '/../auth/auth.php';
 require_once __DIR__ . '/../include/general_fund_inventory_print.php';
 
 $rows = gso_fetch_inventory_print_rows($conn, $propertyNumbers);
@@ -37,6 +37,8 @@ foreach ($propertyNumbers as $propertyNumber) {
     if (!$row || !isset($documents[$row['category']])) {
         inventorySelectionPrintError('No printable current assignment for property ' . $propertyNumber . '. Refresh the inventory and check your selection.');
     }
+    $previousDepartment = gso_resolve_history_department($conn, $row['previous_dept'] ?? '');
+    $row['previous_dept'] = $previousDepartment['department_name'] ?? ($row['previous_dept'] ?? '');
     $documents[$row['category']][] = $row;
 }
 
