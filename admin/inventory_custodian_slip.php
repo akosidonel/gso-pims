@@ -211,6 +211,10 @@ $rows = [];
 if (isset($inventorySelectionRows)) {
     $rows = $inventorySelectionRows;
 } elseif (isset($_GET['inventory_par'])) {
+    if (!defined('GSO_AUTH_LIB_ONLY')) {
+        define('GSO_AUTH_LIB_ONLY', true);
+    }
+    require_once __DIR__ . '/../auth/auth.php';
     require_once __DIR__ . '/../include/general_fund_inventory_print.php';
     $inventoryFund = strtoupper(trim((string)($_GET['inventory_fund'] ?? 'GF')));
     if (!in_array($inventoryFund, ['GF', 'SEF'], true)) {

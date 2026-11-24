@@ -60,6 +60,15 @@ function gso_fetch_inventory_print_rows(mysqli $conn, array $propertyNumbers, st
         $stmt->execute();
         $row = $stmt->get_result()->fetch_assoc();
         if ($row) {
+            $assignmentCode = (string)$row['new_dept'];
+            // Transfers store a department code, which can also be another department's ID.
+            if (!empty($row['has_active_transfer']) && $assignmentCode !== (string)$row['department_code']) {
+                $department = gso_find_department_by_code($conn, $assignmentCode);
+                if ($department) {
+                    $row['department_code'] = $department['department_code'];
+                    $row['department_name'] = $department['department_name'];
+                }
+            }
             $rows[$par] = $row;
         }
     }

@@ -462,6 +462,11 @@ class PDF extends TCPDF
               $obr = $row['obr_number'];
               $code = $row['account_code'];
               $parIcsNumber = trim((string)($row['par_ics_number'] ?? ''));
+              $formNumbers = array_unique($row['form_numbers']);
+              $hasMultipleFormNumbers = count($formNumbers) > 1;
+              if ($hasMultipleFormNumbers) {
+                  $parIcsNumber = 'SEE DESCRIPTION';
+              }
               $pvuser = $row['previous_user'];
               $pvdept = $row['previous_dept'];
               $newuser = $row['user'];
@@ -470,6 +475,9 @@ class PDF extends TCPDF
               $bundlesByProp = (isset($row['bundles_by_property']) && is_array($row['bundles_by_property'])) ? $row['bundles_by_property'] : [];
               $baseDescription = trim($model . ' - ' . $description, " -");
               $descriptionBlocks = [$baseDescription === '' ? 'No property description available.' : $baseDescription];
+              if ($hasMultipleFormNumbers) {
+                  $descriptionBlocks[] = 'PAR Nos.: ' . implode(', ', array_filter($formNumbers, static fn($number) => $number !== ''));
+              }
 
               // The summary keeps property numbers and both serial arrays in the same order.
               $groupedSelection = isset($inventorySelectionRows) && $qty > 1;

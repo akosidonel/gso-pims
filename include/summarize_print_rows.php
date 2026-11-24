@@ -109,6 +109,8 @@ function summarizePrintRows(array $rows, bool $groupByUnitValue = false, bool $p
         $row['qty'] = 1;
         $row['total_value'] = $unitValue;
         $row['par_numbers'] = [$row['par_number'] ?? ''];
+        $formNumber = trim((string)($row['par_ics_number'] ?? ''));
+        $row['form_numbers'] = [$formNumber];
         $row['serial_numbers'] = [trim((string)($row['serial_number'] ?? ''))];
         $row['serial_numbers_2'] = [trim((string)($row['serial_number_2'] ?? ''))];
 
@@ -116,6 +118,9 @@ function summarizePrintRows(array $rows, bool $groupByUnitValue = false, bool $p
         $model   = strtoupper(trim((string)($row['model'] ?? '')));
         $desc    = strtoupper(trim((string)($row['description'] ?? '')));
         $unit    = strtoupper(trim((string)($row['unit'] ?? '')));
+        if ($preserveFormDetails && in_array($unit, ['', 'UNIT', 'UNITS'], true)) {
+            $unit = 'UNIT';
+        }
         
         // Keep identical items in separate groups when their print fund clusters differ.
         // Serial numbers will be aggregated in arrays
@@ -130,8 +135,11 @@ function summarizePrintRows(array $rows, bool $groupByUnitValue = false, bool $p
                 $formFields[] = 'date_aquired';
             }
             $formDetails = array_map(static fn(string $field): string => trim((string)($row[$field] ?? '')), $formFields);
-            $formNumber = trim((string)($row['par_ics_number'] ?? ''));
-            $key = serialize([$key, $formNumber, $formDetails]);
+            $transferReference = ($row['category'] ?? '') === 'PAR' && !empty($row['has_active_transfer'])
+                ? trim((string)($row['reference_number'] ?? ''))
+                : '';
+            $formGroup = $transferReference !== '' ? ['transfer', $transferReference] : ['form', $formNumber];
+            $key = serialize([$key, $formGroup, $formDetails]);
         }
 
         if (!isset($grouped[$key])) {
@@ -140,6 +148,7 @@ function summarizePrintRows(array $rows, bool $groupByUnitValue = false, bool $p
             $grouped[$key]['qty']++;
             $grouped[$key]['total_value'] += $unitValue;
             $grouped[$key]['par_numbers'][] = $row['par_number'] ?? '';
+            $grouped[$key]['form_numbers'][] = $formNumber;
             // Accumulate serial numbers from all grouped items
             $grouped[$key]['serial_numbers'][] = trim((string)($row['serial_number'] ?? ''));
             $grouped[$key]['serial_numbers_2'][] = trim((string)($row['serial_number_2'] ?? ''));
