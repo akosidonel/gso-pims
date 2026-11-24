@@ -129,10 +129,7 @@ class PDF extends TCPDF
         }
         if(!empty($rows)){
             $isMultiItemPrint = !isset($inventorySelectionRows) && count($rows) > 1;
-            // Selected properties keep their own form number and transfer details.
-            $rows = isset($inventorySelectionRows)
-                ? array_map(static fn(array $row): array => summarizePrintRows([$row])[0], $rows)
-                : summarizePrintRows($rows, groupByUnitValue: true);
+            $rows = summarizePrintRows($rows, groupByUnitValue: true, preserveFormDetails: isset($inventorySelectionRows));
 
             $pdf = new PDF ('P','mm','A4',true,'UTF-8',false);
 
@@ -447,7 +444,6 @@ class PDF extends TCPDF
                       foreach ($rows as $row) {
               $model = $row['model'];
               $description = $row['description'];
-              $par = $row['par_number'];
               $price = $row['unit_value'];
               $date = $row['date_aquired'];
               $qty = $row['qty'] ?? 1;
@@ -476,13 +472,17 @@ class PDF extends TCPDF
               $descriptionBlocks = [$baseDescription === '' ? 'No property description available.' : $baseDescription];
 
               // The summary keeps property numbers and both serial arrays in the same order.
+              $groupedSelection = isset($inventorySelectionRows) && $qty > 1;
               foreach ($row['par_numbers'] as $index => $propertyNumber) {
                   $serial1 = $row['serial_numbers'][$index];
                   $serial2 = $row['serial_numbers_2'][$index];
+                  if ($groupedSelection && $serial1 === '' && $serial2 === '') {
+                      continue;
+                  }
                   $serialLines = 'SN 1: ' . ($serial1 !== '' ? $serial1 : 'N/A')
-                      . ($isMultiItemPrint ? ' | ' : "\n")
+                      . ($isMultiItemPrint || $groupedSelection ? ' | ' : "\n")
                       . 'SN 2: ' . ($serial2 !== '' ? $serial2 : 'N/A');
-                  $descriptionBlocks[] = $isMultiItemPrint
+                  $descriptionBlocks[] = $isMultiItemPrint || $groupedSelection
                       ? 'Property No.: ' . $propertyNumber . "\n" . $serialLines
                       : $serialLines;
               }
@@ -520,7 +520,7 @@ class PDF extends TCPDF
 
                   // Only display PAR / Date / Amount on the first page of this item
                   $displayPar = ($idx === 0 && !$isMultiItemPrint)
-                      ? htmlspecialchars((string)$par, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                      ? nl2br(htmlspecialchars(collapsePropertyNumbers($row['par_numbers']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'))
                       : '';
                   $displayDate = ($idx === 0) ? $date : '';
                   $displayAmount = ($idx === 0) ? $amount : '';

@@ -1113,7 +1113,6 @@ function render_ics_page($pdf, $row, $ics_no) {
     $parNums           = ($qty > 1) ? ($row['par_numbers'] ?? [$row['par_number']]) : [$row['par_number']];
     $inventory_item_no = collapsePropertyNumbers($parNums);
     $estimated_life = 'NULL';
-    $description = wordwrap(gso_ics_description($row), 50, "\n");
     $rowHeight = 95;
     $pdf->SetFont('dejavusans', 'B', 7.5);
     $xRow = $pdf->GetX();
@@ -1124,7 +1123,7 @@ function render_ics_page($pdf, $row, $ics_no) {
     $pdf->SetFont('dejavusans', 'B', 7.5);
     $pdf->MultiCell($colWidths[2], $rowHeight, $unit_cost, 'LR', 'R', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
     $pdf->MultiCell($colWidths[3], $rowHeight, $total_cost, 'LR', 'R', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
-    $pdf->MultiCell($colWidths[4], $rowHeight, $description, 'LR', 'L', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
+    $pdf->MultiCell($colWidths[4], $rowHeight, gso_ics_description($row), 'LR', 'L', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
     $pdf->MultiCell($colWidths[5], $rowHeight, $inventory_item_no, 'LR', 'C', false, 0, '', '', true, 0, false, true, $rowHeight, 'T');
     $pdf->MultiCell($colWidths[6], $rowHeight, $estimated_life, 'LR', 'C', false, 1, '', '', true, 0, false, true, $rowHeight, 'T');
     $pdf->SetFont('dejavusans', '', 10);
@@ -1158,9 +1157,8 @@ function render_ics_page($pdf, $row, $ics_no) {
     gso_ics_render_supply_note($pdf);
 }
 
-if (!isset($inventorySelectionRows)) {
-    $rows = summarizePrintRows($rows);
-}
+$isInventorySelection = isset($inventorySelectionRows);
+$rows = summarizePrintRows($rows, groupByUnitValue: $isInventorySelection, preserveFormDetails: $isInventorySelection);
 
 // Build one page per item (or per summarized group)
 if (count($rows) > 0) {
@@ -1169,6 +1167,10 @@ if (count($rows) > 0) {
     $legacyRows = [];
 
     foreach ($rows as $row) {
+        // Let descriptions reflow across the column, including between asterisk-separated specs.
+        $description = (string)($row['description'] ?? '');
+        $description = preg_replace('/\s+/u', ' ', $description) ?? $description;
+        $row['description'] = preg_replace('/(?<=\S)\*(?=\p{L})/u', '* ', $description) ?? $description;
         $source = strtoupper(trim((string)($row['source'] ?? '')));
         if ($source !== 'NEW') {
             $legacyRows[] = $row;

@@ -1,12 +1,5 @@
 <?php
 /**
- * Summarize print rows by grouping identical items that have no serial numbers.
- * Items with the same model + description (and no serial numbers) are merged
- * into a single row with aggregated qty and total_value.
- * Items with serial numbers are always kept as individual rows.
- */
-
-/**
  * Collapse a list of property numbers into a compact range string.
  * Sequential numbers sharing the same prefix and suffix are rendered as
  * "PREFIX-NNNN-SUFFIX to PREFIX-MMMM-SUFFIX".
@@ -108,7 +101,7 @@ function collapsePropertyNumbers(array $propertyNumbers): string {
     return implode("\n", $outParts);
 }
 
-function summarizePrintRows(array $rows, bool $groupByUnitValue = false): array {
+function summarizePrintRows(array $rows, bool $groupByUnitValue = false, bool $preserveFormDetails = false): array {
     $grouped = [];
 
     foreach ($rows as $row) {
@@ -129,6 +122,16 @@ function summarizePrintRows(array $rows, bool $groupByUnitValue = false): array 
         $key     = $endUser . '|' . $model . '|' . $desc . '|' . $unit . '|' . ($row['fund_cluster'] ?? '');
         if ($groupByUnitValue) {
             $key .= '|' . $unitValue;
+        }
+        if ($preserveFormDetails) {
+            $formFields = ['item', 'department_name', 'fund', 'supplier', 'purchase_order',
+                'purchase_request', 'obr_number', 'account_code', 'previous_user', 'previous_dept'];
+            if (($row['category'] ?? '') === 'PAR') {
+                $formFields[] = 'date_aquired';
+            }
+            $formDetails = array_map(static fn(string $field): string => trim((string)($row[$field] ?? '')), $formFields);
+            $formNumber = trim((string)($row['par_ics_number'] ?? ''));
+            $key = serialize([$key, $formNumber, $formDetails]);
         }
 
         if (!isset($grouped[$key])) {
