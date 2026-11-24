@@ -128,6 +128,43 @@ class PDF extends TCPDF
             $rows = gso_fetch_printpt_rows($conn, $refnumber, $parFilter, $parsFilter);
         }
         if(!empty($rows)){
+            // Allocate missing form numbers from the acquisition period before grouping items.
+            foreach ($rows as &$printRow) {
+                if (trim((string)($printRow['par_ics_number'] ?? '')) !== '') {
+                    continue;
+                }
+                $acquisitionPeriod = gso_par_ics_acquisition_period($printRow['date_aquired'] ?? null);
+                if ($acquisitionPeriod === null) {
+                    continue;
+                }
+                $propertyNumber = (string)$printRow['par_number'];
+                $table = $printRow['inventory_table'];
+                $propertyColumn = $table === 'property_sef' ? 'property_number' : 'par_number';
+                $stmtNumber = $conn->prepare("SELECT par_ics_number FROM {$table} WHERE {$propertyColumn} = ? LIMIT 1");
+                $stmtNumber->bind_param('s', $propertyNumber);
+                $stmtNumber->execute();
+                $storedRow = $stmtNumber->get_result()->fetch_assoc();
+                $stmtNumber->close();
+                if (!$storedRow) {
+                    continue;
+                }
+                $formNumber = trim((string)($storedRow['par_ics_number'] ?? ''));
+                if ($formNumber === '') {
+                    $formNumber = gso_generate_next_par_ics_number($conn, 'PAR', $acquisitionPeriod);
+                    $stmtNumber = $conn->prepare("UPDATE {$table} SET par_ics_number = ? WHERE {$propertyColumn} = ? AND COALESCE(TRIM(par_ics_number), '') = ''");
+                    $stmtNumber->bind_param('ss', $formNumber, $propertyNumber);
+                    $stmtNumber->execute();
+                    $stmtNumber->close();
+                    // Reuse the saved value if another print request assigned it first.
+                    $stmtNumber = $conn->prepare("SELECT par_ics_number FROM {$table} WHERE {$propertyColumn} = ? LIMIT 1");
+                    $stmtNumber->bind_param('s', $propertyNumber);
+                    $stmtNumber->execute();
+                    $formNumber = (string)($stmtNumber->get_result()->fetch_assoc()['par_ics_number'] ?? '');
+                    $stmtNumber->close();
+                }
+                $printRow['par_ics_number'] = $formNumber;
+            }
+            unset($printRow);
             $isMultiItemPrint = !isset($inventorySelectionRows) && count($rows) > 1;
             $rows = summarizePrintRows($rows, groupByUnitValue: true, preserveFormDetails: isset($inventorySelectionRows));
 

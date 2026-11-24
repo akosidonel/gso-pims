@@ -8,8 +8,8 @@ require_once __DIR__ . '/../tcpdf/tcpdf.php';
 require_once __DIR__ . '/../include/generate_par_ics_number.php';
 require_once __DIR__ . '/../include/summarize_print_rows.php';
 
-function generateParIcsNumberNewPurchase(mysqli $conn, string $category): string {
-    $ym = date('Ym');
+function generateParIcsNumberNewPurchase(mysqli $conn, string $category, string $acquisitionPeriod): string {
+    $ym = $acquisitionPeriod;
     $cat = strtoupper(trim($category));
     $letter = (strpos($cat, 'ICS') !== false) ? 'I' : 'P';
     $prefix = $ym . '-' . $letter;
@@ -513,36 +513,37 @@ if (count($rows) > 0) {
     foreach ($rows as $idx => $r) {
         if (!isset($r['par_ics_number']) || trim($r['par_ics_number']) === '') {
             $source = isset($r['source']) ? strtoupper(trim((string)$r['source'])) : 'OLD';
-            $newParIcs = ($source === 'NEW') ? generateParIcsNumberNewPurchase($conn, 'ICS') : generateParIcsNumber($conn, 'ICS');
+            $acquisitionPeriod = gso_par_ics_acquisition_period($r['date_aquired'] ?? null);
+            if ($acquisitionPeriod === null) {
+                continue;
+            }
+            $newParIcs = ($source === 'NEW')
+                ? generateParIcsNumberNewPurchase($conn, 'ICS', $acquisitionPeriod)
+                : generateParIcsNumber($conn, 'ICS', $acquisitionPeriod);
             if ($source === 'NEW') {
                 $newPurchaseId = (int)($r['new_purchase_id'] ?? 0);
                 $sourceTable = preg_replace('/[^A-Za-z0-9_]/', '', (string)($r['source_table'] ?? 'new_purchase'));
-                if ($newPurchaseId > 0 && $sourceTable !== '' && ($stmtU = $conn->prepare("UPDATE {$sourceTable} SET par_ics_number=? WHERE id=?"))) {
+                if ($newPurchaseId > 0 && $sourceTable !== '' && ($stmtU = $conn->prepare("UPDATE {$sourceTable} SET par_ics_number=? WHERE id=? AND COALESCE(TRIM(par_ics_number), '') = ''"))) {
                     $stmtU->bind_param('si', $newParIcs, $newPurchaseId);
                     $stmtU->execute();
                     $stmtU->close();
                 }
-            } elseif (isset($inventorySelectionRows)) {
-                $stmtU = $conn->prepare("UPDATE par_gen_fund SET par_ics_number=? WHERE par_number=? AND COALESCE(TRIM(par_ics_number), '') = ''");
+            } else {
+                $table = $r['inventory_table'] ?? $r['fund'] ?? '';
+                $isSef = $table === 'property_sef';
+                $table = $isSef ? 'property_sef' : 'par_gen_fund';
+                $propertyColumn = $isSef ? 'property_number' : 'par_number';
+                $stmtU = $conn->prepare("UPDATE {$table} SET par_ics_number=? WHERE {$propertyColumn}=? AND COALESCE(TRIM(par_ics_number), '') = ''");
                 $stmtU->bind_param('ss', $newParIcs, $r['par_number']);
                 $stmtU->execute();
                 if ($stmtU->affected_rows === 0) {
-                    // Another request may have assigned a slip number while this document was loading.
-                    $currentRow = gso_fetch_general_fund_inventory_print_row($conn, $r['par_number']);
-                    $newParIcs = $currentRow['par_ics_number'] ?? '';
+                    $stored = $conn->prepare("SELECT par_ics_number FROM {$table} WHERE {$propertyColumn}=? LIMIT 1");
+                    $stored->bind_param('s', $r['par_number']);
+                    $stored->execute();
+                    $newParIcs = (string)($stored->get_result()->fetch_assoc()['par_ics_number'] ?? '');
+                    $stored->close();
                 }
                 $stmtU->close();
-            } else {
-                if ($stmtU = $conn->prepare("UPDATE par_gen_fund SET par_ics_number=? WHERE par_number=?")) {
-                    $stmtU->bind_param('ss', $newParIcs, $r['par_number']);
-                    $stmtU->execute();
-                    $stmtU->close();
-                }
-                if ($stmtU2 = $conn->prepare("UPDATE property_sef SET par_ics_number=? WHERE property_number=?")) {
-                    $stmtU2->bind_param('ss', $newParIcs, $r['par_number']);
-                    $stmtU2->execute();
-                    $stmtU2->close();
-                }
             }
             $rows[$idx]['par_ics_number'] = $newParIcs;
         }

@@ -38,6 +38,7 @@ function gso_fetch_inventory_print_rows(mysqli $conn, array $propertyNumbers, st
                    COALESCE(i.previous_user, '') AS previous_user,
                    COALESCE(i.previous_dept, '') AS previous_dept,
                    (i.id IS NOT NULL) AS has_active_transfer,
+                   '{$propertyTable}' AS inventory_table,
                    'OLD' AS source
             FROM {$historyTable} AS {$alias}
             JOIN {$propertyTable} AS p ON p.{$propertyColumn} = {$alias}.{$propertyColumn}

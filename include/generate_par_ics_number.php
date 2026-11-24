@@ -4,9 +4,28 @@
 // Rule: Find the current max NNNN for the prefix across existing-record tables, then return next.
 // Duplicates are allowed by DB; we do not enforce uniqueness.
 
+function gso_par_ics_acquisition_period(?string $value): ?string {
+    $value = strtoupper(trim((string)$value));
+    if (in_array($value, ['FS', 'RFS'], true)) {
+        return 'RFS';
+    }
+    // Inventory stores a year when the acquisition month is unknown.
+    if (preg_match('/^[1-9]\d{3}$/D', $value)) {
+        return $value . '01';
+    }
+    if (preg_match('/^[1-9]\d{3}(0[1-9]|1[0-2])$/D', $value)) {
+        return $value;
+    }
+    if (preg_match('/^([1-9]\d{3})-(\d{2})-(\d{2})$/D', $value, $date)
+        && checkdate((int)$date[2], (int)$date[3], (int)$date[1])) {
+        return $date[1] . $date[2];
+    }
+    return null;
+}
+
 if (!function_exists('generateParIcsNumber')) {
-    function generateParIcsNumber(mysqli $conn, string $category): string {
-        $ym = date('Ym');
+    function generateParIcsNumber(mysqli $conn, string $category, string $acquisitionPeriod): string {
+        $ym = $acquisitionPeriod;
         $cat = strtoupper(trim($category));
         $letter = (strpos($cat, 'ICS') !== false) ? 'I' : 'P';
         $prefix = $ym . '-' . $letter; // e.g., 202512-P
